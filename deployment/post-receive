@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# put this into agfalta_tools.git/hooks/ and make it executable
+
 TARGET="/home/agfalta/jupyter_notebooks/agfalta_tools"
 GIT_DIR="/home/agfalta/git_host/agfalta_tools.git"
 BRANCH="master"
