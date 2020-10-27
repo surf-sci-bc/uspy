@@ -18,11 +18,11 @@ TESTDATA_DIR = os.path.dirname(__file__) + "/../testdata/"
 ########## Fixtures
 
 stack_fnames = [
-    TESTDATA_DIR + "test_stack_ca",
-    TESTDATA_DIR + "Stack",
+    TESTDATA_DIR + "test_stack_IV_RuO2",
+    TESTDATA_DIR + "test_stack_IV_g-Cu",
 ]
 tif_stack_fnames = [
-    TESTDATA_DIR + "normed_aligned_stack.tif",
+    TESTDATA_DIR + "test_stack_IV_RuO2_normed_aligned.tif",
 ]
 image_fnames = [
     TESTDATA_DIR + "channelplate.dat",
@@ -30,7 +30,7 @@ image_fnames = [
     TESTDATA_DIR + "alba.dat",
     TESTDATA_DIR + "elettra.dat",
     TESTDATA_DIR + "elettra.tif",
-    TESTDATA_DIR + "Reinigung002000.dat",
+    TESTDATA_DIR + "bremen2.dat",
 ]
 
 @pytest.fixture(params=stack_fnames+tif_stack_fnames)
