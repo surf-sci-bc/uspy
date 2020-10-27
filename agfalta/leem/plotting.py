@@ -6,9 +6,9 @@ import pandas as pd
 from os.path import basename
 from IPython.display import display, HTML
 
-from .base import LEEMBASE_VERSION, LEEMStack, LEEMImg
-from .. import LEEMDIR
-from .utility import try_load_stack, try_load_img
+from agfalta.leem.base import LEEMBASE_VERSION, LEEMStack, LEEMImg
+from agfalta import LEEMDIR
+from agfalta.leem.utility import try_load_stack, try_load_img
 
 
 if LEEMBASE_VERSION > 1.1:

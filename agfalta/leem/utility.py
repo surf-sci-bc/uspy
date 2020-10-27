@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider
 import numpy as np
 
-from .base import LEEMImg, LEEMStack
+from agfalta.leem.base import LEEMImg, LEEMStack
 
 
 def try_load_img(img):

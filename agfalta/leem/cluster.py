@@ -21,8 +21,8 @@ from pyclustering.cluster.kmeans import kmeans as pc_kmeans
 from pyclustering.cluster.center_initializer import kmeans_plusplus_initializer
 from pyclustering.utils.metric import type_metric, distance_metric
 
-from .base import LEEMStack
-from .utility import timing_notification, ProgressBar
+from agfalta.leem.base import LEEMStack
+from agfalta.leem.utility import timing_notification, ProgressBar
 
 
 N_COMPONENTS = 7
