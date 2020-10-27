@@ -6,7 +6,8 @@ import pandas as pd
 from os.path import basename
 from IPython.display import display, HTML
 
-from .base import LEEMBASE_VERSION, LEEMStack, LEEMImg, LEEMDIR
+from .base import LEEMBASE_VERSION, LEEMStack, LEEMImg
+from .. import LEEMDIR
 from .utility import try_load_stack, try_load_img
 
 
@@ -104,10 +105,10 @@ def plot_movie(
 ):
     stack = try_load_stack(stack, virtual=virtual)
     images = [img for img in stack[start_index:end_index:increment]]
-    
+
     cols = 4
     rows = math.ceil(len(images) / cols)
-    
+
     fig, axes = plt.subplots(
         ncols=cols, nrows=rows, figsize=(cols * 5, rows * 5)
     )  # , constrained_layout=True)
@@ -123,12 +124,12 @@ def plot_movie(
 def plot_meta(stack, fields="temperature"):
     # stack = LEEMStack(stack)
     stack = try_load_stack(stack)
-    
+
     if isinstance(fields,str):
         fields = [fields]
-    
+
     fig, ax = plt.subplots(len(fields), figsize=(6, len(fields) * 3))
-    
+
     #Reshape in case the supplot has only one plot, so it stays iterable
     ax = np.array(ax).reshape(-1)
 
@@ -151,7 +152,7 @@ def plot_meta(stack, fields="temperature"):
        #     ydata = ax[i].lines[0].get_ydata()
        #     ydata = ydata[ydata < 2000]
        #     xdata = xdata[ydata < 2000]
-       #     
+       #
        #     for i, temp in enumerate(ydata):
        #         if(temp>2000):
        #             xdata = xdata.delete(i)
@@ -160,9 +161,9 @@ def plot_meta(stack, fields="temperature"):
             #if not all(i <2300 for i in ax[i].lines[0].get_ydata()):
             #    for point in ax[i].lines[0]:
             #        print(point)
-                
-            
-        
+
+
+
    # if isinstance(fields,str):
     #    fig, ax = plt.subplots(figsize=(6, 3))
     #    ax.set_title(fields)
@@ -178,11 +179,11 @@ def plot_meta(stack, fields="temperature"):
     #        if "pressure" in field:
     #            ax[i].set_yscale('log')
 
-        
+
 def print_meta(stack, fields=("temperature","pressure1",)):
     # stack = LEEMStack(stack)
     stack = try_load_stack(stack)
-    try: 
+    try:
         meta_stack = []
         for img in stack:
             meta_img = [basename(img.path)]
@@ -192,13 +193,13 @@ def print_meta(stack, fields=("temperature","pressure1",)):
         pd.set_option('display.expand_frame_repr', False)
         table = pd.DataFrame(meta_stack)#, columns=[fields])
         table.columns = ("Name",)+fields
-        display(table)#, columns=[fields]))  
+        display(table)#, columns=[fields]))
         #display(HTML(table.to_html()))
     except:
         meta = []
         for field in fields:
             meta.append([field,stack.get_field_string(field)])
-            
+
         table = pd.DataFrame(meta, columns=["Metadata", "Value"])
         display(table)
 
