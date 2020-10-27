@@ -2,8 +2,11 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import math
+import pandas as pd
+from os.path import basename
+from IPython.display import display, HTML
 
-from .base import LEEMBASE_VERSION, LEEMStack, LEEMImg
+from .base import LEEMBASE_VERSION, LEEMStack, LEEMImg, LEEMDIR
 from .utility import try_load_stack, try_load_img
 
 
@@ -40,7 +43,7 @@ def calc_dose(stack):
     return stack
 
 
-def plot_img(img, *args, ax=None, title=None, fields=(None, None, "energy", "fov"), figsize=(3,3), ticks=False, **kwargs):
+def plot_img(img, *args, ax=None, title=None, fields=(None, None, "energy", "fov"), figsize=(6,6), ticks=False, **kwargs):
     img = try_load_img(img)
 
     if ax is None:
@@ -48,7 +51,7 @@ def plot_img(img, *args, ax=None, title=None, fields=(None, None, "energy", "fov
     if title is None:
         title = img.path
         if len(title) > 25:
-            title = "..." + title[:25]
+            title = "..." + title[-25:]
     ax.imshow(
         img.data, *args, cmap="gray", clim=(np.amin(img.data), np.amax(img.data)), aspect=1, **kwargs
     )
@@ -68,6 +71,7 @@ def plot_img(img, *args, ax=None, title=None, fields=(None, None, "energy", "fov
             continue
         val = getattr(img, field)
         unit = img.get_unit(field)
+        label = img.get_field_string(field)
 
         if field in (
             "pressure1",
@@ -96,37 +100,107 @@ def plot_img(img, *args, ax=None, title=None, fields=(None, None, "energy", "fov
 
 
 def plot_movie(
-    stack, start_index=0, end_index=-1, increment=1, cols=4, *args, **kwargs
+    stack, start_index=0, end_index=-1, increment=1, cols=4, virtual=True, *args, **kwargs
 ):
-    stack = try_load_stack(stack)
+    stack = try_load_stack(stack, virtual=virtual)
+    images = [img for img in stack[start_index:end_index:increment]]
+    
     cols = 4
-    rows = math.ceil(len(stack) / cols)
+    rows = math.ceil(len(images) / cols)
+    
     fig, axes = plt.subplots(
         ncols=cols, nrows=rows, figsize=(cols * 5, rows * 5)
     )  # , constrained_layout=True)
 
-    for i, img in enumerate(stack[start_index:end_index:increment]):
+    for i, img in enumerate(images):
         ax = axes[i // cols, i % cols]
         plot_img(img, ax=ax, *args, **kwargs)
-    for i in range(len(stack[start_index:end_index:increment]), rows * cols):
+    for i in range(len(images), rows * cols):
         ax = axes[i // cols, i % cols]
         fig.delaxes(ax)
 
 
-def plot_meta(stack, fields=("temperature",)):
+def plot_meta(stack, fields="temperature"):
     # stack = LEEMStack(stack)
     stack = try_load_stack(stack)
+    
+    if isinstance(fields,str):
+        fields = [fields]
+    
     fig, ax = plt.subplots(len(fields), figsize=(6, len(fields) * 3))
+    
+    #Reshape in case the supplot has only one plot, so it stays iterable
+    ax = np.array(ax).reshape(-1)
 
-    # fig.suptitle(folder)
-    if len(fields) == 1:
-        ax.set_title(fields)
-        ax.plot(getattr(stack, fields[0]))
-    else:
-        fig.subplots_adjust(hspace=0.3)
-        for i, field in enumerate(fields):
-            ax[i].set_title(field)
-            ax[i].plot(stack.rel_time, getattr(stack, field))
+    fig.subplots_adjust(hspace=0.3)
+    for i, field in enumerate(fields):
+        ax[i].set_title(field)
+        print(field)
+        time = stack.rel_time
+        val = getattr(stack, field)
+        if field == "temperature":
+            ax[i].plot(time[val < 2000], val[val < 2000])
+            if len(time[val < 2000])<len(time):
+                print("Points have been excluded from plot because of unreasonable high temperature")
+        else:
+            ax[i].plot(time, val)
+        if field in ('pressure1','pressure2'):
+            ax[i].set_yscale('log')
+       # if "temperature" in field:
+       #     xdata = ax[i].lines[0].get_xdata()
+       #     ydata = ax[i].lines[0].get_ydata()
+       #     ydata = ydata[ydata < 2000]
+       #     xdata = xdata[ydata < 2000]
+       #     
+       #     for i, temp in enumerate(ydata):
+       #         if(temp>2000):
+       #             xdata = xdata.delete(i)
+       #             ydata = ydata.delete(i)
+
+            #if not all(i <2300 for i in ax[i].lines[0].get_ydata()):
+            #    for point in ax[i].lines[0]:
+            #        print(point)
+                
+            
+        
+   # if isinstance(fields,str):
+    #    fig, ax = plt.subplots(figsize=(6, 3))
+    #    ax.set_title(fields)
+    #    ax.plot(getattr(stack, fields))
+    #    if "pressure" in fields:
+    #            ax.set_yscale('log')
+    #else:
+    #    fig, ax = plt.subplots(len(fields), figsize=(6, len(fields) * 3))
+    #    fig.subplots_adjust(hspace=0.3)
+    #    for i, field in enumerate(fields):
+    #        ax[i].set_title(field)
+    #        ax[i].plot(stack.rel_time, getattr(stack, field))
+    #        if "pressure" in field:
+    #            ax[i].set_yscale('log')
+
+        
+def print_meta(stack, fields=("temperature","pressure1",)):
+    # stack = LEEMStack(stack)
+    stack = try_load_stack(stack)
+    try: 
+        meta_stack = []
+        for img in stack:
+            meta_img = [basename(img.path)]
+            for field in fields:
+                meta_img.append(img.get_field_string(field))
+            meta_stack.append(meta_img)
+        pd.set_option('display.expand_frame_repr', False)
+        table = pd.DataFrame(meta_stack)#, columns=[fields])
+        table.columns = ("Name",)+fields
+        display(table)#, columns=[fields]))  
+        #display(HTML(table.to_html()))
+    except:
+        meta = []
+        for field in fields:
+            meta.append([field,stack.get_field_string(field)])
+            
+        table = pd.DataFrame(meta, columns=["Metadata", "Value"])
+        display(table)
 
 
 def plot_iv(stack, x0, y0, r=10, ax=None):
