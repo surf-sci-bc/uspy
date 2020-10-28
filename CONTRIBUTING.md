@@ -3,7 +3,7 @@
 ## Creating a working copy of the module
 
 First, you need to clone the git repository to your local machine. You need to have git and ssh
-installed and you need to have a user on the jupyterlab machine that is in the "githost" group.
+installed and you need to have a user on the jupyterlab machine that is in the `githost` group.
 
 The project and its `testdata` folder are two separate repositories because all the binary data in
 `testdata` makes the pushing and pulling too slow otherwise. If you don't do tests, you don't need
@@ -46,22 +46,22 @@ venv\Scripts\activate
 Now, install the dependencies:
 
 ```sh
-$ python3 -m pip install --upgrade pip        			# sometimes necessary?
-$ python3 -m pip install scikit-build matplotlib cmake	# pyclustering has wrong dependencies
+(venv) $ python3 -m pip install --upgrade pip        			# sometimes necessary?
+(venv) $ python3 -m pip install scikit-build matplotlib cmake	# pyclustering has wrong dependencies
 ```
 
 Linux only, for opencv:
 
 ```sh
-$ sudo apt install python3-opencv                                          
-$ cp /usr/lib/python3/dist-packages/cv* venv/lib/python3.8/site-packages/
-$ python3 -m pip install "opencv-python<4.0" "opencv-contrib-python<4.0"
+(venv) $ sudo apt install python3-opencv                                          
+(venv) $ cp /usr/lib/python3/dist-packages/cv* venv/lib/python3.8/site-packages/
+(venv) $ python3 -m pip install "opencv-python<4.0" "opencv-contrib-python<4.0"
 ```
 
 And finally:
 
 ```sh
-$ python3 -m pip install -e .               	# install agfalta module
+(venv) $ python3 -m pip install -e .               	# install agfalta module
 ```
 
 Now everything should run and you can do `import agfalta` from your virtual environment.
@@ -73,7 +73,7 @@ Just go into `agfalta_tools` and do
 
 ```sh
 $ source venv/bin/activate
-$ pytest
+(venv) $ pytest
 ```
 
 
@@ -90,7 +90,9 @@ $ ssh agfalta@192.168.2.63
 $ cd /home/agfalta/
 $ mkdir git_host && cd git_host
 $ git init --bare agfalta_tools.git
+$ sudo chown -R agfalta:githost agfalta_tools.git
 $ git init --bare agfalta_tools_testdata.git
+$ sudo chown -R agfalta:githost agfalta_tools_testdata.git
 ```
 
 Then, copy the `post-receive` script from your local working copy `agfalta_tools/deployment/` into
