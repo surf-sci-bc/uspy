@@ -3,7 +3,10 @@
 *.egg-info
 *__pycache__*
 *.backup
+*.coverage
 
 leemvenv
 venv
 agfalta/dev
+
+testdata
