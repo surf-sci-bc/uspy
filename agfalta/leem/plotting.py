@@ -6,8 +6,10 @@ import pandas as pd
 from os.path import basename
 from IPython.display import display, HTML
 
-from .base import LEEMBASE_VERSION, LEEMStack, LEEMImg, LEEMDIR
-from .utility import try_load_stack, try_load_img
+from agfalta.leem.base import LEEMBASE_VERSION, LEEMStack, LEEMImg
+from agfalta import LEEMDIR
+from agfalta.leem.utility import try_load_stack, try_load_img
+import time
 
 
 if LEEMBASE_VERSION > 1.1:
@@ -17,7 +19,6 @@ if LEEMBASE_VERSION > 1.1:
 def draw_marker(ax, markers):
     # color = ('r','g','b','c','m','y','w')
     prop_cycle = plt.rcParams["axes.prop_cycle"]
-    
     colors = prop_cycle.by_key()["color"]
     for i, marker in enumerate(markers):
         circle = plt.Circle(
@@ -44,7 +45,7 @@ def calc_dose(stack):
     return stack
 
 
-def plot_img(img, *args, ax=None, title=None, fields=(None, None, "energy", "fov"), figsize=(6,6), ticks=False, **kwargs):
+def plot_img(img, *args, ax=None, title=None, fields=("temperature", "pressure1", "energy", "fov"), figsize=(6,6), ticks=False, **kwargs):
     img = try_load_img(img)
 
     if ax is None:
@@ -74,19 +75,6 @@ def plot_img(img, *args, ax=None, title=None, fields=(None, None, "energy", "fov
         unit = img.get_unit(field)
         label = img.get_field_string(field)
 
-        if field in (
-            "pressure1",
-            "pressure2",
-            "dose",
-        ):
-            if val >= 10000 or 0 < val <= 0.1:
-                label = f"{np.format_float_scientific(val,precision=2)}{unit}"
-            else:
-                label = f"{val:.2f}{unit}"
-        elif isinstance(val, str):
-            label = val
-        else:
-            label = f"{val:.0f}{unit}"
         ax.text(
             pos[i][2],
             pos[i][3],
@@ -101,7 +89,7 @@ def plot_img(img, *args, ax=None, title=None, fields=(None, None, "energy", "fov
 
 
 def plot_movie(
-    stack, start_index=0, end_index=-1, increment=1, cols=4, virtual=True, *args, **kwargs
+    stack, start_index=None, end_index=None, increment=None, cols=4, virtual=False, *args, **kwargs
 ):
     stack = try_load_stack(stack, virtual=virtual)
     images = [img for img in stack[start_index:end_index:increment]]
@@ -112,17 +100,24 @@ def plot_movie(
     fig, axes = plt.subplots(
         ncols=cols, nrows=rows, figsize=(cols * 5, rows * 5)
     )  # , constrained_layout=True)
+    if rows>1:
+        for i, img in enumerate(images):
+            ax = axes[i // cols, i % cols]
+            plot_img(img, ax=ax, *args, **kwargs)
+        for i in range(len(images), rows * cols):
+            ax = axes[i // cols, i % cols]
+            fig.delaxes(ax)
+    else:
 
-    for i, img in enumerate(images):
-        ax = axes[i // cols, i % cols]
-        plot_img(img, ax=ax, *args, **kwargs)
-    for i in range(len(images), rows * cols):
-        ax = axes[i // cols, i % cols]
-        fig.delaxes(ax)
+        for i, img in enumerate(images):
+            ax = axes[i]
+            plot_img(img, ax=ax, *args, **kwargs)
+        for i in range(len(images), cols):
+            ax = axes[i]
+            fig.delaxes(ax)
 
 
 def plot_meta(stack, fields="temperature"):
-    # stack = LEEMStack(stack)
     stack = try_load_stack(stack)
 
     if isinstance(fields,str):
@@ -147,38 +142,6 @@ def plot_meta(stack, fields="temperature"):
             ax[i].plot(time, val)
         if field in ('pressure1','pressure2'):
             ax[i].set_yscale('log')
-       # if "temperature" in field:
-       #     xdata = ax[i].lines[0].get_xdata()
-       #     ydata = ax[i].lines[0].get_ydata()
-       #     ydata = ydata[ydata < 2000]
-       #     xdata = xdata[ydata < 2000]
-       #
-       #     for i, temp in enumerate(ydata):
-       #         if(temp>2000):
-       #             xdata = xdata.delete(i)
-       #             ydata = ydata.delete(i)
-
-            #if not all(i <2300 for i in ax[i].lines[0].get_ydata()):
-            #    for point in ax[i].lines[0]:
-            #        print(point)
-
-
-
-   # if isinstance(fields,str):
-    #    fig, ax = plt.subplots(figsize=(6, 3))
-    #    ax.set_title(fields)
-    #    ax.plot(getattr(stack, fields))
-    #    if "pressure" in fields:
-    #            ax.set_yscale('log')
-    #else:
-    #    fig, ax = plt.subplots(len(fields), figsize=(6, len(fields) * 3))
-    #    fig.subplots_adjust(hspace=0.3)
-    #    for i, field in enumerate(fields):
-    #        ax[i].set_title(field)
-    #        ax[i].plot(stack.rel_time, getattr(stack, field))
-    #        if "pressure" in field:
-    #            ax[i].set_yscale('log')
-
 
 def print_meta(stack, fields=("temperature","pressure1",)):
     # stack = LEEMStack(stack)
@@ -211,6 +174,7 @@ def plot_iv(stack, x0, y0, r=10, ax=None):
 
     stack = try_load_stack(stack)
 
+
     # coordinate transformation from matplotlib coordinates to stack coordinates
 
     y1 = stack[0].width - x0
@@ -218,6 +182,8 @@ def plot_iv(stack, x0, y0, r=10, ax=None):
 
     iv = np.zeros(len(stack.energy))
     data = np.array([img.data for img in stack])
+
+
     pixles = 0
     for x in range(-r, r):
         for y in range(-r, r):
@@ -226,9 +192,9 @@ def plot_iv(stack, x0, y0, r=10, ax=None):
                 iv = np.sum([iv, data[:, x - x1, y - y1]], axis=0)
                 # stack.data[:,x-x0,y-y0] = np.zeros(len(stack.energy))
                 pixles += 1
+
+
     ax.plot(stack.energy, iv / pixles)
-    # _, ax = plt.subplots()
-    # ax.imshow(stack.data[20], cmap='gray', clim=(np.amin(stack.data[20]),np.amax(stack.data[20])), aspect=1)
 
     return ax, [x0, y0, r]
 
