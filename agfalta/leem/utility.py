@@ -5,11 +5,8 @@ Tools for pretty printing etc.
 # pylint: disable=invalid-name
 
 from datetime import datetime, timedelta
-import matplotlib.pyplot as plt
-from matplotlib.widgets import Slider
-import numpy as np
 
-from .base import LEEMImg, LEEMStack
+from agfalta.leem.base import LEEMImg, LEEMStack
 
 
 def try_load_img(img):
@@ -60,8 +57,8 @@ class ProgressBar(object):
         self.fill = fill
         self.unfill = "░"
         self.iteration = 0
-        self.started = False
         self._start_time = datetime.now()
+        self.started = False
         self.finished = False
 
     def show(self, iteration):
@@ -105,27 +102,27 @@ class ProgressBar(object):
             print(statement, end="\r")
             print("")
 
-SLIDERS = []
-def plot_stack(stack, init=0):
-    """Not intended for jupyter lab."""
-    fig, ax = plt.subplots()
-    img = ax.imshow(stack[init].data, cmap="gray")
-    ax.set_title(f"slice {init}")
-    def callback(val):
-        ax.set_title(f"slice {val:.0f}")
-        cut = stack[int(val)].data
-        img.set_data(cut)
-        if not np.isnan(np.nansum(cut)):
-            img.set_clim(vmin=np.nanpercentile(cut, 1), vmax=np.nanpercentile(cut, 99))
-        ax.get_figure().canvas.draw()
-    plt.subplots_adjust(bottom=0.15)
-    control_ax = fig.add_axes([0.2, 0.05, 0.6, 0.03])
-    slider = Slider(
-        control_ax, "",
-        0, len(stack) - 1, valinit=init, valstep=1, valfmt="%d")
-    slider.on_changed(callback)
-    SLIDERS.append(slider)
-def plot_img(img):
-    """Not intended for jupyter lab."""
-    _, ax = plt.subplots()
-    img = ax.imshow(img.data[:, :], cmap="gray")
+# SLIDERS = []
+# def plot_stack(stack, init=0):
+#     """Not intended for jupyter lab."""
+#     fig, ax = plt.subplots()
+#     img = ax.imshow(stack[init].data, cmap="gray")
+#     ax.set_title(f"slice {init}")
+#     def callback(val):
+#         ax.set_title(f"slice {val:.0f}")
+#         cut = stack[int(val)].data
+#         img.set_data(cut)
+#         if not np.isnan(np.nansum(cut)):
+#             img.set_clim(vmin=np.nanpercentile(cut, 1), vmax=np.nanpercentile(cut, 99))
+#         ax.get_figure().canvas.draw()
+#     plt.subplots_adjust(bottom=0.15)
+#     control_ax = fig.add_axes([0.2, 0.05, 0.6, 0.03])
+#     slider = Slider(
+#         control_ax, "",
+#         0, len(stack) - 1, valinit=init, valstep=1, valfmt="%d")
+#     slider.on_changed(callback)
+#     SLIDERS.append(slider)
+# def plot_img(img):
+#     """Not intended for jupyter lab."""
+#     _, ax = plt.subplots()
+#     img = ax.imshow(img.data[:, :], cmap="gray")

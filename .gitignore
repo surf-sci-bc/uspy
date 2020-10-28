@@ -2,6 +2,8 @@
 *.eggs
 *.egg-info
 *__pycache__*
+*.backup
 
 leemvenv
 venv
+agfalta/dev

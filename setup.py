@@ -4,13 +4,6 @@
 from setuptools import setup, find_packages
 from agfalta.version import __version__
 
-# WARNING: seems like dependencies are not properly declared in opencv
-# first, do:
-# $ python3 -m pip install --upgrade pip        # maybe this is already enough?
-# $ python3 -m pip install scikit-build matplotlib cmake 
-# $ sudo apt install python3-opencv
-# $ cp /usr/lib/python3/dist-packages/cv* venv/lib/python3.8/site-packages/
-# $ python3 -m pip install "opencv-python<4.0" "opencv-contrib-python<4.0"
 
 setup(
     name="agfalta",
@@ -22,9 +15,10 @@ setup(
         "Programming Language :: Python :: 3",
         "Topic :: Scientific/Engineering :: Physics"
     ),
-#    license="GPLv3",
+    # license="GPLv3",
     keywords="physics LEEM microscopy spectroscopy",
     install_requires=[
+        "pytest",
         "scikit-build",
         "cmake",
         "matplotlib",
