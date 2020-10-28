@@ -27,4 +27,17 @@ def test_timing_notification(capfd):
     assert "Finished" in out
 
 def test_progress_bar(capfd):
-    pass
+    progbar = utility.ProgressBar(10, suffix="test_bar", length=10)
+    assert not progbar.started
+    assert not progbar.finished
+    for i in range(1, 6):
+        progbar.increment(2)
+        assert progbar.iteration == i * 2
+        out, _err = capfd.readouterr()
+        if i < 5:
+            assert progbar.unfill in out
+            assert not progbar.finished
+        assert progbar.fill in out
+        assert progbar.started
+    assert progbar.finished
+    assert "100" in out
