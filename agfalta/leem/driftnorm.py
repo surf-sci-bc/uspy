@@ -18,8 +18,8 @@ def main():
     # pylint: disable=reimported
     # pylint: disable=multiple-statements
     import matplotlib.pyplot as plt
-    from .utility import plot_stack
-    from .base import LEEMStack, LEEMImg
+    # from agfalta.leem.utility import plot_stack
+    from agfalta.leem.base import LEEMStack, LEEMImg
 
     # img = LEEMImg("channelplate.dat", nolazy=True)
     # print(img.data.shape)
@@ -46,18 +46,19 @@ def main():
     plt.plot([m[1, 2] for m in alignment])
     stack = apply_alignment_matrices(stack, alignment)
 
-    plot_stack(stack, 0)
-    plt.show()
+    # plot_stack(stack, 0)
+    # plt.show()
 
 
 
 def normalize_image(img, mcp, dark_counts=100):
     img = try_load_img(img)
     mcp = try_load_img(mcp)
-    img = img.copy()
     if not isinstance(dark_counts, (int, float, complex)):
         dark_image = try_load_img(dark_counts)
         dark_counts = dark_image.data
+
+    img = img.copy()
     try:
         normed_mcp = np.clip(np.nan_to_num(mcp.data - dark_counts), 1, None)
         normed = (img.data - dark_counts) / normed_mcp
@@ -68,13 +69,20 @@ def normalize_image(img, mcp, dark_counts=100):
 
 def normalize_stack(stack, mcp, dark_counts=100):
     progbar = ProgressBar(len(stack), suffix="Normalizing...")
-    for img in stack:
-        normalize_image(img, mcp, dark_counts)
+    stack = try_load_stack(stack)
+    mcp = try_load_img(mcp)
+    if not isinstance(dark_counts, (int, float, complex)):
+        dark_counts = try_load_img(dark_counts)
+
+    stack_normed = stack.copy()
+    for i, img in enumerate(stack):
+        stack_normed[i] = normalize_image(img, mcp, dark_counts=dark_counts)
         progbar.increment()
     progbar.finish()
-    stack.mcp = mcp
-    stack.dark_counts = dark_counts
-    return stack
+    # is this monkey-patching necessary?:
+    stack_normed.mcp = mcp
+    stack_normed.dark_counts = dark_counts
+    return stack_normed
 
 def align_stack(stack, **kwargs):
     stack = try_load_stack(stack)
