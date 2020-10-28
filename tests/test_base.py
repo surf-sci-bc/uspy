@@ -12,54 +12,22 @@ import numpy as np
 
 from agfalta.leem import base
 
+from .conftest import IMG_FNAMES, STACK_FNAMES, same_or_nan
+
 
 TESTDATA_DIR = os.path.dirname(__file__) + "/../testdata/"
 
 
-########## Fixtures
-
-stack_fnames = [
-    TESTDATA_DIR + "test_stack_IV_RuO2",
-    TESTDATA_DIR + "test_stack_IV_g-Cu",
-]
-tif_stack_fnames = [
-    TESTDATA_DIR + "test_stack_IV_RuO2_normed_aligned.tif",
-]
-image_fnames = [
-    TESTDATA_DIR + "channelplate.dat",
-    TESTDATA_DIR + "bremen.dat",
-    TESTDATA_DIR + "alba.dat",
-    TESTDATA_DIR + "elettra.dat",
-    TESTDATA_DIR + "elettra.tif",
-    TESTDATA_DIR + "bremen2.dat",
-]
-
-@pytest.fixture(params=stack_fnames+tif_stack_fnames)
-def stack(request):
-    return base.LEEMStack(request.param)
-
-@pytest.fixture(params=image_fnames)
-def img(request):
-    return base.LEEMImg(request.param)
-
-
-######### Utility
-
-def same_or_nan(x, y):
-    return np.isnan([x, y]).any() or x == y
-
-
-######### Test functions
+### General
 
 def test_version():
     assert base.LEEMBASE_VERSION > 1.0
 
 
-### Image loading:
+### Image loading
 
 @pytest.mark.parametrize("nolazy", [True, False])
-@pytest.mark.parametrize("img_fname", image_fnames)
-def test_image_constructor(img_fname, nolazy):
+def test_img_constructor(img_fname, nolazy):
     img = base.LEEMImg(img_fname, nolazy=nolazy)
     assert img.path == img_fname
     assert isinstance(img.energy, (int, float))
@@ -67,16 +35,16 @@ def test_image_constructor(img_fname, nolazy):
     assert isinstance(img.data, np.ndarray)
     assert img.data.shape == (img.height, img.width)
 
-def test_image_constructor_array(img):
+def test_img_constructor_array(img):
     img2 = base.LEEMImg(img.data)
     assert img2.data.shape == img.data.shape
 
-def test_image_copying(img):
+def test_img_copying(img):
     img2 = img.copy()
     assert img2 == img
     assert img2 is not img
 
-def test_image_pickling(img):
+def test_img_pickling(img):
     img.save(TESTDATA_DIR + "test_img.limg")
     img2 = base.LEEMImg(TESTDATA_DIR + "test_img.limg")
     assert img.data.shape == img2.data.shape
@@ -93,10 +61,10 @@ def test_imge_constructor_nonsense():
         assert img.data
 
 
-### Stack loading:
+### Stack loading
 
 @pytest.mark.parametrize("virtual", [False, True])
-@pytest.mark.parametrize("stack_fname", stack_fnames+tif_stack_fnames)
+# @pytest.mark.parametrize("stack_fname", stack_fnames+tif_stack_fnames)
 def test_stack_constructor(stack_fname, virtual):
     stack = base.LEEMStack(stack_fname, virtual=virtual)
     assert isinstance(stack[0], base.LEEMImg)
@@ -106,17 +74,17 @@ def test_stack_constructor_globbing():
     stack = base.LEEMStack(TESTDATA_DIR + "*.dat")
     stack2 = base.LEEMStack(TESTDATA_DIR + "*")
     assert len(stack2) >= len(stack)
-    stack3 = base.LEEMStack(TESTDATA_DIR + "bremen.dat")
+    stack3 = base.LEEMStack(IMG_FNAMES[0])
     assert len(stack3) == 1
 
 def test_stack_constructor_lists():
-    stack = base.LEEMStack(image_fnames)
-    stack2 = base.LEEMStack([base.LEEMImg(ifn) for ifn in image_fnames])
+    stack = base.LEEMStack(IMG_FNAMES)
+    stack2 = base.LEEMStack([base.LEEMImg(ifn) for ifn in IMG_FNAMES])
     assert stack[0].meta == stack2[0].meta
     assert stack.path == "NO_PATH"
 
 def test_stack_constructor_array():
-    stack = base.LEEMStack(stack_fnames[0])
+    stack = base.LEEMStack(STACK_FNAMES[0])
     stack2 = base.LEEMStack(stack.data)
     assert len(stack2) == len(stack)
 
@@ -129,10 +97,12 @@ def test_stack_constructor_nonsense():
     with pytest.raises(FileNotFoundError):
         assert stack[0]
 
-@pytest.mark.parametrize("stack_fname", stack_fnames)
 def test_stack_virtuality(stack_fname):
-    stack = base.LEEMStack(stack_fname, virtual=False)
     stack2 = base.LEEMStack(stack_fname, virtual=True)
+    if not isinstance(stack2.fnames[0], str) or not stack2.fnames[0].endswith(".dat"):
+        assert not stack2._virtual
+        return
+    stack = base.LEEMStack(stack_fname, virtual=False)
     assert stack2._images is None
     assert stack2._data is None
     assert len(stack) == len(stack2)
@@ -147,7 +117,7 @@ def test_substacks(stack):
     assert substack[0] == stack[0]
 
 
-### Data integrity:
+### Data integrity
 
 def test_attribute_types(img):
     if ".dat" in img.path:
