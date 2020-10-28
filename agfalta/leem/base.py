@@ -137,7 +137,7 @@ class LEEMImg(Loadable):
         try:
             np.testing.assert_equal(self.__dict__, other.__dict__)
             return True
-        except AssertionError:
+        except (AssertionError, AttributeError):
             return False
 
 
@@ -347,7 +347,7 @@ class LEEMStack(Loadable):
         try:
             np.testing.assert_equal(self.__dict__, other.__dict__)
             return True
-        except AssertionError:
+        except (AssertionError, AttributeError):
             return False
 
     def parse_nondat(self, path):
