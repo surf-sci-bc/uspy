@@ -117,9 +117,8 @@ class LEEMImg(Loadable):
         try:                        # assume datfile or pickle
             if path.endswith(".dat"):
                 if nolazy:
-                    # pylint: disable=pointless-statement
-                    self.meta
-                    self.data
+                    _ = self.meta
+                    _ = self.data
             elif path.endswith(self._pickle_extension):
                 super().load_pickle(path)
             else:
@@ -129,19 +128,6 @@ class LEEMImg(Loadable):
                 self.parse_nondat(path)
             except (ValueError, TypeError, AttributeError):
                 raise ValueError(f"{path} does not exist or has wrong file format.")
-
-    def copy(self):
-        return copy.deepcopy(self)
-
-    def __eq__(self, other):
-        try:
-            assert self.path == other.path
-            assert self.meta == other.meta
-            assert (self.data == other.data).all()
-            return True
-        except (AssertionError, AttributeError):
-            return False
-
 
     def parse_nondat(self, path):
         """Use this for other formats than pickle (which is already
@@ -161,6 +147,39 @@ class LEEMImg(Loadable):
             "width": data.shape[1],
             "time": datetime.min
         }
+
+    def copy(self):
+        return copy.deepcopy(self)
+
+    def __eq__(self, other):
+        try:
+            assert self.path == other.path
+            assert self.meta == other.meta
+            assert (self.data == other.data).all()
+            return True
+        except (AssertionError, AttributeError):
+            return False
+
+    def __getattr__(self, attr):
+        # if these don't exist, there is a problem:
+        if attr in ("path", "_meta", "_data", "_time_origin"):
+            raise AttributeError
+        try:
+            return self.meta.get(self._attrs[attr], np.nan)
+        except KeyError:
+            try:
+                return self.meta.get(self._attrs_with_unit[attr], (np.nan, None))[0]
+            except KeyError:
+                raise AttributeError
+
+    def __setattr__(self, attr, value):
+        if attr in self._attrs:
+            self.meta[self._attrs[attr]] = value
+        elif attr in self._attrs_with_unit:
+            unit = self._fallback_units[attr]
+            self.meta[self._attrs_with_unit[attr]] = (value, unit)
+        else:
+            super().__setattr__(attr, value)
 
     @property
     def meta(self):
@@ -193,27 +212,6 @@ class LEEMImg(Loadable):
         if value.shape != (self.height, self.width):
             raise ValueError("Image has wrong dimensions")
         self._data = value
-
-    def __getattr__(self, attr):
-        # if these don't exist, there is a problem:
-        if attr in ("path", "_meta", "_data", "_time_origin"):
-            raise AttributeError
-        try:
-            return self.meta.get(self._attrs[attr], np.nan)
-        except KeyError:
-            try:
-                return self.meta.get(self._attrs_with_unit[attr], (np.nan, None))[0]
-            except KeyError:
-                raise AttributeError
-
-    def __setattr__(self, attr, value):
-        if attr in self._attrs:
-            self.meta[self._attrs[attr]] = value
-        elif attr in self._attrs_with_unit:
-            unit = self._fallback_units[attr]
-            self.meta[self._attrs_with_unit[attr]] = (value, unit)
-        else:
-            super().__setattr__(attr, value)
 
     def get_unit(self, field):
         """Unit string for the specified field."""
@@ -287,7 +285,6 @@ class LEEMImg(Loadable):
 
 
 class LEEMStack(Loadable):
-    # pylint: disable=too-few-public-methods
     """Container object for LEEMImg instances. It has the same attributes as LEEMImgBase
     and returns them as numpy arrays.
     It can be used like this:
@@ -300,9 +297,11 @@ class LEEMStack(Loadable):
             print("yes")
     """
     _pickle_extension = ".lstk"
-    _unique_attrs = ("fnames", "path", "_images", "_virtual", "_time_origin")
+    _unique_attrs = ("fnames", "path", "_images", "_virtual", "virtual",
+                     "_time_origin", "time_origin")
 
     def __init__(self, path, virtual=False, nolazy=False):
+        # pylint: disable=too-many-branches
         self.path = path
         self._time_origin = datetime.min
         self._virtual = virtual
@@ -322,6 +321,8 @@ class LEEMStack(Loadable):
             try:            # now, assume a list that yields fnames in some way
                 if isinstance(path[0], LEEMImg):
                     self.fnames = [img.path for img in path]
+                    if not [img.data.shape == path[0].data.shape for img in path]:
+                        raise ValueError("Incompatible image dimensions")
                     self._images = [img for img in path]
                     self._virtual = False
                 else:
@@ -336,13 +337,10 @@ class LEEMStack(Loadable):
                 except (AttributeError, ValueError):
                     raise ValueError(f"'{self.path}' does not exist, cannot be read"
                                      " successfully or contains no *.dat files")
-
         if nolazy:
             for img in self:
                 _ = img.meta
                 _ = img.data
-        if self.fnames is None:
-            raise ValueError("Problem constructing LEEMStack")
 
     def parse_nondat(self, path):
         """Use this for other formats than pickle (which is already
@@ -362,8 +360,15 @@ class LEEMStack(Loadable):
     def _load_images(self):
         self._virtual = False
         if self._images is None:
-            self._images = [LEEMImg(fname, self.time_origin) for fname in self.fnames]
+            self._images = [LEEMImg(self.fnames[0], self.time_origin)]
             self._time_origin = self._images[0].time_dtobject
+            if len(self.fnames) < 2:
+                return
+            for fname in self.fnames[1:]:
+                img = LEEMImg(fname, self.time_origin)
+                if img.data.shape != self._images[0].data.shape:
+                    raise ValueError("Image has the wrong dimensions")
+                self._images.append(img)
 
     def copy(self):
         return copy.deepcopy(self)
@@ -392,6 +397,8 @@ class LEEMStack(Loadable):
 
     def __setitem__(self, indexes, imges):
         if isinstance(indexes, int) and isinstance(imges, LEEMImg):
+            if imges.data.shape != self[0].data.shape:
+                raise ValueError("Incompatible image dimensions")
             self.fnames[indexes] = imges.path
             if self._virtual:
                 if imges.path != "NO_PATH":
@@ -409,7 +416,7 @@ class LEEMStack(Loadable):
                 self._images.__setitem__(indexes, [img for img in imges])
             if all([isinstance(img, LEEMImg) for img in imges]):
                 if not [img.data.shape == imges[0].data.shape for img in imges[1:]]:
-                    raise TypeError("Image can not be added, it has different dimensions")
+                    raise ValueError("Incompatible image dimensions")
                 self._images.__setitem__(indexes, imges)
             else:
                 raise TypeError("LEEMStack only takes LEEMImg elements")
@@ -423,7 +430,6 @@ class LEEMStack(Loadable):
         return len(self.fnames)
 
     def __getattr__(self, attr):
-        # if these don't exist, there is a problem:
         if attr in self._unique_attrs:
             raise AttributeError
         try:
@@ -468,7 +474,7 @@ class LEEMStack(Loadable):
 
     @property
     def data(self):
-        raise AttributeError("stack.data is no longer supported")
+        raise NotImplementedError("stack.data is no longer supported")
     #     print("WARNING: Using stack.data is deprecated! Sane behaviour is not guaranteed")
     #     if self._data is None:
     #         self._load_images()

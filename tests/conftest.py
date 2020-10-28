@@ -27,6 +27,7 @@ STACK_FNAMES = [
     TESTDATA_DIR + "test_stack_IV_g-Cu",
     TESTDATA_DIR + "test_stack_IV_RuO2_normed_aligned.tif",
 ]
+STACK_INCOMPATIBLE_IMG_FNAME = TESTDATA_DIR + "elettra.dat"
 
 IMG_FNAMES = [
     TESTDATA_DIR + "bremen.dat",

@@ -12,7 +12,11 @@ import numpy as np
 
 from agfalta.leem import base
 
-from .conftest import IMG_FNAMES_COMPATIBLE, STACK_FNAMES, same_or_nan
+from .conftest import (
+    same_or_nan,
+    IMG_FNAMES_COMPATIBLE, STACK_FNAMES,
+    STACK_INCOMPATIBLE_IMG_FNAME
+)
 
 
 TESTDATA_DIR = os.path.dirname(__file__) + "/../testdata/"
@@ -64,7 +68,6 @@ def test_imge_constructor_nonsense():
 ### Stack loading
 
 @pytest.mark.parametrize("virtual", [False, True])
-# @pytest.mark.parametrize("stack_fname", stack_fnames+tif_stack_fnames)
 def test_stack_constructor(stack_fname, virtual):
     stack = base.LEEMStack(stack_fname, virtual=virtual)
     assert isinstance(stack[0], base.LEEMImg)
@@ -85,7 +88,8 @@ def test_stack_constructor_lists():
 
 def test_stack_constructor_array():
     stack = base.LEEMStack(STACK_FNAMES[0])
-    stack2 = base.LEEMStack(stack.data)
+    data = np.stack([img.data for img in stack], axis=0)
+    stack2 = base.LEEMStack(data)
     assert len(stack2) == len(stack)
 
 def test_stack_copying(stack):
@@ -117,12 +121,6 @@ def test_stack_virtuality(stack_fname):
     assert len(stack) == len(stack2)
     assert stack[0].data.shape == stack2[0].data.shape
     assert stack[-1].meta == stack2[-1].meta
-
-def test_stack_dimension_consistency(stack):
-    pass
-
-def test_stack_set_virtual(stack):
-    pass
 
 def test_substacks(stack):
     end_idx = len(stack) // 2
@@ -192,3 +190,21 @@ def test_stack_setattr(stack):
         stack.energy = "bla"
     stack.energy = np.linspace(0, 10, len(stack))
     assert stack.energy[-1] == 10
+
+def test_img_dimension_consistency(img):
+    with pytest.raises(ValueError):
+        img.data = np.delete(img.data, 0, axis=0)
+
+
+def test_stack_dimension_consistency(stack):
+    img = base.LEEMImg(STACK_INCOMPATIBLE_IMG_FNAME)
+    with pytest.raises(ValueError):
+        stack[0] = img
+
+def test_stack_set_virtual(stack_fname):
+    if "tif" in stack_fname:
+        return
+    stack = base.LEEMStack(stack_fname, virtual=True)
+    assert stack._images is None
+    stack.virtual = False
+    assert len(stack._images) == len(stack)
