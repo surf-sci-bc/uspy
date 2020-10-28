@@ -12,7 +12,7 @@ import numpy as np
 
 from agfalta.leem import base
 
-from .conftest import IMG_FNAMES, STACK_FNAMES, same_or_nan
+from .conftest import IMG_FNAMES_COMPATIBLE, STACK_FNAMES, same_or_nan
 
 
 TESTDATA_DIR = os.path.dirname(__file__) + "/../testdata/"
@@ -74,19 +74,29 @@ def test_stack_constructor_globbing():
     stack = base.LEEMStack(TESTDATA_DIR + "*.dat")
     stack2 = base.LEEMStack(TESTDATA_DIR + "*")
     assert len(stack2) >= len(stack)
-    stack3 = base.LEEMStack(IMG_FNAMES[0])
+    stack3 = base.LEEMStack(IMG_FNAMES_COMPATIBLE[0])
     assert len(stack3) == 1
 
 def test_stack_constructor_lists():
-    stack = base.LEEMStack(IMG_FNAMES)
-    stack2 = base.LEEMStack([base.LEEMImg(ifn) for ifn in IMG_FNAMES])
-    assert stack[0].meta == stack2[0].meta
+    stack = base.LEEMStack(IMG_FNAMES_COMPATIBLE)
+    stack2 = base.LEEMStack([base.LEEMImg(ifn) for ifn in IMG_FNAMES_COMPATIBLE])
+    assert stack == stack2
     assert stack.path == "NO_PATH"
 
 def test_stack_constructor_array():
     stack = base.LEEMStack(STACK_FNAMES[0])
     stack2 = base.LEEMStack(stack.data)
     assert len(stack2) == len(stack)
+
+def test_stack_copying(stack):
+    stack2 = stack.copy()
+    assert stack2 == stack
+    assert stack2 is not stack
+
+def test_stack_pickling(stack):
+    stack.save(TESTDATA_DIR + "test_stack.lstk")
+    stack2 = base.LEEMStack(TESTDATA_DIR + "test_stack.lstk")
+    assert stack == stack2
 
 def test_stack_constructor_nonsense():
     with pytest.raises(ValueError):
@@ -104,10 +114,12 @@ def test_stack_virtuality(stack_fname):
         return
     stack = base.LEEMStack(stack_fname, virtual=False)
     assert stack2._images is None
-    assert stack2._data is None
     assert len(stack) == len(stack2)
     assert stack[0].data.shape == stack2[0].data.shape
     assert stack[-1].meta == stack2[-1].meta
+
+def test_stack_dimension_consistency(stack):
+    pass
 
 def test_stack_set_virtual(stack):
     pass

@@ -36,6 +36,10 @@ IMG_FNAMES = [
     TESTDATA_DIR + "elettra.tif",
     TESTDATA_DIR + "bremen2.dat",
 ]
+IMG_FNAMES_COMPATIBLE = [
+    TESTDATA_DIR + "bremen.dat",
+    TESTDATA_DIR + "bremen2.dat",
+]
 
 DC_IMG_FNAME = TESTDATA_DIR + "dark_counts_bremen.dat"
 MCP_IMG_FNAME = TESTDATA_DIR + "channelplate.dat"

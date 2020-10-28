@@ -135,7 +135,9 @@ class LEEMImg(Loadable):
 
     def __eq__(self, other):
         try:
-            np.testing.assert_equal(self.__dict__, other.__dict__)
+            assert self.path == other.path
+            assert self.meta == other.meta
+            assert (self.data == other.data).all()
             return True
         except (AssertionError, AttributeError):
             return False
@@ -298,13 +300,14 @@ class LEEMStack(Loadable):
             print("yes")
     """
     _pickle_extension = ".lstk"
+    _unique_attrs = ("fnames", "path", "_images", "_virtual", "_time_origin")
 
     def __init__(self, path, virtual=False, nolazy=False):
         self.path = path
         self._time_origin = datetime.min
         self._virtual = virtual
         self._images = None
-        self._data = None
+        self.fnames = None
 
         try:                # first, assume a string that yields fnames or a pickle
             if path.endswith(".dat"):
@@ -335,10 +338,11 @@ class LEEMStack(Loadable):
                                      " successfully or contains no *.dat files")
 
         if nolazy:
-            # pylint: disable=pointless-statement
             for img in self:
-                img.meta
-                img.data
+                _ = img.meta
+                _ = img.data
+        if self.fnames is None:
+            raise ValueError("Problem constructing LEEMStack")
 
     def parse_nondat(self, path):
         """Use this for other formats than pickle (which is already
@@ -359,13 +363,17 @@ class LEEMStack(Loadable):
         self._virtual = False
         if self._images is None:
             self._images = [LEEMImg(fname, self.time_origin) for fname in self.fnames]
+            self._time_origin = self._images[0].time_dtobject
 
     def copy(self):
         return copy.deepcopy(self)
 
     def __eq__(self, other):
         try:
-            np.testing.assert_equal(self.__dict__, other.__dict__)
+            assert self.path == other.path
+            assert self.fnames == other.fnames
+            for self_img, other_img in zip(self, other):
+                assert self_img == other_img
             return True
         except (AssertionError, AttributeError):
             return False
@@ -400,6 +408,8 @@ class LEEMStack(Loadable):
             if isinstance(imges, LEEMStack):
                 self._images.__setitem__(indexes, [img for img in imges])
             if all([isinstance(img, LEEMImg) for img in imges]):
+                if not [img.data.shape == imges[0].data.shape for img in imges[1:]]:
+                    raise TypeError("Image can not be added, it has different dimensions")
                 self._images.__setitem__(indexes, imges)
             else:
                 raise TypeError("LEEMStack only takes LEEMImg elements")
@@ -414,7 +424,7 @@ class LEEMStack(Loadable):
 
     def __getattr__(self, attr):
         # if these don't exist, there is a problem:
-        if attr in ("fnames", "path", "_images", "_virtual", "_data", "_time_origin"):
+        if attr in self._unique_attrs:
             raise AttributeError
         try:
             return np.array([getattr(img, attr) for img in self])
@@ -422,7 +432,7 @@ class LEEMStack(Loadable):
             raise AttributeError("Unknown attribute")
 
     def __setattr__(self, attr, value):
-        if attr in ("fnames", "path", "_images", "_virtual", "_data", "_time_origin"):
+        if attr in self._unique_attrs:
             super().__setattr__(attr, value)
         elif len(self) == len(value):
             for img, single_value in zip(self, value):
@@ -443,7 +453,6 @@ class LEEMStack(Loadable):
                 raise ValueError("Stack can't be virtual retroactively")
             self._virtual = True
             self._images = None
-            self._data = None
 
     @property
     def time_origin(self):
@@ -459,11 +468,12 @@ class LEEMStack(Loadable):
 
     @property
     def data(self):
-        print("WARNING: Using stack.data is deprecated! Sane behaviour is not guaranteed")
-        if self._data is None:
-            self._load_images()
-            self._data = np.stack([img.data for img in self._images], axis=0)
-        return self._data
+        raise AttributeError("stack.data is no longer supported")
+    #     print("WARNING: Using stack.data is deprecated! Sane behaviour is not guaranteed")
+    #     if self._data is None:
+    #         self._load_images()
+    #         self._data = np.stack([img.data for img in self._images], axis=0)
+    #     return self._data
 
 
 
