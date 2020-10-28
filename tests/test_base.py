@@ -109,6 +109,9 @@ def test_stack_virtuality(stack_fname):
     assert stack[0].data.shape == stack2[0].data.shape
     assert stack[-1].meta == stack2[-1].meta
 
+def test_stack_set_virtual(stack):
+    pass
+
 def test_substacks(stack):
     end_idx = len(stack) // 2
     substack = stack[0:end_idx]
@@ -117,9 +120,34 @@ def test_substacks(stack):
     assert substack[0] == stack[0]
 
 
+### Stack container functionality
+
+def test_stack_indexing(stack):
+    for img in stack[10:20]:
+        assert isinstance(img, base.LEEMImg)
+    assert isinstance(stack[22], base.LEEMImg)
+    with pytest.raises(IndexError):
+        _ = stack[len(stack) + 1]
+    with pytest.raises(TypeError):
+        _ = stack["nonsense"]
+
+def test_stack_setitem(stack):
+    img = stack[0]
+    stack[len(stack) // 2] = img
+    with pytest.raises(IndexError):
+        stack[len(stack) + 1] = img
+    with pytest.raises((TypeError, AttributeError)):
+        stack[len(stack) // 2] = "nonsense"
+
+def test_stack_delitem(stack):
+    length = len(stack)
+    del stack[length // 2 - 1: length // 2 + 1]
+    assert len(stack) == length - 2
+
+
 ### Data integrity
 
-def test_attribute_types(img):
+def test_img_attr_types(img):
     if ".dat" in img.path:
         assert img.energy > -6
         assert img.rel_time > 0
@@ -129,7 +157,7 @@ def test_attribute_types(img):
     assert np.isnan(img.temperature) or img.temperature > -280
     assert isinstance(img.time_dtobject, datetime)
 
-def test_img_attribute_setting(img):
+def test_img_setattr(img):
     img.energy = 7
     assert img.energy == 7
     with pytest.raises(AttributeError):
@@ -138,14 +166,14 @@ def test_img_attribute_setting(img):
         img.rel_time = 5
     img.data = np.ones_like(img.data)
 
-def test_stack_vector_types(stack):
+def test_stack_getattr(stack):
     assert stack.energy.shape == (len(stack),)
     test_idx = len(stack) // 2
     assert stack.time[test_idx] == stack[test_idx].time
     assert same_or_nan(stack.energy[test_idx], stack[test_idx].energy)
     assert same_or_nan(stack.rel_time[test_idx], stack[test_idx].rel_time)
 
-def test_stack_vector_setting(stack):
+def test_stack_setattr(stack):
     with pytest.raises(ValueError):
         stack.energy = np.linspace(0, 10, len(stack) + 1)
     with pytest.raises(ValueError):

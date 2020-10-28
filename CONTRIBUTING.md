@@ -14,6 +14,7 @@ Clone the source code into your projects folder:
 ```sh
 $ cd path/to/projects
 $ git clone username@192.168.2.63:/home/agfalta/git_host/agfalta_tools.git
+$ git submodule init
 $ cd agfalta_tools
 $ git submodule add username@192.168.2.63:/home/agfalta/git_host/agfalta_tools_testdata.git
 ```

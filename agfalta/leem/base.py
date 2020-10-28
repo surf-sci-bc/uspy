@@ -331,24 +331,14 @@ class LEEMStack(Loadable):
                     self.parse_nondat(path)
                     self._virtual = False
                 except (AttributeError, ValueError):
-                    raise ValueError(f"'{self.path}' does not exist, cannot be successfully read"
-                                     "or contains no *.dat files")
+                    raise ValueError(f"'{self.path}' does not exist, cannot be read"
+                                     " successfully or contains no *.dat files")
 
         if nolazy:
             # pylint: disable=pointless-statement
             for img in self:
                 img.meta
                 img.data
-
-    def copy(self):
-        return copy.deepcopy(self)
-
-    def __eq__(self, other):
-        try:
-            np.testing.assert_equal(self.__dict__, other.__dict__)
-            return True
-        except (AssertionError, AttributeError):
-            return False
 
     def parse_nondat(self, path):
         """Use this for other formats than pickle (which is already
@@ -363,54 +353,61 @@ class LEEMStack(Loadable):
             raise ValueError(f"File {path} is not an image stack")
         self.path = path
         self._images = [LEEMImg(data[i, :, :]) for i in range(data.shape[0])]
-        self.fnames = [None] * data.shape[0]
+        self.fnames = ["NO_PATH"] * data.shape[0]
 
-    def delete_frames(self, indexes):
-        for index in sorted(indexes, reverse=True):
-            del self._images[index]
-            del self.fnames[index]
-        self._data = None
-        if 0 in indexes:
-            self._time_origin = datetime.min
-
-    @property
-    def time_origin(self):
-        if self._time_origin == datetime.min:
-            try:
-                self._time_origin = self._images[0].time_dtobject
-            except (IndexError, TypeError):
-                try:
-                    self._time_origin = LEEMImg(self.fnames[0]).time_dtobject
-                except (IndexError, TypeError):
-                    pass
-        return self._time_origin
-
-    @property
-    def virtual(self):
-        return self._virtual
-    @virtual.setter
-    def virtual(self, value):
-        if not value:
-            if None in self.fnames:
-                raise ValueError("Stack can't be virtual retroactively")
-            self._virtual = False
-            self._images = None
-            self._data = None
-        else:
-            self._virtual = True
-
-
-    def __getitem__(self, index):
-        if self._virtual:
-            if isinstance(index, int):
-                return LEEMImg(self.fnames[index])
-            return LEEMStack(self.fnames.__getitem__(index), virtual=True)
+    def _load_images(self):
+        self._virtual = False
         if self._images is None:
             self._images = [LEEMImg(fname, self.time_origin) for fname in self.fnames]
-        image_list = self._images[index]
-        if isinstance(image_list, LEEMImg):
-            return image_list
-        return LEEMStack(image_list, virtual=self._virtual)
+
+    def copy(self):
+        return copy.deepcopy(self)
+
+    def __eq__(self, other):
+        try:
+            np.testing.assert_equal(self.__dict__, other.__dict__)
+            return True
+        except (AssertionError, AttributeError):
+            return False
+
+    def __getitem__(self, indexes):
+        if isinstance(indexes, int):
+            if self._virtual:
+                return LEEMImg(self.fnames[indexes])
+            self._load_images()
+            return self._images[indexes]
+        else:
+            if self._virtual:
+                return LEEMStack(self.fnames.__getitem__(indexes), virtual=True)
+            self._load_images()
+            return LEEMStack(self._images.__getitem__(indexes))
+
+    def __setitem__(self, indexes, imges):
+        if isinstance(indexes, int) and isinstance(imges, LEEMImg):
+            self.fnames[indexes] = imges.path
+            if self._virtual:
+                if imges.path != "NO_PATH":
+                    return
+                self._load_images()
+            self._images[indexes] = imges
+        else:
+            fnames = [img.path for img in imges]
+            self.fnames.__setitem__(indexes, fnames)
+            if self._virtual:
+                if "NO_PATH" not in fnames:
+                    return
+                self._load_images()
+            if isinstance(imges, LEEMStack):
+                self._images.__setitem__(indexes, [img for img in imges])
+            if all([isinstance(img, LEEMImg) for img in imges]):
+                self._images.__setitem__(indexes, imges)
+            else:
+                raise TypeError("LEEMStack only takes LEEMImg elements")
+
+    def __delitem__(self, indexes):
+        self.fnames.__delitem__(indexes)
+        if not self._virtual:
+            self._images.__delitem__(indexes)
 
     def __len__(self):
         return len(self.fnames)
@@ -434,11 +431,37 @@ class LEEMStack(Loadable):
             raise ValueError(f"Value '{value}' for '{attr}' has wrong shape")
 
     @property
+    def virtual(self):
+        return self._virtual
+    @virtual.setter
+    def virtual(self, value):
+        if not value:
+            self._virtual = False
+            self._load_images()
+        else:
+            if "NO_PATH" in self.fnames:
+                raise ValueError("Stack can't be virtual retroactively")
+            self._virtual = True
+            self._images = None
+            self._data = None
+
+    @property
+    def time_origin(self):
+        if self._time_origin == datetime.min:
+            try:
+                self._time_origin = self._images[0].time_dtobject
+            except (IndexError, TypeError):
+                try:
+                    self._time_origin = LEEMImg(self.fnames[0]).time_dtobject
+                except (IndexError, TypeError):
+                    pass
+        return self._time_origin
+
+    @property
     def data(self):
-        print("WARNING: Using stack.data is deprecated!")
+        print("WARNING: Using stack.data is deprecated! Sane behaviour is not guaranteed")
         if self._data is None:
-            if self._images is None:
-                self._images = [LEEMImg(fname, self.time_origin) for fname in self.fnames]
+            self._load_images()
             self._data = np.stack([img.data for img in self._images], axis=0)
         return self._data
 
