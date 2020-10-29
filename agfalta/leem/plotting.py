@@ -10,7 +10,6 @@ from agfalta.leem.base import LEEMBASE_VERSION, LEEMStack, LEEMImg
 from agfalta import LEEMDIR
 from agfalta.leem.utility import try_load_stack, try_load_img
 
-
 if LEEMBASE_VERSION > 1.1:
     print("WARNING: LEEM_base version is newer than expected.")
 
@@ -141,38 +140,6 @@ def plot_meta(stack, fields="temperature"):
             ax[i].plot(time, val)
         if field in ('pressure1','pressure2'):
             ax[i].set_yscale('log')
-       # if "temperature" in field:
-       #     xdata = ax[i].lines[0].get_xdata()
-       #     ydata = ax[i].lines[0].get_ydata()
-       #     ydata = ydata[ydata < 2000]
-       #     xdata = xdata[ydata < 2000]
-       #
-       #     for i, temp in enumerate(ydata):
-       #         if(temp>2000):
-       #             xdata = xdata.delete(i)
-       #             ydata = ydata.delete(i)
-
-            #if not all(i <2300 for i in ax[i].lines[0].get_ydata()):
-            #    for point in ax[i].lines[0]:
-            #        print(point)
-
-
-
-   # if isinstance(fields,str):
-    #    fig, ax = plt.subplots(figsize=(6, 3))
-    #    ax.set_title(fields)
-    #    ax.plot(getattr(stack, fields))
-    #    if "pressure" in fields:
-    #            ax.set_yscale('log')
-    #else:
-    #    fig, ax = plt.subplots(len(fields), figsize=(6, len(fields) * 3))
-    #    fig.subplots_adjust(hspace=0.3)
-    #    for i, field in enumerate(fields):
-    #        ax[i].set_title(field)
-    #        ax[i].plot(stack.rel_time, getattr(stack, field))
-    #        if "pressure" in field:
-    #            ax[i].set_yscale('log')
-
 
 def print_meta(stack, fields=("temperature","pressure1",)):
     # stack = LEEMStack(stack)
@@ -201,10 +168,9 @@ def print_meta(stack, fields=("temperature","pressure1",)):
 def plot_iv(stack, x0, y0, r=10, ax=None):
     if ax is None:
         _, ax = plt.subplots()
+
     ax.set_xlabel("Energy")
-
     stack = try_load_stack(stack)
-
 
     # coordinate transformation from matplotlib coordinates to stack coordinates
 
@@ -243,3 +209,14 @@ def calc_var(stack):
             max_var = var
             max_index = i
     return stack[max_index]
+
+def plot_iv_img(stack, markers):
+    stack = try_load_stack(stack)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12,4))
+
+    for marker in markers:
+        ax1, _ = plot_iv(stack, marker[0], marker[1], marker[2], ax = ax1)
+
+    draw_marker(plot_img(calc_var(stack), ax = ax2, ticks = True), markers=markers)
+
+    return (ax1, ax2)
