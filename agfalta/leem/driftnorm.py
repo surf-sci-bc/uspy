@@ -171,7 +171,7 @@ def find_alignment_matrices_ecc(stack, max_iter=500, eps=1e-10, mask_outer=0.2, 
     mask[cutoff_y:-cutoff_y, :] = 0
     mask[:, cutoff_x:-cutoff_x] = 0
 
-    alignment = [np.eye(2, 3, dtype=np.float32)]
+    alignment = [np.eye(3, 3, dtype=np.float32)]
 
     progbar = ProgressBar(len(stack), suffix="Calculating drift (ECC)...")
     for i in range(len(stack) - 1):
