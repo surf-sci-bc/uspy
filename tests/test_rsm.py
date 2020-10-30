@@ -16,14 +16,14 @@ def main():
     stack = base.LEEMStack("testdata/test_IVLEED_VO2-RuO2")
     stack = stack[::4]
     # stack = stack[::10]
-    rsm_calc = rsm.RSM(
-        stack,
-        [503, 519],
-        profile_start=[105, 303],
-        profile_end=[919, 710],
-        # kpara_per_pix=3.84e7
-        kpara_per_pix=7.67e7
-    )
+    # rsm_calc = rsm.RSM(
+    #     stack,
+    #     [503, 519],
+    #     profile_start=[105, 303],
+    #     profile_end=[919, 710],
+    #     # kpara_per_pix=3.84e7
+    #     kpara_per_pix=7.67e7
+    # )
 
     # plt.imshow(np.log(stack[10].data))
     # plt.scatter(
@@ -44,11 +44,16 @@ def main():
     # plt.figure()
     # plt.plot(kperp)
 
-    plt.figure()
-    k, rsm_array = rsm_calc.get_rsm()
+    # plt.figure()
+    cut = rsm.RSMCut(start=[105, 303], end=[919, 710])
+    kx, ky, z = rsm.get_rsm(
+        stack, cut,
+        xy0=[503, 519],
+        kpara_per_pix=7.67e7
+    )
     plt.pcolormesh(
-        k[0, :, :] * 1e-10, k[1, :, :] * 1e-10,
-        rsm_array[:, :],
+        kx * 1e-10, ky * 1e-10,
+        z,
         shading="flat",
         cmap="gray"
     )

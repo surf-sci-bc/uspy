@@ -4,70 +4,97 @@
 
 import numpy as np
 import scipy.constants as sc
-import skimage.measure as skm
+from scipy import signal
+# import skimage.measure as skm
 
 
+def rsm(stack, start, end, xy0, kpara_per_pix=7.67e7):
+    cut = RSMCut(start=start, end=end)
+    kx, ky, z = get_rsm(stack, cut, xy0=xy0, kpara_per_pix=kpara_per_pix)
+    return kx, ky, z
 
 
-class RSM:
-    def __init__(self, stack, xy_specular, profile_start, profile_end,
-                 kpara_per_pix=1, avg=5):
+def get_rsm(stack, cut, xy0, kpara_per_pix):
+    res_y, res_x = len(stack), np.rint(cut.length).astype(int)
+
+    z = np.zeros((res_y, res_x))
+    kx = np.zeros((res_y + 1, res_x + 1))
+    kx[:, :] = kpara_per_pix * cut.length * np.linspace(-0.5, 0.5, res_x + 1)
+    ky = np.zeros((res_y + 1, res_x + 1))
+
+    kpara = get_kpara(cut, xy0, kpara_per_pix, length=res_x + 1)
+    dE = np.mean(np.diff(stack.energy))
+
+    for i, img in enumerate(stack):
+        ky[i, :] = get_kperp(stack.energy[i] - dE / 2, kpara)
+        z[i, :] = np.log(cut(img.data, length=res_x))
+    ky[-1, :] = get_kperp(stack.energy[-1] + dE / 2, kpara)
+    return kx, ky, z
+
+
+class RSMCut:
+    # pylint: disable=too-few-public-methods
+    def __init__(self, start=None, end=None, theta=0, l=200, d=0, width=10):
         # pylint: disable=too-many-arguments
-        self.stack = stack
-        self.xy0 = np.array(xy_specular)
-        self.profile = np.array([profile_start, profile_end])
-        # self.p = np.array([
-        #     [profile_start[0] - xy_specular[0], profile_start[1] - xy_specular[1]],
-        #     [profile_end[0] - xy_specular[0], profile_end[1] - xy_specular[1]]
-        # ])
-        self.p_length_pix = int(np.ceil(np.sqrt(
-            (self.profile[1, 0] - self.profile[0, 0])**2 +
-            (self.profile[1, 1] - self.profile[1, 0])**2
-        )))
-        self.avg = avg
-        self.kpara_per_pix = kpara_per_pix
-        self.p_length = len(self.get_line(stack[0].data))
+        if None in (start, end):
+            c, s = np.cos(theta), np.sin(theta)
+            rot_matrix = np.array([[c, -s], [s, c]])
+            start = np.dot(rot_matrix, [d, -l])
+            end = np.dot(rot_matrix, [d, l])
+        self.start = np.array(start)
+        self.end = np.array(end)
+        # self.width = int(width + width % 2)
+        self.width = width
+        self.length = np.linalg.norm(self.start - self.end)
 
-    def get_rsm(self):
-        rsm = np.zeros((len(self.stack), self.p_length))
-        k = np.zeros((2, len(self.stack) + 1, self.p_length + 1))
-        kpara = self.get_kpara_along_line()
-        kpara_directed = self.kpara_per_pix * self.p_length_pix * np.linspace(
-            -0.5, 0.5, self.p_length + 1)
-        energy_step = np.mean(np.diff(self.stack.energy))
-        for i, img in enumerate(self.stack):
-            k[0, i, :] = kpara_directed
-            k[1, i, :] = self.get_kperp_along_line(self.stack.energy[i] - energy_step, kpara)
-            line = np.log(self.get_line(img.data))
-            rsm[i, :] = line
-        k[0, -1, :] = kpara_directed
-        k[1, -1, :] = self.get_kperp_along_line(self.stack.energy[-1] + energy_step, kpara)
-        return k, rsm
+    def get_xy(self, length=None):
+        if length is None:
+            length = np.ring(len(self)).astype(int)
+        x = np.linspace(self.start[0], self.end[0], length)
+        y = np.linspace(self.start[1], self.end[1], length)
+        return np.stack([x, y])
 
-    def get_line(self, img_array):
-        profile = skm.profile_line(
-            img_array,
-            self.profile[0, :],
-            self.profile[1, :],
-            linewidth=self.avg,
-            order=2,                    # order of spline interpolation
-            mode="constant",            # how to treat values outside image
-            cval=0,                     # constant value outside image
-            # reduce_func=np.mean         # aggregation func perp. to the line
-        )
-        return profile
+    def __call__(self, img_array, length=None):
+        if length is None:
+            length = self.length
 
-    def get_kpara_along_line(self):
-        dp = self.profile - self.xy0
-        x = dp[0, 0] + (dp[1, 0] - dp[0, 0]) * np.linspace(0, 1, self.p_length + 1)
-        y = dp[0, 1] + (dp[1, 1] - dp[0, 1]) * np.linspace(0, 1, self.p_length + 1)
-        kpara = np.sqrt(x**2 + y**2) * self.kpara_per_pix
-        return kpara
+        dx, dy = (self.start - self.end) / self.length
+        x, y = self.get_xy(length=length)
 
-    @staticmethod
-    def get_kperp_along_line(energy_eV, kpara):
-        energy = energy_eV * sc.e
-        k0 = np.sqrt(2 * sc.m_e * energy) / sc.hbar
-        kperp = np.sqrt(k0**2 - kpara**2)   # pythagoras: kpara^2 + kperp^2 = k0^2
-        kperp = np.nan_to_num(kperp, 0)
-        return kperp
+        zi = np.zeros((self.width, length))
+        for r in range(-self.width // 2, self.width // 2):
+            zi[r, :] = img_array[(x + r * dy).astype(int), (y + r * dx).astype(int)]
+
+        gaussian_kernel = signal.windows.gaussian(self.width, std=self.width / 2)
+        def reduce(x):
+            return np.mean(gaussian_kernel * x)
+        z = np.apply_along_axis(reduce, 0, zi)
+        return z
+
+        # profile = skm.profile_line(
+        #     img_array,
+        #     self.start,
+        #     self.end,
+        #     linewidth=self.width,
+        #     order=2,                    # order of spline interpolation
+        #     mode="constant",            # how to treat values outside image
+        #     cval=0,                     # constant value outside image
+        #     # reduce_func=np.mean         # aggregation func perp. to the line
+        # )
+        # return profile
+
+def get_kpara(cut, xy0, kpara_per_pix, length=None):
+    if length is None:
+        length = len(cut) + 1
+    xy0 = np.array(xy0)
+    x, y = cut.get_xy(length=length) - xy0.reshape(2, 1)
+    kpara = np.sqrt(x**2 + y**2) * kpara_per_pix
+    return kpara
+
+def get_kperp(energy_eV, kpara):
+    energy = energy_eV * sc.e
+    k0 = np.sqrt(2 * sc.m_e * energy) / sc.hbar
+    kpara = kpara.clip(max=k0)          # prevent sqrt(negative values)
+    kperp = np.sqrt(k0**2 - kpara**2)   # pythagoras: kpara^2 + kperp^2 = k0^2
+    kperp = np.nan_to_num(kperp, 0)
+    return kperp
