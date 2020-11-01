@@ -111,6 +111,18 @@ make it executable:
 $ chmod +x post-receive
 ```
 
+Make the repositories shared to avoid file permission problems (See also https://stackoverflow.com/questions/6448242/git-push-error-insufficient-permission-for-adding-an-object-to-repository-datab):
+
+```sh
+$ ssh agfalta@192.168.2.63
+$ cd git_host/agfalta_tools.git/
+$ git config core.sharedRepository group
+$ cd git_host/agfalta_tools_testdata.git/
+$ git config core.sharedRepository group
+$ cd
+$ sudo find git_host -type d -exec chmod g+s '{}' +
+```
+
 From your local machine, add the bare server repo as origin remote:
 
 ```sh
