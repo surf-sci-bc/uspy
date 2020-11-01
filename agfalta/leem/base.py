@@ -440,9 +440,11 @@ class LEEMStack(Loadable):
     def __setattr__(self, attr, value):
         if attr in self._unique_attrs:
             super().__setattr__(attr, value)
-        elif len(self) == len(value):
+        elif hasattr(self[0], attr) and len(self) == len(value):
             for img, single_value in zip(self, value):
                 setattr(img, attr, single_value)
+        elif not hasattr(self[0], attr):
+            super().__setattr__(attr, value)
         else:
             raise ValueError(f"Value '{value}' for '{attr}' has wrong shape")
 

@@ -12,44 +12,6 @@ import numpy as np
 from agfalta.leem.utility import ProgressBar, try_load_img, try_load_stack
 
 
-def main():
-    """Example usage."""
-    # pylint: disable=unused-variable
-    # pylint: disable=reimported
-    # pylint: disable=multiple-statements
-    import matplotlib.pyplot as plt
-    # from agfalta.leem.utility import plot_stack
-    from agfalta.leem.base import LEEMStack, LEEMImg
-
-    # img = LEEMImg("channelplate.dat", nolazy=True)
-    # print(img.data.shape)
-    # img.save("test.limg")
-    # img2 = LEEMImg("test.limg")
-    # print((img.data == img2.data).all())
-    stack = LEEMStack("normed_aligned_32bit.tif")
-    stack.energy = np.linspace(3.0, 50.0, len(stack))
-    print(stack.energy)
-    print(stack[5].energy)
-    import sys; sys.exit()
-
-    # stack = LEEMStack("test_stack_ca")
-    # stack.save("temp_stack.lstk")
-    # print("saved")
-    # try:
-    #     stack = LEEMStack.load("temp_stack.lstk")
-    #     print("loaded")
-    # except FileNotFoundError:
-    stack = LEEMStack("test_stack_ca")
-    stack = normalize_stack(stack, "channelplate.dat", dark_counts=110)
-    alignment = find_alignment_matrices(stack, mask_outer=0.2, trafo="translation")
-    plt.plot([m[0, 2] for m in alignment])
-    plt.plot([m[1, 2] for m in alignment])
-    stack = apply_alignment_matrices(stack, alignment)
-
-    # plot_stack(stack, 0)
-    # plt.show()
-
-
 
 def normalize_image(img, mcp, dark_counts=100):
     img = try_load_img(img)
@@ -92,6 +54,7 @@ def align_stack(stack, **kwargs):
     return stack
 
 def apply_alignment_matrices(stack, alignment):
+    stack = stack.copy()
     for warp_matrix, img in zip(alignment, stack[1:]):
         img.data = cv.warpPerspective(
             img.data, warp_matrix, img.data.shape[::-1],
@@ -140,7 +103,9 @@ def find_alignment_matrices_sift(stack, trafo="full-affine", min_matches=10, mas
                 good_matches.append(m)
 
         if len(good_matches) < min_matches:
-            print(f"SIFT failed at image {i}")
+            if "failed at image" not in progbar.suffix:
+                progbar.suffix += f" | failed at image"
+            progbar.suffix += f" {i}"
             warp_matrix = np.eye(3, 3, dtype=np.float32)
         else:
             src = np.array([data8bit[i][1][m.queryIdx].pt for m in good_matches],
@@ -190,8 +155,3 @@ def find_alignment_matrices_ecc(stack, max_iter=500, eps=1e-10, mask_outer=0.2, 
         progbar.increment()
     progbar.finish()
     return alignment
-
-
-
-if __name__ == "__main__":
-    main()
