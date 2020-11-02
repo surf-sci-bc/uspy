@@ -43,7 +43,9 @@ def calc_dose(stack):
     return stack
 
 
-def plot_img(img, *args, ax=None, title=None, fields=("temperature", "pressure1", "energy", "fov"), figsize=(6,6), ticks=False, **kwargs):
+def plot_img(img, *args, ax=None, title=None,
+             fields=("temperature", "pressure1", "energy", "fov"),
+             figsize=(6, 6), ticks=False, **kwargs):
     img = try_load_img(img)
 
     if ax is None:
@@ -52,11 +54,10 @@ def plot_img(img, *args, ax=None, title=None, fields=("temperature", "pressure1"
         title = img.path
         if len(title) > 25:
             title = "..." + title[-25:]
-    data = np.nan_to_num(img.data)
     ax.imshow(
-        data, *args, 
+        img.data, *args,
         cmap="gray",
-        clim=(np.amin(data), np.amax(data)),
+        clim=(np.nanmin(img.data), np.nanmax(img.data)),
         aspect=1,
         **kwargs
     )
@@ -74,10 +75,7 @@ def plot_img(img, *args, ax=None, title=None, fields=("temperature", "pressure1"
     for i, field in enumerate(fields):
         if field is None:
             continue
-        val = getattr(img, field)
-        unit = img.get_unit(field)
         label = img.get_field_string(field)
-
         ax.text(
             pos[i][2],
             pos[i][3],
