@@ -264,31 +264,31 @@ def load_cluster_model(fname):
     print(f"Loaded cluster model from {fname}")
     return sort_labels(labels), model
 
-def plot_clustermap(clustermap, ax=None, out_prefix=None):
+def plot_clustermap(clustermap, ax=None, out_prefix=None, cmap="seismic"):
     """Plot 2d numpy array with integer values to colormap."""
     if ax is None:
         _, ax = plt.subplots(figsize=(8, 8))
-    ax.imshow(clustermap, interpolation="none", origin="upper", cmap="seismic")
+    ax.imshow(clustermap, interpolation="none", origin="upper", cmap=cmap)
     ax.set_xticks([])
     ax.set_yticks([])
     if out_prefix is not None:
-        plt.imsave(f"{out_prefix}_clustermap.png", clustermap, origin="upper", cmap="seismic")
+        plt.imsave(f"{out_prefix}_clustermap.png", clustermap, origin="upper", cmap=cmap)
 
-def plot_IVs(stack, labels, ax=None, mask_outer=0.2):
+def plot_IVs(stack, labels, ax=None, mask_outer=0.2, cmap="seismic"):
     """Plot IV curves."""
     if ax is None:
         _, ax = plt.subplots(figsize=(8, 5))
     X, _, _ = stack2vectors(stack, mask_outer=mask_outer)
     IV_curves = extract_IVs(X, labels)
     for i, IV_curve in enumerate(IV_curves):
-        ax.plot(stack.energy, IV_curve, color=plt.get_cmap("seismic")(i / len(IV_curves)))
+        ax.plot(stack.energy, IV_curve, color=plt.get_cmap(cmap)(i / len(IV_curves)))
 
-def plot_IVs2(energy, IV_curves, ax=None):
+def plot_IVs2(energy, IV_curves, ax=None, cmap="seismic"):
     """Plot IV curves."""
     if ax is None:
         _, ax = plt.subplots(figsize=(8, 5))
     for i, IV_curve in enumerate(IV_curves):
-        ax.plot(energy, IV_curve, color=plt.get_cmap("seismic")(i / len(IV_curves)))
+        ax.plot(energy, IV_curve, color=plt.get_cmap(cmap)(i / len(IV_curves)))
 
 def plot_optics(model, ax=None):
     if ax is None:
