@@ -52,8 +52,13 @@ def plot_img(img, *args, ax=None, title=None, fields=("temperature", "pressure1"
         title = img.path
         if len(title) > 25:
             title = "..." + title[-25:]
+    data = np.nan_to_num(img.data)
     ax.imshow(
-        img.data, *args, cmap="gray", clim=(np.amin(img.data), np.amax(img.data)), aspect=1, **kwargs
+        data, *args, 
+        cmap="gray",
+        clim=(np.amin(data), np.amax(data)),
+        aspect=1,
+        **kwargs
     )
 
     ax.set_title(title)
