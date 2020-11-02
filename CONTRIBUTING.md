@@ -120,6 +120,7 @@ $ git config core.sharedRepository group
 $ cd git_host/agfalta_tools_testdata.git/
 $ git config core.sharedRepository group
 $ cd
+$ sudo chown -R agfalta:githost git_host
 $ sudo find git_host -type d -exec chmod g+s '{}' +
 ```
 

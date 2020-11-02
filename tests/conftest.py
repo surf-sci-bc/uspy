@@ -63,6 +63,12 @@ def stack_fname(request):
 def stack(stack_fname):
     return LEEMStack(stack_fname)
 
+@pytest.fixture(scope="module")
+def single_stack():
+    stack = LEEMStack(TESTDATA_DIR + "test_stack_IV_RuO2_normed_aligned.tif")
+    stack.energy = np.linspace(3.0, 50.0, len(stack))
+    return stack
+
 
 @pytest.fixture(scope="module", params=(DC_IMG_FNAME, LEEMImg(DC_IMG_FNAME), 100, 439))
 def dark_counts(request):

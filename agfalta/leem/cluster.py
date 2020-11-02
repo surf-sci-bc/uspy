@@ -34,20 +34,31 @@ SLIDERS = []
 
 def main():
     # pylint: disable=unused-variable, too-many-locals
+    TESTDATA_DIR = os.path.dirname(__file__) + "/../../testdata/"
 
     n_components = 7
     n_clusters = 8
 
-    stack = LEEMStack("normed_aligned_32bit.tif")
-    stack.energy = np.linspace(3.0, 50.0, len(stack))
+    loaded = False
+    try:
+        stack = LEEMStack(TESTDATA_DIR + "pendried_stack.lstk")
+        loaded = True
+    except FileNotFoundError:
+        stack = LEEMStack(TESTDATA_DIR + "test_stack_IV_RuO2_normed_aligned.tif")
+        stack.energy = np.linspace(3.0, 50.0, len(stack))
 
     X, h, w = stack2vectors(stack, mask_outer=0.2) # cut away 20% on every side
 
-    # cut out a few bad frames
-    X = np.delete(X, list((range(10))) + [160], axis=1)
-    energy = np.delete(stack.energy, list((range(10))) + [160])
+    if loaded:
+        X = stack.pendry
+    else:
+        # cut out a few bad frames
+        X = np.delete(X, list((range(10))) + [160], axis=1)
+        energy = np.delete(stack.energy, list((range(10))) + [160])
 
-    X = pendryfy(X, energy)
+        X = pendryfy(X, energy)
+        stack.pendry = X
+        stack.save(TESTDATA_DIR + "pendried_stack.lstk")
 
     trafo, inv_trafo, model = component_analysis(X, "pca", n_components=n_components)
     W = trafo(X)
@@ -55,7 +66,7 @@ def main():
 
     labels, model = cluster_analysis(
         W, "pc-kmeans",
-        n_clusters=n_clusters, metric="euclidean_square"
+        n_clusters=n_clusters, metric="canberra"
     )
     # print(len(np.unique(labels)))
 
@@ -124,11 +135,12 @@ def component_analysis(X, algorithm="pca", **params_):
     model = constructor(**params)
     model.fit(X)
 
-    variance_list = ", ".join([f"{v*100:.2f}%" for v in model.explained_variance_ratio_])
-    if len(model.explained_variance_ratio_) > 3:
-        variance_list += ", ..."
-    print(f"{algorithm.upper()}: {model.n_components_} components explain "
-          f"{sum(model.explained_variance_ratio_)*100:.2f}% of variance: ({variance_list})")
+    if algorithm == "pca":
+        variance_list = ", ".join([f"{v*100:.2f}%" for v in model.explained_variance_ratio_])
+        if len(model.explained_variance_ratio_) > 3:
+            variance_list += ", ..."
+        print(f"{algorithm.upper()}: {model.n_components_} components explain "
+              f"{sum(model.explained_variance_ratio_)*100:.2f}% of variance: ({variance_list})")
     return model.transform, model.inverse_transform, model
 
 @enforce_clustershape(0)
@@ -143,10 +155,18 @@ def cluster_analysis(X, algorithm="birch", **params_):
         labels = model.cluster(X, True)
     if algorithm == "pc-kmeans":
         # user_function = lambda point1, point2: point1[0] + point2[0] + 2
+        metric_type = params.pop("metric", "euclidean")
         if "metric_func" in params:
             metric = distance_metric(type_metric.USER_DEFINED, func=params.pop("metric_func"))
-        elif params.pop("metric", "euclidean") == "euclidean_square":
+        elif metric_type == "euclidean_square":
             metric = distance_metric(type_metric.EUCLIDEAN_SQUARE)
+        elif metric_type == "pendry":
+            metric = distance_metric(type_metric.USER_DEFINED, func=pendry_distance)
+        elif metric_type == "canberra":
+            # canberra is usually not good
+            metric = distance_metric(type_metric.CANBERRA)
+        elif metric_type == "chi_square":
+            metric = distance_metric(type_metric.CHI_SQUARE)
         else:
             metric = distance_metric(type_metric.EUCLIDEAN)
 
@@ -187,6 +207,11 @@ def pendry_y(spectrum, energy, V0i_sq):
     L = np.gradient(spectrum) / np.gradient(energy) / np.clip(spectrum, min_nonzero, None)
     PY = L / (1 + L**2 * V0i_sq)
     return PY
+
+def pendry_distance(p1, p2):
+    # return sum((p1 - p2)**2 / (p1**2 + p2**2))
+    return np.divide(np.sum(np.square(p1 - p2)),
+                     np.sum(np.square(p1) + np.square(p2)))
 
 @enforce_clustershape(0)
 @timing_notification("normalization")

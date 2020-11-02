@@ -5,7 +5,8 @@
 import numpy as np
 import scipy.constants as sc
 from scipy import signal
-# import skimage.measure as skm
+
+from agfalta.leem.utility import ProgressBar
 
 
 def rsm(stack, start, end, xy0, kpara_per_pix=7.67e7):
@@ -15,6 +16,7 @@ def rsm(stack, start, end, xy0, kpara_per_pix=7.67e7):
 
 
 def get_rsm(stack, cut, xy0, kpara_per_pix):
+    progbar = ProgressBar(len(stack), suffix="Calculating RSM...")
     res_y, res_x = len(stack), np.rint(cut.length).astype(int)
 
     z = np.zeros((res_y, res_x))
@@ -28,7 +30,9 @@ def get_rsm(stack, cut, xy0, kpara_per_pix):
     for i, img in enumerate(stack):
         ky[i, :] = get_kperp(stack.energy[i] - dE / 2, kpara)
         z[i, :] = np.log(cut(img.data, length=res_x))
+        progbar.increment()
     ky[-1, :] = get_kperp(stack.energy[-1] + dE / 2, kpara)
+    progbar.finish()
     return kx, ky, z
 
 
@@ -55,6 +59,11 @@ class RSMCut:
         return np.stack([x, y])
 
     def __call__(self, img_array, length=None):
+        """
+        See also:
+        https://stackoverflow.com/questions/7878398/
+        how-to-extract-an-arbitrary-line-of-values-from-a-numpy-array
+        """
         if length is None:
             length = self.length
 
@@ -71,17 +80,6 @@ class RSMCut:
         z = np.apply_along_axis(reduce, 0, zi)
         return z
 
-        # profile = skm.profile_line(
-        #     img_array,
-        #     self.start,
-        #     self.end,
-        #     linewidth=self.width,
-        #     order=2,                    # order of spline interpolation
-        #     mode="constant",            # how to treat values outside image
-        #     cval=0,                     # constant value outside image
-        #     # reduce_func=np.mean         # aggregation func perp. to the line
-        # )
-        # return profile
 
 def get_kpara(cut, xy0, kpara_per_pix, length=None):
     if length is None:
@@ -90,6 +88,7 @@ def get_kpara(cut, xy0, kpara_per_pix, length=None):
     x, y = cut.get_xy(length=length) - xy0.reshape(2, 1)
     kpara = np.sqrt(x**2 + y**2) * kpara_per_pix
     return kpara
+
 
 def get_kperp(energy_eV, kpara):
     energy = energy_eV * sc.e

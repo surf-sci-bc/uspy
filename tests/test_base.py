@@ -4,7 +4,6 @@
 # pylint: disable=redefined-outer-name
 # pylint: disable=protected-access
 
-import os
 from datetime import datetime
 
 import pytest
@@ -15,11 +14,9 @@ from agfalta.leem import base
 from .conftest import (
     same_or_nan,
     IMG_FNAMES_COMPATIBLE, STACK_FNAMES,
-    STACK_INCOMPATIBLE_IMG_FNAME
+    STACK_INCOMPATIBLE_IMG_FNAME,
+    TESTDATA_DIR
 )
-
-
-TESTDATA_DIR = os.path.dirname(__file__) + "/../testdata/"
 
 
 ### General
