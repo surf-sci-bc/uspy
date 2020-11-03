@@ -94,6 +94,6 @@ def get_kperp(energy_eV, kpara):
     energy = energy_eV * sc.e
     k0 = np.sqrt(2 * sc.m_e * energy) / sc.hbar
     kpara = kpara.clip(max=k0)          # prevent sqrt(negative values)
-    kperp = np.sqrt(k0**2 - kpara**2)   # pythagoras: kpara^2 + kperp^2 = k0^2
+    kperp = k0 + np.sqrt(k0**2 - kpara**2) # pythagoras: kpara^2 + kperp^2 = k0^2
     kperp = np.nan_to_num(kperp, 0)
     return kperp

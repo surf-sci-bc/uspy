@@ -2,8 +2,6 @@
 # pylint: disable=invalid-name
 # pylint: disable=missing-docstring
 
-import sys
-
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider
 import numpy as np
@@ -13,6 +11,9 @@ from agfalta.leem import rsm
 
 
 def main():
+    # pylint: disable=unused-variable
+    import sys
+
     stack = base.LEEMStack("testdata/test_IVLEED_VO2-RuO2")
     stack = stack[::4]
     # stack = stack[::10]
@@ -60,7 +61,6 @@ def main():
     plot_stack(stack)
     plt.show()
 
-    sys.exit()
 
 SLIDERS = []
 def plot_stack(stack, init=0):
