@@ -4,6 +4,7 @@
 
 import os
 import pickle
+import copy
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -105,6 +106,7 @@ PC_METRICS = {
 def cluster_analysis(X, algorithm="birch", **params_):
     # pylint: disable=too-many-locals
     constructor, params = CLUSTERING_DEFAULTS[algorithm]
+    params = copy.copy(params)
     params.update(params_)
 
     if algorithm.startswith("nltk-"):
