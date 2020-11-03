@@ -8,85 +8,27 @@ import pickle
 import numpy as np
 import matplotlib.pyplot as plt
 
-from sklearn.decomposition import NMF, PCA
-from sklearn.cluster import KMeans, DBSCAN, OPTICS, Birch
-from sklearn.cluster import cluster_optics_xi, cluster_optics_dbscan
-from sklearn.metrics import silhouette_score
-from sklearn.mixture import BayesianGaussianMixture
-from kneed import KneeLocator
-
-from nltk.cluster import KMeansClusterer, euclidean_distance
-
+# clustering via scikit
+from sklearn import decomposition as sk_decomposition
+from sklearn import cluster as sk_cluster
+from sklearn import mixture as sk_mixture
+# clustering via nltk
+from nltk import cluster as nltk_cluster
+# clustering via pyclustering
 from pyclustering.cluster.kmeans import kmeans as pc_kmeans
-from pyclustering.cluster.center_initializer import kmeans_plusplus_initializer
-from pyclustering.utils.metric import type_metric, distance_metric
+from pyclustering.cluster.kmedoids import kmedoids as pc_kmedoids
+from pyclustering.cluster.xmeans import xmeans as pc_xmeans
+from pyclustering.cluster.cure import cure as pc_cure
+from pyclustering.cluster.agglomerative import agglomerative as pc_agglomerative
+from pyclustering.cluster.center_initializer import (
+    kmeans_plusplus_initializer, random_center_initializer)
+from pyclustering.utils import metric as pc_metric
+# measuring clustering quality
+from sklearn import metrics as sk_metrics     # pylint: disable=ungrouped-imports
+import kneed
 
 from agfalta.leem.base import LEEMStack
 from agfalta.leem.utility import timing_notification, ProgressBar
-
-
-N_COMPONENTS = 7
-N_CLUSTERS = 8 #N_COMPONENTS
-PROJECTNAME = "RuO2-Exmpl"
-PREFIX = PROJECTNAME
-SLIDERS = []
-
-
-def main():
-    # pylint: disable=unused-variable, too-many-locals
-    TESTDATA_DIR = os.path.dirname(__file__) + "/../../testdata/"
-
-    n_components = 7
-    n_clusters = 8
-
-    loaded = False
-    try:
-        stack = LEEMStack(TESTDATA_DIR + "pendried_stack.lstk")
-        loaded = True
-    except FileNotFoundError:
-        stack = LEEMStack(TESTDATA_DIR + "test_stack_IV_RuO2_normed_aligned.tif")
-        stack.energy = np.linspace(3.0, 50.0, len(stack))
-
-    X, h, w = stack2vectors(stack, mask_outer=0.2) # cut away 20% on every side
-
-    if loaded:
-        X = stack.pendry
-    else:
-        # cut out a few bad frames
-        X = np.delete(X, list((range(10))) + [160], axis=1)
-        energy = np.delete(stack.energy, list((range(10))) + [160])
-
-        X = pendryfy(X, energy)
-        stack.pendry = X
-        stack.save(TESTDATA_DIR + "pendried_stack.lstk")
-
-    trafo, inv_trafo, model = component_analysis(X, "pca", n_components=n_components)
-    W = trafo(X)
-    comps = vectors2stack(W, h, w)
-
-    labels, model = cluster_analysis(
-        W, "pc-kmeans",
-        n_clusters=n_clusters, metric="canberra"
-    )
-    # print(len(np.unique(labels)))
-
-    # user_function = lambda point1, point2: point1[0] + point2[0] + 2
-    # metric = distance_metric(type_metric.USER_DEFINED, func=user_function)
-
-    # create K-Means algorithm with specific distance metric
-    # metric = distance_metric(type_metric.MANHATTAN)
-    # initial_centers = kmeans_plusplus_initializer(W, n_clusters).initialize()
-    # kmeans_instance = pc_kmeans(W, initial_centers, metric=metric)
-    #
-    # # run cluster analysis and obtain results
-    # kmeans_instance.process()
-    # clusters = kmeans_instance.get_clusters()
-    # labels = np.zeros((W.shape[0],)) - 1
-    # for i, cluster in enumerate(clusters):
-    #     labels[cluster] = i
-    plt.imshow(labels.reshape(h, w))
-    plt.show()
-
 
 
 def stack2vectors(stack, mask_outer=0.2):
@@ -143,49 +85,71 @@ def component_analysis(X, algorithm="pca", **params_):
               f"{sum(model.explained_variance_ratio_)*100:.2f}% of variance: ({variance_list})")
     return model.transform, model.inverse_transform, model
 
+
+def pendry_distance(p1, p2):
+    # return sum((p1 - p2)**2 / (p1**2 + p2**2))
+    return np.divide(np.sum(np.square(p1 - p2)),
+                     np.sum(np.square(p1) + np.square(p2)))
+PC_METRICS = {
+    None: pc_metric.distance_metric(pc_metric.type_metric.EUCLIDEAN),
+    "eucliean": pc_metric.distance_metric(pc_metric.type_metric.EUCLIDEAN),
+    "euclidean_square": pc_metric.distance_metric(pc_metric.type_metric.EUCLIDEAN_SQUARE),
+    "canberra": pc_metric.distance_metric(pc_metric.type_metric.CANBERRA),
+    "chi_square": pc_metric.distance_metric(pc_metric.type_metric.CHI_SQUARE),
+    "pendry": pc_metric.distance_metric(
+        pc_metric.type_metric.USER_DEFINED, func=pendry_distance),
+}
+
 @enforce_clustershape(0)
 @timing_notification("cluster analysis")
 def cluster_analysis(X, algorithm="birch", **params_):
+    # pylint: disable=too-many-locals
     constructor, params = CLUSTERING_DEFAULTS[algorithm]
     params.update(params_)
-    # pylint: disable=no-member, too-many-function-args, unexpected-keyword-arg
 
-    if algorithm == "nltk-kmeans":
+    if algorithm.startswith("nltk-"):
         model = constructor(**params)
         labels = model.cluster(X, True)
-    if algorithm == "pc-kmeans":
-        # user_function = lambda point1, point2: point1[0] + point2[0] + 2
-        metric_type = params.pop("metric", "euclidean")
-        if "metric_func" in params:
-            metric = distance_metric(type_metric.USER_DEFINED, func=params.pop("metric_func"))
-        elif metric_type == "euclidean_square":
-            metric = distance_metric(type_metric.EUCLIDEAN_SQUARE)
-        elif metric_type == "pendry":
-            metric = distance_metric(type_metric.USER_DEFINED, func=pendry_distance)
-        elif metric_type == "canberra":
-            # canberra is usually not good
-            metric = distance_metric(type_metric.CANBERRA)
-        elif metric_type == "chi_square":
-            metric = distance_metric(type_metric.CHI_SQUARE)
+    if algorithm.startswith("pc-"):
+        metric_type = params.pop("metric")
+        init = params.pop("init")
+        n_clusters = params.pop("n_clusters")
+        init_indexes = params.pop("init_indexes", False)
+
+        if callable(metric_type):
+            metric = pc_metric.distance_metric(
+                pc_metric.type_metric.USER_DEFINED, func=metric_type)
         else:
-            metric = distance_metric(type_metric.EUCLIDEAN)
+            metric = PC_METRICS[metric_type]
 
-        initial_centers = kmeans_plusplus_initializer(X, params.pop("n_clusters")).initialize()
-        model = constructor(X, initial_centers, metric=metric, **params)
+        if init == "k-means++":
+            initial_centers = kmeans_plusplus_initializer(X, n_clusters).initialize(
+                return_index=init_indexes)
+        else: #init == "random":
+            initial_centers = random_center_initializer(X, n_clusters).initialize(
+                return_index=init_indexes)
 
+        if algorithm in ("pc-cure", "pc-agglomerative"):
+            model = constructor(X, n_clusters, **params)
+        else:
+            model = constructor(X, initial_centers, metric=metric, **params)
         model.process()
+
         clusters = model.get_clusters()
         labels = np.zeros((X.shape[0],)) - 1
         for i, cluster in enumerate(clusters):
             labels[cluster] = i
-    else:
+    elif algorithm.startswith("sk-"):
         model = constructor(**params)
         # model = model.fit(X)
         labels = model.fit_predict(X)
+    else:
+        raise ValueError(f"Unknown algorithm {algorithm}")
 
     print(f"{algorithm.upper()}: Found {len(set(labels))} clusters")
     labels[labels < 0] = np.ma.masked
     return sort_labels(labels), model
+
 
 @enforce_clustershape(0)
 def pendryfy(X, energy=np.nan):
@@ -207,11 +171,6 @@ def pendry_y(spectrum, energy, V0i_sq):
     L = np.gradient(spectrum) / np.gradient(energy) / np.clip(spectrum, min_nonzero, None)
     PY = L / (1 + L**2 * V0i_sq)
     return PY
-
-def pendry_distance(p1, p2):
-    # return sum((p1 - p2)**2 / (p1**2 + p2**2))
-    return np.divide(np.sum(np.square(p1 - p2)),
-                     np.sum(np.square(p1) + np.square(p2)))
 
 @enforce_clustershape(0)
 @timing_notification("normalization")
@@ -308,14 +267,14 @@ def _remodel_optics(model, target="xi", **kwargs):
         xi = kwargs.get("xi", 0.03)
         min_cluster_size = kwargs.get("min_cluster_size", 0.01)
         min_samples = kwargs.get("min_samples", 0.03)
-        labels = cluster_optics_xi(
+        labels = sk_cluster.cluster_optics_xi(
             min_samples=min_samples, min_cluster_size=min_cluster_size, xi=xi,
             reachability=model.reachability_, predecessor=model.predecessor_,
             ordering=model.ordering_
         )
     else:
         eps = kwargs.get("eps", 0.5)
-        labels = cluster_optics_dbscan(
+        labels = sk_cluster.cluster_optics_dbscan(
             eps=eps,
             reachability=model.reachability_, core_distances=model.core_distances_,
             ordering=model.ordering_,
@@ -333,7 +292,7 @@ class AutoKMeans:
         self.max_clusters = max_clusters
         self.models = []
         for k in range(1, max_clusters):
-            self.models.append(KMeans(*args, n_clusters=k, **kwargs))
+            self.models.append(sk_cluster.KMeans(*args, n_clusters=k, **kwargs))
 
     def fit(self, X):
         for k, model in enumerate(self.models, 1):
@@ -341,7 +300,7 @@ class AutoKMeans:
             print(f"AutoKMeans: Finished cycle {k}")
             self.sse.append(model.inertia_)
             if k > 1:
-                self.sil_coef.append(silhouette_score(X, model.labels_))
+                self.sil_coef.append(sk_metrics.silhouette_score(X, model.labels_))
         if self.do_plot:
             _, ax = plt.subplots()
             ax.plot(
@@ -353,7 +312,7 @@ class AutoKMeans:
                 np.array(self.sil_coef) / max(self.sil_coef), label="sil_coef"
             )
             ax.legend()
-        kl = KneeLocator(
+        kl = kneed.KneeLocator(
             range(1, self.max_clusters), self.sse,
             curve="convex", direction="decreasing"
         )
@@ -366,59 +325,76 @@ class AutoKMeans:
         return self.models[np.argmax(self.sil_coef) + 2 - 1]
 
 
+# defaults
+N_COMPONENTS = 7
+N_CLUSTERS = 8
 COMPONENTS_DEFAULTS = {
-    "pca":      (PCA, {"n_components": N_COMPONENTS}),
-    "nmf":      (NMF, {"n_components": N_COMPONENTS, "init": "nndsvda"})
+    "pca":      (sk_decomposition.PCA, {
+        "n_components": N_COMPONENTS
+    }),
+    "nmf":      (sk_decomposition.NMF, {
+        "n_components": N_COMPONENTS, "init": "nndsvda"
+    })
 }
 CLUSTERING_DEFAULTS = {
-    "birch":
-        (Birch, {
-            "threshold": 0.1,
-            "n_clusters": 15
-        }),
-    "optics":
-        (OPTICS, {
-            "min_samples": 0.03,
-            "xi": 0.00005,
-            "min_cluster_size": 0.01,
-            "n_jobs": 1
-        }),
-    "dbscan":
-        (DBSCAN, {
-            "eps": 0.06,
-            "min_samples": 400
-        }),
-    "kmeans":
-        (KMeans, {
-            "init": "k-means++",
-            "n_clusters": N_CLUSTERS,
-            "n_init": 10,
-            "max_iter": 300
-        }),
-    "pc-kmeans":
-        (pc_kmeans, {
-            "n_clusters": N_CLUSTERS,
-        }),
-    "kmeans-auto":
-        (AutoKMeans, {
-            "init": "k-means++",
-            "n_init": 5,
-            "max_iter": 300
-        }),
-    "nltk-kmeans":
-        (KMeansClusterer, {
-            "num_means": N_CLUSTERS,
-            "distance": euclidean_distance,
-            "repeats": 10
-        }),
-    "bgm":
-        (BayesianGaussianMixture, {
-            "n_components": N_CLUSTERS,
-            "n_init": 1,
-            "max_iter": 200
-        })
+    "sk-birch":     (sk_cluster.Birch, {
+        "threshold": 0.1,
+        "n_clusters": 15
+    }),
+    "sk-optics":    (sk_cluster.OPTICS, {
+        "min_samples": 0.03,
+        "xi": 0.00005,
+        "min_cluster_size": 0.01,
+        "n_jobs": 1
+    }),
+    "sk-dbscan":    (sk_cluster.DBSCAN, {
+        "eps": 0.06,
+        "min_samples": 400
+    }),
+    "sk-kmeans":    (sk_cluster.KMeans, {
+        "init": "k-means++",
+        "n_clusters": N_CLUSTERS,
+        "n_init": 10,
+        "max_iter": 300
+    }),
+    "sk-bgm":       (sk_mixture.BayesianGaussianMixture, {
+        "n_components": N_CLUSTERS,
+        "n_init": 1,
+        "max_iter": 200
+    }),
+    "sk-kmeans-auto":  (AutoKMeans, {
+        "init": "k-means++",
+        "n_init": 5,
+        "max_iter": 300
+    }),
+
+    "pc-kmeans":    (pc_kmeans, {
+        "init": "k-means++",
+        "n_clusters": N_CLUSTERS,
+        "init_indexes": False,
+    }),
+    "pc-kmedoids":  (pc_kmedoids, {
+        "init": "k-means++",
+        "n_clusters": N_CLUSTERS,
+        "init_indexes": True,
+    }),
+    "pc-xmeans":  (pc_xmeans, {
+        "init": "k-means++",
+        "n_clusters": N_CLUSTERS,
+        "init_indexes": False,
+    }),
+    "pc-cure":  (pc_cure, {
+        "init": "n_cluster",
+        "n_clusters": N_CLUSTERS
+    }),
+    "pc-agglomerative":  (pc_agglomerative, {
+        "init": "n_cluster",
+        "n_clusters": N_CLUSTERS
+    }),
+
+    "nltk-kmeans":  (nltk_cluster.KMeansClusterer, {
+        "num_means": N_CLUSTERS,
+        "distance": nltk_cluster.euclidean_distance,
+        "repeats": 10
+    }),
 }
-
-
-if __name__ == "__main__":
-    main()

@@ -13,6 +13,53 @@ from agfalta.leem import base
 from .conftest import TESTDATA_DIR
 
 
+def main():
+    # pylint: disable=unused-variable, too-many-locals
+    import matplotlib.pyplot as plt
+
+    n_components = 7
+    n_clusters = 8
+
+    loaded = False
+    try:
+        stack = base.LEEMStack(TESTDATA_DIR + "pendried_stack.lstk")
+        loaded = True
+    except FileNotFoundError:
+        stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_RuO2_normed_aligned.tif")
+        stack.energy = np.linspace(3.0, 50.0, len(stack))
+
+    X, h, w = cluster.stack2vectors(stack, mask_outer=0.2) # cut away 20% on every side
+    if loaded:
+        X = stack.pendry
+    else:
+        # cut out a few bad frames
+        X = np.delete(X, list((range(10))) + [160], axis=1)
+        energy = np.delete(stack.energy, list((range(10))) + [160])
+
+        X = cluster.pendryfy(X, energy)
+        stack.pendry = X
+        stack.save(TESTDATA_DIR + "pendried_stack.lstk")
+
+    trafo, inv_trafo, model = cluster.component_analysis(
+        X, "pca",
+        n_components=n_components
+    )
+    W = trafo(X)
+    comps = cluster.vectors2stack(W, h, w)
+
+    labels, model = cluster.cluster_analysis(
+        W, "pc-kmeans",
+        n_clusters=n_clusters, metric="euclidean_square", init="k-means++"
+    )
+    # labels, model = cluster.cluster_analysis(
+    #     W, "sk-bgm",
+    #     n_components=n_clusters
+    # )
+
+    plt.imshow(labels.reshape(h, w))
+    plt.show()
+
+
 @pytest.fixture
 def pendry_stack():
     loaded = False
@@ -58,3 +105,7 @@ def test_pca_full(single_stack, algorithm):
     _, inv_trafo, _ = cluster.load_pca_model(TESTDATA_DIR + "pca.model")
     X2 = inv_trafo(W)
     assert X.shape == X2.shape
+
+
+if __name__ == "__main__":
+    main()
