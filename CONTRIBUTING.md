@@ -48,18 +48,17 @@ On Windows, this instead:
 venv\Scripts\activate
 ```
 
-Now, some dependencies are needed because pyclustering does not them declare
-them correctly (matplotlib):
+Sometimes, the pip version of your new virtual environment will be too old to
+properly install opencv. To prevent this, do:
 
 ```sh
-(venv) $ python3 -m pip install --upgrade pip        			# sometimes necessary
-(venv) $ python3 -m pip install matplotlib
+(venv) $ python3 -m pip install --upgrade pip
 ```
 
-And finally:
+And finally, install the `agfalta` module:
 
 ```sh
-(venv) $ python3 -m pip install -e .               	      # install agfalta module
+(venv) $ python3 -m pip install -e .
 ```
 
 Now everything should run and you can do `import agfalta` from your virtual
