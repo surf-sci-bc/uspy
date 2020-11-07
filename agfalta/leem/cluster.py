@@ -9,6 +9,7 @@ import copy
 import numpy as np
 import matplotlib.pyplot as plt
 
+from scipy.signal import savgol_filter
 # clustering via scikit
 from sklearn import decomposition as sk_decomposition
 from sklearn import cluster as sk_cluster
@@ -23,13 +24,14 @@ from pyclustering.cluster.cure import cure as pc_cure
 from pyclustering.cluster.agglomerative import agglomerative as pc_agglomerative
 from pyclustering.cluster.center_initializer import (
     kmeans_plusplus_initializer, random_center_initializer)
+from pyclustering.cluster.elbow import elbow as pc_elbow
 from pyclustering.utils import metric as pc_metric
 # measuring clustering quality
 from sklearn import metrics as sk_metrics     # pylint: disable=ungrouped-imports
 import kneed
 
 from agfalta.leem.base import LEEMStack
-from agfalta.leem.utility import timing_notification, ProgressBar
+from agfalta.leem.utility import timing_notification, progress_bar, silence
 
 
 def stack2vectors(stack, mask_outer=0.2):
@@ -87,8 +89,7 @@ def component_analysis(X, algorithm="pca", **params_):
     return model.transform, model.inverse_transform, model
 
 
-def pendry_distance(p1, p2):
-    # return sum((p1 - p2)**2 / (p1**2 + p2**2))
+def _pendry_distance(p1, p2):
     return np.divide(np.sum(np.square(p1 - p2)),
                      np.sum(np.square(p1) + np.square(p2)))
 PC_METRICS = {
@@ -98,53 +99,51 @@ PC_METRICS = {
     "canberra": pc_metric.distance_metric(pc_metric.type_metric.CANBERRA),
     "chi_square": pc_metric.distance_metric(pc_metric.type_metric.CHI_SQUARE),
     "pendry": pc_metric.distance_metric(
-        pc_metric.type_metric.USER_DEFINED, func=pendry_distance),
+        pc_metric.type_metric.USER_DEFINED, func=_pendry_distance),
+}
+PC_INITIALIZERS = {
+    None: kmeans_plusplus_initializer,
+    "k-means++": kmeans_plusplus_initializer,
+    "random": random_center_initializer,
 }
 
 @enforce_clustershape(0)
 @timing_notification("cluster analysis")
-def cluster_analysis(X, algorithm="birch", **params_):
+def cluster_analysis(X, algorithm="pc-kmeans", **params_):
     # pylint: disable=too-many-locals
-    constructor, params = CLUSTERING_DEFAULTS[algorithm]
-    params = copy.copy(params)
+    algorithm = algorithm.lower()
+    constructor, params = copy.deepcopy(CLUSTERING_DEFAULTS[algorithm])
     params.update(params_)
 
     if algorithm.startswith("nltk-"):
         model = constructor(**params)
         labels = model.cluster(X, True)
+
     if algorithm.startswith("pc-"):
-        metric_type = params.pop("metric")
-        init = params.pop("init")
         n_clusters = params.pop("n_clusters")
-        init_indexes = params.pop("init_indexes", False)
-
-        if callable(metric_type):
-            metric = pc_metric.distance_metric(
-                pc_metric.type_metric.USER_DEFINED, func=metric_type)
-        else:
-            metric = PC_METRICS[metric_type]
-
-        if init == "k-means++":
-            initial_centers = kmeans_plusplus_initializer(X, n_clusters).initialize(
-                return_index=init_indexes)
-        else: #init == "random":
-            initial_centers = random_center_initializer(X, n_clusters).initialize(
-                return_index=init_indexes)
-
-        if algorithm in ("pc-cure", "pc-agglomerative"):
-            model = constructor(X, n_clusters, **params)
-        else:
+        if algorithm.startswith("pc-k"):
+            metric_type = params.pop("metric")
+            if callable(metric_type):
+                metric = pc_metric.distance_metric(
+                    pc_metric.type_metric.USER_DEFINED, func=metric_type)
+            else:
+                metric = PC_METRICS[metric_type]
+            initializer = PC_INITIALIZERS[params.pop("init")]
+            use_indices = "medoids" in algorithm
+            initial_centers = initializer(X, n_clusters).initialize(return_index=use_indices)
             model = constructor(X, initial_centers, metric=metric, **params)
+        else:
+            model = constructor(X, n_clusters, **params)
         model.process()
-
         clusters = model.get_clusters()
         labels = np.zeros((X.shape[0],)) - 1
         for i, cluster in enumerate(clusters):
             labels[cluster] = i
+
     elif algorithm.startswith("sk-"):
         model = constructor(**params)
-        # model = model.fit(X)
         labels = model.fit_predict(X)
+
     else:
         raise ValueError(f"Unknown algorithm {algorithm}")
 
@@ -153,26 +152,96 @@ def cluster_analysis(X, algorithm="birch", **params_):
     return sort_labels(labels), model
 
 
+def goodness_of_model(model):
+    if isinstance(model, pc_kmeans):
+        return -model.get_total_wce()   # minus is important
+    raise NotImplementedError("Repeat cluster analysis only possible for PC-KMeans")
+
+@timing_notification("repeat cluster analysis")
+def repeat_cluster_analysis(X, algorithm="pc-kmeans", n_iter=10, **params_):
+    goodness = -np.inf   # maximize this
+    model = None
+    labels = None
+    for i in range(n_iter):
+        with silence():
+            labels_cand, model_cand = cluster_analysis(X, algorithm=algorithm, **params_)
+        goodness_cand = goodness_of_model(model_cand)
+        if goodness_cand > goodness:
+            model = model_cand
+            goodness = goodness_cand
+            labels = labels_cand
+            print(f"Found better model, goodness = {goodness}")
+        print(f"\033[KDid model iter: {i}", end="\r")
+    if model is None:
+        raise RuntimeError("Could not get a cluster model")
+    return labels, model
+
+@timing_notification("elbow cluster analysis")
+def elbow_cluster_analysis(X, algorithm="pc-kmeans", start=2, end=15, **params_):
+    labels_list = []
+    models = []
+    for n_clusters in range(start, end + 1):
+        with silence():
+            labels, model = cluster_analysis(X, algorithm=algorithm, **params_)
+        labels_list.append(labels)
+        models.append(model)
+        print(f"\033[KDid model with n_clusters={n_clusters}", end="\r")
+    goodnesses = [goodness_of_model(model) for model in models]
+    kl = kneed.KneeLocator(
+        range(start, end + 1), goodnesses, curve="convex", direction="increasing")
+    n_clusters = kl.elbow
+    print(f"ELBOW-{algorithm.upper()}: Found elbow at {n_clusters} clusters "
+          f"(goodness: {goodnesses[n_clusters - start]:.2f})")
+    return labels_list[n_clusters - start], models[n_clusters - start]
+
+
+
 @enforce_clustershape(0)
-def pendryfy(X, energy=np.nan):
-    Y = np.zeros_like(X)
-    if np.isnan(energy).any():
+def pendryfy(X, energy=None, smoothing_params=None):
+    if energy is None or np.isnan(energy).any():
         print("WARNING: NaN values in energy, guessing 3eV + 0.2eV * idx")
         energy = np.linspace(3.0, 3.0 + len(energy) * 0.2, len(energy))
+    PY = np.zeros_like(X)
     V0i_sq = energy**(2/3)      # square of energy**(1/3)
-    progbar = ProgressBar(len(X), suffix="Pendryfying...")
-    for i, spectrum in enumerate(X):
-        # pylint: disable=unsupported-assignment-operation
-        Y[i] = pendry_y(spectrum, energy, V0i_sq)
-        progbar.increment()
-    progbar.finish()
+    dE = np.gradient(energy)
+    for i, I in enumerate(progress_bar(X, "Pendryfying...")):
+        if smoothing_params:
+            PY[i] = smooth_pendry_y(I, dE, V0i_sq, **smoothing_params)
+        else:
+            PY[i] = pendry_y(I, dE, V0i_sq)
+    return PY
+
+def pendry_y(I, dE, V0i_sq, eps=1e-5):
+    L = np.gradient(I) / dE / np.clip(I, eps, None)
+    Y = L / (1 + L**2 * V0i_sq)
     return Y
 
-def pendry_y(spectrum, energy, V0i_sq):
-    min_nonzero = spectrum[spectrum > 0].min()
-    L = np.gradient(spectrum) / np.gradient(energy) / np.clip(spectrum, min_nonzero, None)
-    PY = L / (1 + L**2 * V0i_sq)
-    return PY
+def smooth_pendry_y(I, dE, V0i_sq, eps=1e-5, wl=17, p=4, both=True):
+    """
+    I: intensity,
+    dE: gradient of energy
+    V0i_sq: squared elelctron self energy
+    eps: clipping value to avoid division by 0
+    wl: Savitzky-Golay filter window length
+    p: Savitzky-Golay filter polynom order
+    """
+    # pylint: disable=too-many-arguments
+    if both:
+        I = savgol_filter(I, window_length=wl, polyorder=p)
+    dI = savgol_filter(I, window_length=wl, polyorder=p, deriv=1)
+    L = dI / dE / np.clip(I, eps, None)
+    Y = L / (1 + L**2 * V0i_sq)
+    return Y
+
+@enforce_clustershape(0)
+def smoothen(X, energy=None, wl=17, p=4):
+    if energy is None or np.isnan(energy).any():
+        print("WARNING: NaN values in energy, guessing 3eV + 0.2eV * idx")
+        energy = np.linspace(3.0, 3.0 + len(energy) * 0.2, len(energy))
+    S = np.zeros_like(X)
+    for i, spectrum in enumerate(progress_bar(X, "Smoothing...")):
+        S[i] = savgol_filter(spectrum, window_length=wl, polyorder=p)
+    return S
 
 @enforce_clustershape(0)
 @timing_notification("normalization")
@@ -180,7 +249,6 @@ def normalize(X):
     Xn = np.zeros_like(X)
     integrals = np.zeros_like(X[:, 0])
     for i, spectrum in enumerate(X):
-        # pylint: disable=unsupported-assignment-operation
         integrals[i] = np.trapz(X[i, :])
         Xn[i, :] = spectrum / integrals[i]
     return Xn, integrals
@@ -188,7 +256,6 @@ def normalize(X):
 def denormalize(Xn, integrals):
     X = np.zeros_like(Xn)
     for i, _ in enumerate(Xn):
-        # pylint: disable=unsupported-assignment-operation
         X[i, :] = Xn[i, :] * integrals[i]
     return X
 
@@ -206,7 +273,7 @@ def save_model(model, fname):
     with open(fname, "wb") as pfile:
         try:
             pickle.dump(model, pfile)
-            print(f"Saved moel to {fname}")
+            print(f"Saved model to {fname}")
         except RecursionError:
             print("Did not save model due to recursion error (Too big?).")
 
@@ -339,64 +406,24 @@ COMPONENTS_DEFAULTS = {
     })
 }
 CLUSTERING_DEFAULTS = {
-    "sk-birch":     (sk_cluster.Birch, {
-        "threshold": 0.1,
-        "n_clusters": 15
-    }),
+    "sk-birch":     (sk_cluster.Birch, {"threshold": 0.1, "n_clusters": 15}),
     "sk-optics":    (sk_cluster.OPTICS, {
-        "min_samples": 0.03,
-        "xi": 0.00005,
-        "min_cluster_size": 0.01,
-        "n_jobs": 1
-    }),
-    "sk-dbscan":    (sk_cluster.DBSCAN, {
-        "eps": 0.06,
-        "min_samples": 400
-    }),
+        "min_samples": 0.03, "xi": 0.00005, "min_cluster_size": 0.01, "n_jobs": 1}),
+    "sk-dbscan":    (sk_cluster.DBSCAN, {"eps": 0.06, "min_samples": 400}),
     "sk-kmeans":    (sk_cluster.KMeans, {
-        "init": "k-means++",
-        "n_clusters": N_CLUSTERS,
-        "n_init": 10,
-        "max_iter": 300
-    }),
+        "init": "k-means++", "n_clusters": N_CLUSTERS, "n_init": 10, "max_iter": 300}),
     "sk-bgm":       (sk_mixture.BayesianGaussianMixture, {
-        "n_components": N_CLUSTERS,
-        "n_init": 1,
-        "max_iter": 200
-    }),
-    "sk-kmeans-auto":  (AutoKMeans, {
-        "init": "k-means++",
-        "n_init": 5,
-        "max_iter": 300
-    }),
+        "n_components": N_CLUSTERS, "n_init": 1, "max_iter": 200}),
+    "sk-kmeans-auto":  (AutoKMeans, {"init": "k-means++", "n_init": 5, "max_iter": 300}),
 
-    "pc-kmeans":    (pc_kmeans, {
-        "init": "k-means++",
-        "n_clusters": N_CLUSTERS,
-        "init_indexes": False,
-    }),
-    "pc-kmedoids":  (pc_kmedoids, {
-        "init": "k-means++",
-        "n_clusters": N_CLUSTERS,
-        "init_indexes": True,
-    }),
-    "pc-xmeans":  (pc_xmeans, {
-        "init": "k-means++",
-        "n_clusters": N_CLUSTERS,
-        "init_indexes": False,
-    }),
-    "pc-cure":  (pc_cure, {
-        "init": "n_cluster",
-        "n_clusters": N_CLUSTERS
-    }),
-    "pc-agglomerative":  (pc_agglomerative, {
-        "init": "n_cluster",
-        "n_clusters": N_CLUSTERS
-    }),
+    "pc-kmeans":    (pc_kmeans, {"init": "k-means++", "n_clusters": N_CLUSTERS}),
+    "pc-kmeans-elbow":  (pc_elbow, {"init": "k-means++"}),
+    "pc-kmeans-iter":  (pc_kmeans, {"init": "random"}),
+    "pc-kmedoids":  (pc_kmedoids, {"init": "k-means++", "n_clusters": N_CLUSTERS}),
+    "pc-xmeans":  (pc_xmeans, {"init": "k-means++", "n_clusters": N_CLUSTERS}),
+    "pc-cure":  (pc_cure, {"init": "n_clusters", "n_clusters": N_CLUSTERS}),
+    "pc-agglomerative":  (pc_agglomerative, {"init": "n_clusters", "n_clusters": N_CLUSTERS}),
 
     "nltk-kmeans":  (nltk_cluster.KMeansClusterer, {
-        "num_means": N_CLUSTERS,
-        "distance": nltk_cluster.euclidean_distance,
-        "repeats": 10
-    }),
+        "num_means": N_CLUSTERS, "distance": nltk_cluster.euclidean_distance, "repeats": 10}),
 }

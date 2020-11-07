@@ -17,26 +17,25 @@ def main():
     # pylint: disable=unused-variable, too-many-locals
     import matplotlib.pyplot as plt
 
-    n_components = 7
+    n_components = 15
+    # for n_clusters in range(8, 9):
     n_clusters = 8
 
     loaded = False
     try:
+        # raise FileNotFoundError
         stack = base.LEEMStack(TESTDATA_DIR + "pendried_stack.lstk")
         loaded = True
     except FileNotFoundError:
         stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_RuO2_normed_aligned.tif")
         stack.energy = np.linspace(3.0, 50.0, len(stack))
+        stack = stack[10:]
 
     X, h, w = cluster.stack2vectors(stack, mask_outer=0.2) # cut away 20% on every side
     if loaded:
         X = stack.pendry
     else:
-        # cut out a few bad frames
-        X = np.delete(X, list((range(10))) + [160], axis=1)
-        energy = np.delete(stack.energy, list((range(10))) + [160])
-
-        X = cluster.pendryfy(X, energy)
+        X = cluster.pendryfy(X, stack.energy, smoothing_params={"both": True})
         stack.pendry = X
         stack.save(TESTDATA_DIR + "pendried_stack.lstk")
 
@@ -47,16 +46,30 @@ def main():
     W = trafo(X)
     comps = cluster.vectors2stack(W, h, w)
 
-    labels, model = cluster.cluster_analysis(
-        W, "pc-kmeans",
-        n_clusters=n_clusters, metric="euclidean_square", init="k-means++"
-    )
-    # labels, model = cluster.cluster_analysis(
-    #     W, "sk-bgm",
-    #     n_components=n_clusters
+    # labels, model = cluster.repeat_cluster_analysis(
+    #     W, "pc-kmeans", n_iter=50, init="random",
+    #     n_clusters=n_clusters, metric="euclidean_square"
     # )
 
-    plt.imshow(labels.reshape(h, w))
+    labels, model = cluster.elbow_cluster_analysis(
+        W, "pc-kmeans", start=3, end=10, init="random",
+        n_clusters=n_clusters, metric="euclidean_square"
+    )
+
+    fig, ax = plt.subplots()
+    for Y in cluster.extract_IVs(X, labels):
+        ax.plot(stack.energy, Y)
+    fig3, ax3 = plt.subplots()
+    ax3.imshow(labels.reshape(h, w))
+    fig4, ax4 = plt.subplots()
+    cluster.plot_IVs(stack, labels, ax=ax4)
+
+        # fig.savefig(f"{n_clusters}_pendry.png")
+        # fig3.savefig(f"{n_clusters}_clustermap.png")
+        # fig4.savefig(f"{n_clusters}_IVs.png")
+        # plt.close(fig)
+        # plt.close(fig3)
+        # plt.close(fig4)
     plt.show()
 
 
