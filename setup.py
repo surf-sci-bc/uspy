@@ -10,7 +10,7 @@ setup(
     version=__version__,
     author="Simon Fischer, Lars Buß, Jon-Olaf Krisponeit",
     description="LEEM data analysis (and more...?)",
-    packages=find_packages(exclude=["testdata", "doc", "tests", ".git"]),
+    packages=find_packages(include=["agfalta", "agfalta.*"]),
     classifiers=(
         "Programming Language :: Python :: 3",
         "Topic :: Scientific/Engineering :: Physics"
@@ -18,23 +18,17 @@ setup(
     # license="GPLv3",
     keywords="physics LEEM microscopy spectroscopy",
     install_requires=[
-        "pytest",
-        "scikit-build",
-        "cmake",
-        "matplotlib",
         "numpy",
+        "matplotlib",
+        "pandas",
         "scikit-learn",
         "scikit-image",
-        "kneed",
         "pyclustering",
         "nltk",
         "opencv-python<4.0",
         "opencv-contrib-python<4.0",
+        "kneed",
     ],
     python_requires="~=3.6",
-    package_data={
-        "agfalta": [
-            "testdata/*"
-        ]
-    }
+    tests_require=["pytest"]
 )
