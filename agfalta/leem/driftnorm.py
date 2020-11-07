@@ -9,7 +9,7 @@ Tools for drift alignment and normalization.
 import cv2 as cv
 import numpy as np
 
-from agfalta.leem.utility import ProgressBar, try_load_img, try_load_stack
+from agfalta.leem.utility import try_load_img, try_load_stack, progress_bar
 
 
 
@@ -30,17 +30,14 @@ def normalize_image(img, mcp, dark_counts=100):
     return img
 
 def normalize_stack(stack, mcp, dark_counts=100):
-    progbar = ProgressBar(len(stack), suffix="Normalizing...")
     stack = try_load_stack(stack)
     mcp = try_load_img(mcp)
     if not isinstance(dark_counts, (int, float, complex)):
         dark_counts = try_load_img(dark_counts)
 
     stack_normed = stack.copy()
-    for i, img in enumerate(stack):
+    for i, img in enumerate(progress_bar(stack, "Normalizing...")):
         stack_normed[i] = normalize_image(img, mcp, dark_counts=dark_counts)
-        progbar.increment()
-    progbar.finish()
     # is this monkey-patching necessary?:
     stack_normed.mcp = mcp
     stack_normed.dark_counts = dark_counts
@@ -78,8 +75,7 @@ def find_alignment_matrices_sift(stack, trafo="full-affine", min_matches=10, mas
     data8bit = []
     # cut off outer fraction of image
     dy, dx = np.array(mask_outer * np.array(stack[0].data.shape), dtype=np.int)
-    progbar = ProgressBar(len(stack) * 2 - 1, suffix="Calculating drift (SIFT)...")
-    for img in stack:
+    for img in progress_bar(stack, "Finding keypoints (SIFT)..."):
         # sift needs 8-bit images:
         img8bit = cv.normalize(
             img.data[dy:-dy, dx:-dx],
@@ -88,12 +84,11 @@ def find_alignment_matrices_sift(stack, trafo="full-affine", min_matches=10, mas
         # find keypoints and descriptors:
         kp, desc = sift.detectAndCompute(img8bit, None)
         data8bit.append((img8bit, kp, desc))
-        progbar.increment()
 
     alignment = [np.eye(3, 3, dtype=np.float32)]
     # bf = cv.BFMatcher()#cv.NORM_L1)
     bf = cv.FlannBasedMatcher()
-    for i in range(len(data8bit) - 1):
+    for i in progress_bar(range(len(data8bit) - 1), "Matching keypoints..."):
         # match the descriptors. each match object consists of two best matches
         matches = bf.knnMatch(data8bit[i][2], data8bit[i + 1][2], 2)
         good_matches = []
@@ -103,9 +98,7 @@ def find_alignment_matrices_sift(stack, trafo="full-affine", min_matches=10, mas
                 good_matches.append(m)
 
         if len(good_matches) < min_matches:
-            if "failed at image" not in progbar.suffix:
-                progbar.suffix += f" | failed at image"
-            progbar.suffix += f" {i}"
+            print(f"No match at image {i}")
             warp_matrix = np.eye(3, 3, dtype=np.float32)
         else:
             src = np.array([data8bit[i][1][m.queryIdx].pt for m in good_matches],
@@ -121,8 +114,6 @@ def find_alignment_matrices_sift(stack, trafo="full-affine", min_matches=10, mas
                 warp_matrix = np.append(warp_matrix, [[0, 0, 1]], axis=0)
         warp_matrix = np.dot(alignment[-1], warp_matrix)
         alignment.append(warp_matrix)
-        progbar.increment()
-    progbar.finish()
     return alignment
 
 
@@ -138,8 +129,7 @@ def find_alignment_matrices_ecc(stack, max_iter=500, eps=1e-10, mask_outer=0.2, 
 
     alignment = [np.eye(3, 3, dtype=np.float32)]
 
-    progbar = ProgressBar(len(stack), suffix="Calculating drift (ECC)...")
-    for i in range(len(stack) - 1):
+    for i in progress_bar(range(len(stack) - 1), "Calculating drift (ECC)"):
         warp_matrix = np.eye(2, 3, dtype=np.float32)
         _, warp_matrix = cv.findTransformECC(
             stack[i].data, stack[i + 1].data,
@@ -152,6 +142,4 @@ def find_alignment_matrices_ecc(stack, max_iter=500, eps=1e-10, mask_outer=0.2, 
         warp_matrix = np.append(warp_matrix, [[0, 0, 1]], axis=0)
         warp_matrix = np.dot(alignment[-1], warp_matrix)
         alignment.append(warp_matrix)
-        progbar.increment()
-    progbar.finish()
     return alignment

@@ -6,7 +6,7 @@ import numpy as np
 import scipy.constants as sc
 from scipy import signal
 
-from agfalta.leem.utility import ProgressBar
+from agfalta.leem.utility import progress_bar
 
 
 def rsm(stack, start, end, xy0, kpara_per_pix=7.67e7):
@@ -16,7 +16,6 @@ def rsm(stack, start, end, xy0, kpara_per_pix=7.67e7):
 
 
 def get_rsm(stack, cut, xy0, kpara_per_pix):
-    progbar = ProgressBar(len(stack), suffix="Calculating RSM...")
     res_y, res_x = len(stack), np.rint(cut.length).astype(int)
 
     z = np.zeros((res_y, res_x))
@@ -27,12 +26,10 @@ def get_rsm(stack, cut, xy0, kpara_per_pix):
     kpara = get_kpara(cut, xy0, kpara_per_pix, length=res_x + 1)
     dE = np.mean(np.diff(stack.energy))
 
-    for i, img in enumerate(stack):
+    for i, img in enumerate(progress_bar(stack, "Calculating RSM...")):
         ky[i, :] = get_kperp(stack.energy[i] - dE / 2, kpara)
         z[i, :] = np.log(cut(img.data, length=res_x))
-        progbar.increment()
     ky[-1, :] = get_kperp(stack.energy[-1] + dE / 2, kpara)
-    progbar.finish()
     return kx, ky, z
 
 
