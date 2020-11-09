@@ -494,24 +494,23 @@ class LEEMStack(Loadable):
             print("Calculated dose from 'pressure1'!")
         return self._dose
 
-    def calculate_dose(self, pressure=None):
+    def calculate_dose(self, pressure=None, approx=1):
         self._dose = np.zeros(len(self))
         if not self.virtual:
             self[0].dose = 0
         if pressure is None:
             pressure = getattr(self, "pressure1")
         rel_time = self.rel_time
-        for i, img in enumerate(
-                progress_bar(self[:-1], "Calculating dose...", silent=self._silent),
-                1):
+        for i in progress_bar(
+                range(1, len(self), approx), "Calculating dose...", silent=self._silent):
             dose = (
                 self._dose[i - 1]
                 + (pressure[i] + pressure[i-1]) / 2 / (rel_time[i] - rel_time[i - 1])
-                * 1e6
+                * 1e6 * approx
             )
-            self._dose[i] = dose
+            self._dose[i:i+approx] = dose
             if not self.virtual:
-                img.dose = dose
+                self[i].dose = dose
 
     @property
     def data(self):
