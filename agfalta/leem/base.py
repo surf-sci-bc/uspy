@@ -439,6 +439,7 @@ class LEEMStack(Loadable):
         return len(self.fnames)
 
     def __getattr__(self, attr):
+        #TODO add buffering of vectors
         if attr in self._unique_attrs:
             raise AttributeError
         try:
@@ -453,7 +454,7 @@ class LEEMStack(Loadable):
     def __setattr__(self, attr, value):
         if attr in self._unique_attrs:
             super().__setattr__(attr, value)
-        elif hasattr(self[0], attr) and len(self) == len(value):
+        elif not self.virtual and hasattr(value, "__len__") and len(self) == len(value):
             for img, single_value in zip(self, value):
                 setattr(img, attr, single_value)
         elif not hasattr(self[0], attr):
@@ -494,23 +495,23 @@ class LEEMStack(Loadable):
             print("Calculated dose from 'pressure1'!")
         return self._dose
 
-    def calculate_dose(self, pressure=None, approx=1):
-        self._dose = np.zeros(len(self))
+    @dose.setter
+    def dose(self, value):
         if not self.virtual:
-            self[0].dose = 0
+            for img, single_value in zip(self, value):
+                img.dose = single_value
+        self._dose = value
+
+    def calculate_dose(self, pressure=None, approx=1):
         if pressure is None:
-            pressure = getattr(self, "pressure1")
-        rel_time = self.rel_time
-        for i in progress_bar(
-                range(1, len(self), approx), "Calculating dose...", silent=self._silent):
-            dose = (
-                self._dose[i - 1]
-                + (pressure[i] + pressure[i-1]) / 2 / (rel_time[i] - rel_time[i - 1])
-                * 1e6 * approx
-            )
-            self._dose[i:i+approx] = dose
-            if not self.virtual:
-                self[i].dose = dose
+            pressure = getattr(self[::approx], "pressure1")
+        rel_time = self.rel_time[::approx]
+        approx_dose = np.cumsum(pressure * np.gradient(rel_time))
+        long_dose = np.repeat(approx_dose, approx)
+        cutoff = len(long_dose) - len(self)
+        if cutoff < 0:
+            raise ValueError("Error calculating dose")
+        self.dose = long_dose[cutoff // 2 : len(self) + cutoff // 2]
 
     @property
     def data(self):
