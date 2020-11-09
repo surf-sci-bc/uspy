@@ -447,7 +447,7 @@ class LEEMStack(Loadable):
                 iterator = progress_bar(self, f"Collecting attr '{attr}'...", silent=self._silent)
             else:
                 iterator = self
-            return np.array([getattr(img, attr) for img in iterator])
+            return [getattr(img, attr) for img in iterator]
         except AttributeError:
             raise AttributeError("Unknown attribute")
 
@@ -507,6 +507,7 @@ class LEEMStack(Loadable):
             pressure = getattr(self[::approx], "pressure1")
         rel_time = self.rel_time[::approx]
         approx_dose = np.cumsum(pressure * np.gradient(rel_time))
+        # scale up to original length:
         long_dose = np.repeat(approx_dose, approx)
         cutoff = len(long_dose) - len(self)
         if cutoff < 0:
