@@ -300,10 +300,10 @@ class LEEMStack(Loadable):
     _unique_attrs = ("fnames", "path", "_images", "_virtual", "virtual",
                      "_time_origin", "time_origin")
 
-    def __init__(self, path, virtual=False, nolazy=False):
+    def __init__(self, path, virtual=False, nolazy=False, time_origin=datetime.min):
         # pylint: disable=too-many-branches
         self.path = path
-        self._time_origin = datetime.min
+        self._time_origin = time_origin
         self._virtual = virtual
         self._images = None
         self.fnames = None
@@ -391,9 +391,10 @@ class LEEMStack(Loadable):
             return self._images[indexes]
         else:
             if self._virtual:
-                return LEEMStack(self.fnames.__getitem__(indexes), virtual=True)
+                return LEEMStack(self.fnames.__getitem__(indexes),
+                                 time_origin=self.time_origin, virtual=True)
             self._load_images()
-            return LEEMStack(self._images.__getitem__(indexes))
+            return LEEMStack(self._images.__getitem__(indexes), time_origin=self.time_origin)
 
     def __setitem__(self, indexes, imges):
         if isinstance(indexes, int) and isinstance(imges, LEEMImg):
