@@ -447,7 +447,7 @@ class LEEMStack(Loadable):
                 iterator = progress_bar(self, f"Collecting attr '{attr}'...", silent=self._silent)
             else:
                 iterator = self
-            return [getattr(img, attr) for img in iterator]
+            return np.array([getattr(img, attr) for img in iterator])
         except AttributeError:
             raise AttributeError("Unknown attribute")
 
