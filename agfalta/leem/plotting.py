@@ -1,34 +1,27 @@
-# import ipywidgets as widgets
-import matplotlib.pyplot as plt
-import numpy as np
-import math
-import pandas as pd
-from os.path import basename
-from IPython.display import display, HTML
+"""Plotting helper functions."""
+# pylint: disable=invalid-name
+# pylint: disable=missing-docstring
 
-from agfalta.leem.base import LEEMBASE_VERSION, LEEMStack, LEEMImg
-from agfalta import LEEMDIR
+import math
+from os.path import basename
+# import ipywidgets as widgets
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+from IPython.display import display#, HTML
+
+from agfalta.leem.base import LEEMBASE_VERSION
 from agfalta.leem.utility import try_load_stack, try_load_img
 
 if LEEMBASE_VERSION > 1.1:
     print("WARNING: LEEM_base version is newer than expected.")
 
 
-def draw_marker(ax, markers):
-    # color = ('r','g','b','c','m','y','w')
-    prop_cycle = plt.rcParams["axes.prop_cycle"]
-    colors = prop_cycle.by_key()["color"]
-    for i, marker in enumerate(markers):
-        circle = plt.Circle(
-            (marker[0], marker[1]), marker[2], color=colors[i], fill=False
-        )
-        ax.add_artist(circle)
-
 
 def calc_dose(stack):
     stack = try_load_stack(stack)
-    dose = np.zeros(len(stack.pressure1))
-    for i, image in enumerate(stack):
+    # dose = np.zeros(len(stack.pressure1))
+    for i, _ in enumerate(stack):
         if i == 0:
             stack[0].dose = 0
             continue
@@ -39,7 +32,6 @@ def calc_dose(stack):
             / 2
             * 1e6
         )
-
     return stack
 
 
@@ -89,9 +81,8 @@ def plot_img(img, *args, ax=None, title=None,
     return ax
 
 
-def plot_movie(
-    stack, start_index=None, end_index=None, increment=None, cols=4, virtual=False, *args, **kwargs
-):
+def plot_movie(stack, *args, start_index=None, end_index=None, increment=None,
+               cols=4, virtual=False, **kwargs):
     stack = try_load_stack(stack, virtual=virtual)
     images = [img for img in stack[start_index:end_index:increment]]
 
@@ -101,7 +92,7 @@ def plot_movie(
     fig, axes = plt.subplots(
         ncols=cols, nrows=rows, figsize=(cols * 5, rows * 5)
     )  # , constrained_layout=True)
-    if rows>1:
+    if rows > 1:
         for i, img in enumerate(images):
             ax = axes[i // cols, i % cols]
             plot_img(img, ax=ax, *args, **kwargs)
@@ -120,31 +111,31 @@ def plot_movie(
 
 def plot_meta(stack, fields="temperature"):
     stack = try_load_stack(stack)
-
-    if isinstance(fields,str):
+    if isinstance(fields, str):
         fields = [fields]
 
     fig, ax = plt.subplots(len(fields), figsize=(6, len(fields) * 3))
 
-    #Reshape in case the supplot has only one plot, so it stays iterable
+    # Reshape in case the supplot has only one plot, so it stays iterable
     ax = np.array(ax).reshape(-1)
-
     fig.subplots_adjust(hspace=0.3)
+
     for i, field in enumerate(fields):
         ax[i].set_title(field)
-        print(field)
+        # print(field)
         time = stack.rel_time
         val = getattr(stack, field)
         if field == "temperature":
             ax[i].plot(time[val < 2000], val[val < 2000])
-            if len(time[val < 2000])<len(time):
-                print("Points have been excluded from plot because of unreasonable high temperature")
+            if len(time[val < 2000]) < len(time):
+                print("Points have been excluded from plot because of unreasonably "
+                      "high temperature")
         else:
             ax[i].plot(time, val)
-        if field in ('pressure1','pressure2'):
+        if field in ('pressure1', 'pressure2'):
             ax[i].set_yscale('log')
 
-def print_meta(stack, fields=("temperature","pressure1",)):
+def print_meta(stack, fields=("temperature", "pressure1",)):
     # stack = LEEMStack(stack)
     stack = try_load_stack(stack)
     try:
@@ -162,41 +153,48 @@ def print_meta(stack, fields=("temperature","pressure1",)):
     except:
         meta = []
         for field in fields:
-            meta.append([field,stack.get_field_string(field)])
+            meta.append([field, stack.get_field_string(field)])
 
         table = pd.DataFrame(meta, columns=["Metadata", "Value"])
         display(table)
 
 
 def plot_iv(stack, x0, y0, r=10, ax=None):
-    if ax is None:
-        _, ax = plt.subplots()
-
-    ax.set_xlabel("Energy")
     stack = try_load_stack(stack)
 
-    # coordinate transformation from matplotlib coordinates to stack coordinates
+    h, w = stack[0].height, stack[0].width
+    x, y = np.arange(0, w), np.arange(0, h)
+    mask = (x[np.newaxis, :] - x0)**2 + (y[:, np.newaxis] - y0)**2 < r
 
-    y1 = stack[0].width - x0
-    x1 = stack[0].height - y0
+    iv = np.zeros(len(stack))
+    for i, img in enumerate(stack):
+        iv[i] = np.mean(img.data * mask)
 
-    iv = np.zeros(len(stack.energy))
-    data = np.array([img.data for img in stack])
-
-
-    pixles = 0
-    for x in range(-r, r):
-        for y in range(-r, r):
-            if x ** 2 + y ** 2 < r ** 2:
-                # print([iv,stack.data[:,y,x]])
-                iv = np.sum([iv, data[:, x - x1, y - y1]], axis=0)
-                # stack.data[:,x-x0,y-y0] = np.zeros(len(stack.energy))
-                pixles += 1
+    if ax is None:
+        _, ax = plt.subplots()
+        ax.set_xlabel("Energy")
+    ax.plot(stack.energy, iv)
+    return ax, (x0, y0, r)
 
 
-    ax.plot(stack.energy, iv / pixles)
+def draw_marker(ax, markers):
+    # colors = ('r','g','b','c','m','y','w')
+    prop_cycle = plt.rcParams["axes.prop_cycle"]
+    colors = prop_cycle.by_key()["color"]
+    for i, (m0, m1, m2) in enumerate(markers):
+        circle = plt.Circle((m0, m1), m2, color=colors[i], fill=False)
+        ax.add_artist(circle)
 
-    return ax, [x0, y0, r]
+
+def plot_iv_img(stack, markers):
+    stack = try_load_stack(stack)
+    _, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
+
+    for marker in markers:
+        plot_iv(stack, *marker, ax=ax1)
+    draw_marker(plot_img(calc_var(stack), ax=ax2, ticks=True), markers=markers)
+
+    return (ax1, ax2)
 
 
 def calc_var(stack):
@@ -212,14 +210,3 @@ def calc_var(stack):
             max_var = var
             max_index = i
     return stack[max_index]
-
-def plot_iv_img(stack, markers):
-    stack = try_load_stack(stack)
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12,4))
-
-    for marker in markers:
-        ax1, _ = plot_iv(stack, marker[0], marker[1], marker[2], ax = ax1)
-
-    draw_marker(plot_img(calc_var(stack), ax = ax2, ticks = True), markers=markers)
-
-    return (ax1, ax2)
