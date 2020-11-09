@@ -20,6 +20,7 @@ if LEEMBASE_VERSION > 1.1:
 
 
 def calc_dose(stack):
+    print("WARNING: calc_dose() is deprecated")
     stack = try_load_stack(stack)
     # dose = np.zeros(len(stack.pressure1))
     for i, _ in enumerate(stack):

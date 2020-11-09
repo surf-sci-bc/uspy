@@ -298,15 +298,17 @@ class LEEMStack(Loadable):
     """
     _pickle_extension = ".lstk"
     _unique_attrs = ("fnames", "path", "_images", "_virtual", "virtual",
-                     "_time_origin", "time_origin")
+                     "_time_origin", "time_origin", "dose", "_dose")
 
     def __init__(self, path, virtual=False, nolazy=False, time_origin=datetime.min):
         # pylint: disable=too-many-branches
         self.path = path
-        self._time_origin = time_origin
         self._virtual = virtual
         self._images = None
         self.fnames = None
+
+        self._time_origin = time_origin
+        self._dose = None
 
         try:                # first, assume a string that yields fnames or a pickle
             if path.endswith(".dat"):
@@ -382,12 +384,12 @@ class LEEMStack(Loadable):
 
     def __getitem__(self, indexes):
         if isinstance(indexes, int):
-            if self._virtual:
+            if self.virtual:
                 return LEEMImg(self.fnames[indexes], time_origin=self.time_origin)
             self._load_images()
             return self._images[indexes]
         else:
-            if self._virtual:
+            if self.virtual:
                 return LEEMStack(self.fnames.__getitem__(indexes),
                                  time_origin=self.time_origin, virtual=True)
             self._load_images()
@@ -399,7 +401,7 @@ class LEEMStack(Loadable):
             if imges.data.shape != self[0].data.shape:
                 raise ValueError("Incompatible image dimensions")
             self.fnames[indexes] = imges.path
-            if self._virtual:
+            if self.virtual:
                 if imges.path != "NO_PATH":
                     return
                 self._load_images()
@@ -407,7 +409,7 @@ class LEEMStack(Loadable):
         else:
             fnames = [img.path for img in imges]
             self.fnames.__setitem__(indexes, fnames)
-            if self._virtual:
+            if self.virtual:
                 if "NO_PATH" not in fnames:
                     return
                 self._load_images()
@@ -472,6 +474,30 @@ class LEEMStack(Loadable):
                 except (IndexError, TypeError):
                     pass
         return self._time_origin
+
+    @property
+    def dose(self):
+        if self._dose is None:
+            self.calculate_dose()
+            print("Calculated dose from 'pressure1'!")
+        return self._dose
+
+    def calculate_dose(self, pressure=None):
+        self._dose = np.zeros(len(self))
+        if not self.virtual:
+            self[0].dose = 0
+        if pressure is None:
+            pressure = getattr(self, "pressure1")
+        rel_time = self.rel_time
+        for i, img in enumerate(self[:-1], 1):
+            dose = (
+                self._dose[i - 1]
+                + (pressure[i] + pressure[i-1]) / 2 / (rel_time[i] - rel_time[i - 1])
+                * 1e6
+            )
+            self._dose[i] = dose
+            if not self.virtual:
+                img.dose = dose
 
     @property
     def data(self):
