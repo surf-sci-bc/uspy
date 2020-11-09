@@ -1,6 +1,7 @@
 """Plotting helper functions."""
 # pylint: disable=invalid-name
 # pylint: disable=missing-docstring
+# pylint: disable=too-many-arguments
 
 import math
 from os.path import basename
@@ -150,7 +151,7 @@ def print_meta(stack, fields=("temperature", "pressure1",)):
         table.columns = ("Name",)+fields
         display(table)#, columns=[fields]))
         #display(HTML(table.to_html()))
-    except:
+    except TypeError:       # if stack is not iterable, it is a single image?
         meta = []
         for field in fields:
             meta.append([field, stack.get_field_string(field)])
@@ -159,23 +160,58 @@ def print_meta(stack, fields=("temperature", "pressure1",)):
         display(table)
 
 
-def plot_iv(stack, x0, y0, r=10, ax=None):
-    stack = try_load_stack(stack)
+class ROI:
+    # pylint: disable=too-few-public-methods
+    def __init__(self, x0, y0, **kwargs):
+        self.x0 = x0
+        self.y0 = y0
+        if "r" in kwargs:
+            self.r = kwargs["r"]
+            self._type = "circle"
+        else:
+            raise ValueError("ROI needs more arguments, unknown ROI type")
 
+    def get_mask(self, width, height):
+        x, y = np.arange(0, width), np.arange(0, height)
+        if self._type == "circle":
+            mask = (
+                (x[np.newaxis, :] - self.x0)**2
+                + (y[:, np.newaxis] - self.y0)**2
+                < self.r
+            )
+        else:
+            raise ValueError("Unknown ROI type")
+        return mask
+
+def get_roi(*args, **kwargs):
+    if isinstance(args[0], ROI):
+        if kwargs or len(args) > 1:
+            print("WARNING: too many arguments for get_img_area()")
+        return args[0]
+    return ROI(*args, **kwargs)
+
+
+def get_marker_intensity(stack, x0, y0, r=10):
+    stack = try_load_stack(stack)
     h, w = stack[0].height, stack[0].width
     x, y = np.arange(0, w), np.arange(0, h)
     mask = (x[np.newaxis, :] - x0)**2 + (y[:, np.newaxis] - y0)**2 < r
-
-    iv = np.zeros(len(stack))
+    intensity = np.zeros(len(stack))
     for i, img in enumerate(stack):
-        iv[i] = np.mean(img.data * mask)
+        intensity[i] = np.mean(img.data * mask)
+    return intensity
 
+def plot_intensity(stack, x0, y0, r=10, ax=None, xaxis="energy"):
+    x = getattr(stack, xaxis)
+    intensity = get_marker_intensity(stack, x0, y0, r=r)
     if ax is None:
         _, ax = plt.subplots()
         ax.set_xlabel("Energy")
-    ax.plot(stack.energy, iv)
+    ax.plot(x, intensity)
     return ax, (x0, y0, r)
 
+def plot_iv(stack, x0, y0, r=10, ax=None):
+    return plot_intensity(stack, x0, y0, r=r, ax=ax, xaxis="energy")
 
 def draw_marker(ax, markers):
     # colors = ('r','g','b','c','m','y','w')
@@ -184,7 +220,6 @@ def draw_marker(ax, markers):
     for i, (m0, m1, m2) in enumerate(markers):
         circle = plt.Circle((m0, m1), m2, color=colors[i], fill=False)
         ax.add_artist(circle)
-
 
 def plot_iv_img(stack, markers):
     stack = try_load_stack(stack)
