@@ -448,7 +448,7 @@ class LEEMStack(Loadable):
                 iterator = self
             return np.array([getattr(img, attr) for img in iterator])
         except AttributeError:
-            raise AttributeError("Unknown attribute")
+            raise AttributeError(f"Unknown attribute {attr}")
 
     def __setattr__(self, attr, value):
         if attr in self._unique_attrs:
@@ -474,6 +474,13 @@ class LEEMStack(Loadable):
                 raise ValueError("Stack can't be virtual retroactively")
             self._virtual = True
             self._images = None
+
+    @property
+    def verbose(self):
+        return not self._silent
+    @verbose.setter
+    def verbose(self, value):
+        self._silent = not value
 
     @property
     def time_origin(self):
