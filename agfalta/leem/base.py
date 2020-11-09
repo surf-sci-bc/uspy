@@ -300,7 +300,7 @@ class LEEMStack(Loadable):
     """
     _pickle_extension = ".lstk"
     _unique_attrs = ("fnames", "path", "_images", "_virtual", "virtual",
-                     "_time_origin", "time_origin", "dose", "_dose", "_silent")
+                     "_time_origin", "time_origin", "_silent")
 
     def __init__(self, path, virtual=False, nolazy=False, time_origin=datetime.min,
                  verbose=False):
@@ -311,7 +311,6 @@ class LEEMStack(Loadable):
         self.fnames = None
 
         self._time_origin = time_origin
-        self._dose = None
         self._silent = not verbose
 
         try:                # first, assume a string that yields fnames or a pickle
@@ -489,32 +488,6 @@ class LEEMStack(Loadable):
         return self._time_origin
 
     @property
-    def dose(self):
-        if self._dose is None:
-            self.calculate_dose()
-            print("Calculated dose from 'pressure1'!")
-        return self._dose
-
-    @dose.setter
-    def dose(self, value):
-        if not self.virtual:
-            for img, single_value in zip(self, value):
-                img.dose = single_value
-        self._dose = value
-
-    def calculate_dose(self, pressure=None, approx=1):
-        if pressure is None:
-            pressure = getattr(self[::approx], "pressure1")
-        rel_time = self.rel_time[::approx]
-        approx_dose = np.cumsum(pressure * np.gradient(rel_time))
-        # scale up to original length:
-        long_dose = np.repeat(approx_dose, approx)
-        cutoff = len(long_dose) - len(self)
-        if cutoff < 0:
-            raise ValueError("Error calculating dose")
-        self.dose = long_dose[cutoff // 2 : len(self) + cutoff // 2]
-
-    @property
     def data(self):
         raise NotImplementedError("stack.data is no longer supported")
     #     print("WARNING: Using stack.data is deprecated! Sane behaviour is not guaranteed")
@@ -523,6 +496,17 @@ class LEEMStack(Loadable):
     #         self._data = np.stack([img.data for img in self._images], axis=0)
     #     return self._data
 
+def calculate_dose(stack, pressurefield="pressure1", approx=1):
+    """Maybe get rid of approx?."""
+    pressure = getattr(stack, pressurefield)[::approx]
+    rel_time = stack.rel_time[::approx]
+    approx_dose = np.cumsum(pressure * np.gradient(rel_time))
+    # scale up to original length:
+    long_dose = np.repeat(approx_dose, approx)
+    cutoff = len(long_dose) - len(stack)
+    if cutoff < 0:
+        raise ValueError("Error calculating dose")
+    return long_dose[cutoff // 2 : len(stack) + cutoff // 2]
 
 
 def _parse_string_until_null(fd):
