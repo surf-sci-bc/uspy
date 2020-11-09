@@ -122,10 +122,10 @@ def plot_meta(stack, fields="temperature"):
     ax = np.array(ax).reshape(-1)
     fig.subplots_adjust(hspace=0.3)
 
+    time = stack.rel_time
     for i, field in enumerate(fields):
         ax[i].set_title(field)
         # print(field)
-        time = stack.rel_time
         val = getattr(stack, field)
         if field == "temperature":
             ax[i].plot(time[val < 2000], val[val < 2000])
