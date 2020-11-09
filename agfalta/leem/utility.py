@@ -12,20 +12,17 @@ from agfalta.leem.base import LEEMImg, LEEMStack
 
 
 def try_load_img(img):
-    # pylint: disable=bare-except
-    try:
-        return LEEMImg(img)
-    except:
+    if isinstance(img, LEEMImg):
         return img
+    return LEEMImg(img)
 
 def try_load_stack(stack, virtual=False):
-    # pylint: disable=bare-except
-    try:
-        return LEEMStack(stack, virtual=virtual)
-    except:
+    if isinstance(stack, LEEMStack):
         return stack
+    return LEEMStack(stack, virtual=virtual)
 
 def timing_notification(title=""):
+    print("agfalta.leem.utility.timing_notification moved to agfalta.utility")
     def timer(wrapped):
         def wrapper(*args, **kwargs):
             start = datetime.now()
