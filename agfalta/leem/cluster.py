@@ -31,7 +31,7 @@ from sklearn import metrics as sk_metrics     # pylint: disable=ungrouped-import
 import kneed
 
 from agfalta.leem.base import LEEMStack
-from agfalta.leem.utility import timing_notification, progress_bar, silence
+from agfalta.utility import timing_notification, progress_bar, silence
 
 
 def stack2vectors(stack, mask_outer=0.2):

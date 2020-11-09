@@ -14,6 +14,8 @@ import copy
 from skimage.io import imread
 import numpy as np
 
+from agfalta.utility import progress_bar
+
 
 LEEMBASE_VERSION = 1.1
 
@@ -298,10 +300,11 @@ class LEEMStack(Loadable):
     """
     _pickle_extension = ".lstk"
     _unique_attrs = ("fnames", "path", "_images", "_virtual", "virtual",
-                     "_time_origin", "time_origin", "dose", "_dose")
+                     "_time_origin", "time_origin", "dose", "_dose", "_silent")
 
-    def __init__(self, path, virtual=False, nolazy=False, time_origin=datetime.min):
-        # pylint: disable=too-many-branches
+    def __init__(self, path, virtual=False, nolazy=False, time_origin=datetime.min,
+                 verbose=False):
+        # pylint: disable=too-many-branches, too-many-arguments
         self.path = path
         self._virtual = virtual
         self._images = None
@@ -309,6 +312,7 @@ class LEEMStack(Loadable):
 
         self._time_origin = time_origin
         self._dose = None
+        self._silent = not verbose
 
         try:                # first, assume a string that yields fnames or a pickle
             if path.endswith(".dat"):
@@ -361,15 +365,19 @@ class LEEMStack(Loadable):
 
     def _load_images(self):
         self._virtual = False
-        time_origin = self.time_origin
         if self._images is None:
-            for fname in self.fnames:
-                img = LEEMImg(fname, time_origin)
+            self._images = [LEEMImg(self.fnames[0], self.time_origin)]
+            if len(self.fnames) < 2:
+                return
+            for fname in progress_bar(self.fnames[1:], "Loading images...", silent=self._silent):
+                img = LEEMImg(fname, self.time_origin)
                 if img.data.shape != self._images[0].data.shape:
                     raise ValueError("Image has the wrong dimensions")
                 self._images.append(img)
 
     def copy(self):
+        if not self._silent:
+            print("Copying stack...")
         return copy.deepcopy(self)
 
     def __eq__(self, other):
@@ -434,7 +442,11 @@ class LEEMStack(Loadable):
         if attr in self._unique_attrs:
             raise AttributeError
         try:
-            return np.array([getattr(img, attr) for img in self])
+            if self.virtual:
+                iterator = progress_bar(self, f"Collecting attr '{attr}'...", silent=self._silent)
+            else:
+                iterator = self
+            return np.array([getattr(img, attr) for img in iterator])
         except AttributeError:
             raise AttributeError("Unknown attribute")
 
@@ -489,7 +501,9 @@ class LEEMStack(Loadable):
         if pressure is None:
             pressure = getattr(self, "pressure1")
         rel_time = self.rel_time
-        for i, img in enumerate(self[:-1], 1):
+        for i, img in enumerate(
+                progress_bar(self[:-1], "Calculating dose...", silent=self._silent),
+                1):
             dose = (
                 self._dose[i - 1]
                 + (pressure[i] + pressure[i-1]) / 2 / (rel_time[i] - rel_time[i - 1])

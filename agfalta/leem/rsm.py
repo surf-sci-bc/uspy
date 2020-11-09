@@ -6,7 +6,7 @@ import numpy as np
 import scipy.constants as sc
 from scipy import signal
 
-from agfalta.leem.utility import progress_bar
+from agfalta.utility import progress_bar
 
 
 def rsm(stack, start, end, xy0, kpara_per_pix=7.67e7):

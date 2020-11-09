@@ -8,22 +8,6 @@ import sys
 import contextlib
 from datetime import datetime, timedelta
 
-from agfalta.leem.base import LEEMImg, LEEMStack
-
-
-def try_load_img(img):
-    # pylint: disable=bare-except
-    try:
-        return LEEMImg(img)
-    except:
-        return img
-
-def try_load_stack(stack, virtual=False):
-    # pylint: disable=bare-except
-    try:
-        return LEEMStack(stack, virtual=virtual)
-    except:
-        return stack
 
 def timing_notification(title=""):
     def timer(wrapped):
@@ -44,7 +28,6 @@ class DummyFile(object):
         pass
 @contextlib.contextmanager
 def silence():
-    print("agfalta.leem.utility.silence moved to agfalta.utility")
     save_stdout = sys.stdout
     sys.stdout = DummyFile()
     yield
@@ -53,9 +36,10 @@ def silence():
 
 def progress_bar(it, suffix="", total=None, size=25, fill="▇", empty="░", silent=False):
     # pylint: disable=too-many-arguments
-    print("agfalta.leem.utility.progress_bar moved to agfalta.utility")
     if silent:
-        return it
+        for item in it:
+            yield item
+        return
     start_time = datetime.now()
     if total is None:
         total = len(it)
@@ -93,7 +77,6 @@ class ProgressBar(object):
     """
     # pylint: disable=too-many-instance-attributes
     def __init__(self, total, suffix="", length=25, fill="▇"):
-        print("agfalta.leem.utility.ProgressBar moved to agfalta.utility")
         self.total = total
         self.suffix = suffix
         self.length = length

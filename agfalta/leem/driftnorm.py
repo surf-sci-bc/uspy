@@ -9,7 +9,8 @@ Tools for drift alignment and normalization.
 import cv2 as cv
 import numpy as np
 
-from agfalta.leem.utility import try_load_img, try_load_stack, progress_bar
+from agfalta.leem.utility import try_load_img, try_load_stack
+from agfalta.utility import progress_bar
 
 
 
