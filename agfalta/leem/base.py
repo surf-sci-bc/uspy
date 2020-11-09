@@ -398,10 +398,11 @@ class LEEMStack(Loadable):
         else:
             if self.virtual:
                 return LEEMStack(self.fnames.__getitem__(indexes),
-                                 time_origin=self.time_origin, virtual=True)
+                                 time_origin=self.time_origin, virtual=True,
+                                 verbose=self.verbose)
             self._load_images()
             return LEEMStack(self._images.__getitem__(indexes),
-                             time_origin=self.time_origin)
+                             time_origin=self.time_origin, verbose=self.verbose)
 
     def __setitem__(self, indexes, imges):
         if isinstance(indexes, int) and isinstance(imges, LEEMImg):
