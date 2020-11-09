@@ -221,18 +221,23 @@ def draw_marker(ax, markers):
         circle = plt.Circle((m0, m1), m2, color=colors[i], fill=False)
         ax.add_artist(circle)
 
-def plot_iv_img(stack, markers):
+def plot_intensity_img(stack, markers, xaxis="energy", img_idx=None):
     stack = try_load_stack(stack)
     _, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
-
     for marker in markers:
-        plot_iv(stack, *marker, ax=ax1)
-    draw_marker(plot_img(calc_var(stack), ax=ax2, ticks=True), markers=markers)
-
+        plot_intensity(stack, *marker, ax=ax1, xaxis=xaxis)
+    if img_idx is not None:
+        img = stack[img_idx]
+    else:
+        img = get_max_variance_img(stack)
+    draw_marker(plot_img(img, ax=ax2, ticks=True), markers=markers)
     return (ax1, ax2)
 
+def plot_iv_img(stack, markers, **kwargs):
+    return plot_intensity_img(stack, markers, xaxis="energy", **kwargs)
 
-def calc_var(stack):
+
+def get_max_variance_img(stack):
     stack = try_load_stack(stack)
     max_var = 0
     max_index = 0
