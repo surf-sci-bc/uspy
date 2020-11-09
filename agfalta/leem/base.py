@@ -359,13 +359,10 @@ class LEEMStack(Loadable):
 
     def _load_images(self):
         self._virtual = False
+        time_origin = self.time_origin
         if self._images is None:
-            self._images = [LEEMImg(self.fnames[0], self.time_origin)]
-            self._time_origin = self._images[0].time_dtobject
-            if len(self.fnames) < 2:
-                return
-            for fname in self.fnames[1:]:
-                img = LEEMImg(fname, self.time_origin)
+            for fname in self.fnames:
+                img = LEEMImg(fname, time_origin)
                 if img.data.shape != self._images[0].data.shape:
                     raise ValueError("Image has the wrong dimensions")
                 self._images.append(img)
@@ -386,7 +383,7 @@ class LEEMStack(Loadable):
     def __getitem__(self, indexes):
         if isinstance(indexes, int):
             if self._virtual:
-                return LEEMImg(self.fnames[indexes])
+                return LEEMImg(self.fnames[indexes], time_origin=self.time_origin)
             self._load_images()
             return self._images[indexes]
         else:
@@ -394,7 +391,8 @@ class LEEMStack(Loadable):
                 return LEEMStack(self.fnames.__getitem__(indexes),
                                  time_origin=self.time_origin, virtual=True)
             self._load_images()
-            return LEEMStack(self._images.__getitem__(indexes), time_origin=self.time_origin)
+            return LEEMStack(self._images.__getitem__(indexes),
+                             time_origin=self.time_origin)
 
     def __setitem__(self, indexes, imges):
         if isinstance(indexes, int) and isinstance(imges, LEEMImg):
