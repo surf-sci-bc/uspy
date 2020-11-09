@@ -9,7 +9,7 @@ from os.path import basename
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-from IPython.display import display#, HTML
+from IPython.display import display #, HTML
 
 from agfalta.leem.base import LEEMBASE_VERSION
 from agfalta.leem.utility import try_load_stack, try_load_img
@@ -86,7 +86,7 @@ def plot_img(img, *args, ax=None, title=None,
 def plot_movie(stack, *args, start_index=None, end_index=None, increment=None,
                cols=4, virtual=False, **kwargs):
     stack = try_load_stack(stack, virtual=virtual)
-    images = [img for img in stack[start_index:end_index:increment]]
+    images = list(stack[start_index:end_index:increment])
 
     cols = 4
     rows = math.ceil(len(images) / cols)

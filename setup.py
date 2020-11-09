@@ -28,6 +28,7 @@ setup(
         "opencv-python<4.0",
         "opencv-contrib-python<4.0",
         "kneed",
+        "ipython",
     ],
     python_requires="~=3.6",
     tests_require=["pytest"]
