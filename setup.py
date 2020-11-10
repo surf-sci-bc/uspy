@@ -23,13 +23,14 @@ setup(
         "pandas",
         "scikit-learn",
         "scikit-image",
-        "pyclustering",
+        #"pyclustering",
         "nltk",
         "opencv-python<4.0",
         "opencv-contrib-python<4.0",
         "kneed",
         "ipython",
     ],
+    dependency_links=['https://github.com/annoviko/pyclustering/tarball/master'],
     python_requires="~=3.6",
     tests_require=["pytest"]
 )
