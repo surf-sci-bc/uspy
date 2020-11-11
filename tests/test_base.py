@@ -4,8 +4,6 @@
 # pylint: disable=redefined-outer-name
 # pylint: disable=protected-access
 
-from datetime import datetime
-
 import pytest
 import numpy as np
 
@@ -106,7 +104,7 @@ def test_stack_constructor_nonsense():
         _ = base.LEEMStack(["nonsense.dat"], nolazy=True)
     stack = base.LEEMStack(["nonsense.dat"])
     with pytest.raises(FileNotFoundError):
-        assert stack[0]
+        assert stack[0].data
 
 def test_stack_virtuality(stack_fname):
     stack2 = base.LEEMStack(stack_fname, virtual=True)
@@ -162,7 +160,7 @@ def test_img_attr_types(img):
         assert np.isnan(img.energy)
         assert np.isnan(img.rel_time)
     assert np.isnan(img.temperature) or img.temperature > -280
-    assert isinstance(img.time_dtobject, datetime)
+    assert isinstance(img.timestamp, (int, float))
 
 def test_img_setattr(img):
     img.energy = 7

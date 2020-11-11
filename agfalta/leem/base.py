@@ -92,7 +92,7 @@ class LEEMImg(Loadable):
     _attrs = {
         "width": "width",
         "height": "height",
-        "time_dtobject": "time",
+        "_timestamp": "time",
         "exposure": "Camera Exposure",
         "averaging": "Average Images",
     }
@@ -108,11 +108,15 @@ class LEEMImg(Loadable):
         "rel_time": "s",
         "dose": "L",
     }
+    _mappings = {
+        "MCH": "pressure1",
+        "PCH": "pressure2"
+    }
     _pickle_extension = ".limg"
 
-    def __init__(self, path, time_origin=datetime.min, nolazy=False):
+    def __init__(self, path, time_origin=0, nolazy=False):
         self.path = path
-        self._time_origin = time_origin
+        self.time_origin = time_origin
         self._meta = None
         self._data = None
 
@@ -147,7 +151,7 @@ class LEEMImg(Loadable):
         self._meta = {
             "height": data.shape[0],
             "width": data.shape[1],
-            "time": datetime.min
+            "time": 0
         }
 
     def copy(self):
@@ -164,7 +168,7 @@ class LEEMImg(Loadable):
 
     def __getattr__(self, attr):
         # if these don't exist, there is a problem:
-        if attr in ("path", "_meta", "_data", "_time_origin"):
+        if attr in ("path", "_meta", "_data", "time_origin"):
             raise AttributeError
         try:
             return self.meta.get(self._attrs[attr], np.nan)
@@ -172,7 +176,7 @@ class LEEMImg(Loadable):
             try:
                 return self.meta.get(self._attrs_with_unit[attr], (np.nan, None))[0]
             except KeyError:
-                raise AttributeError
+                raise AttributeError(f"No attribute named {attr}")
 
     def __setattr__(self, attr, value):
         if attr in self._attrs:
@@ -233,36 +237,20 @@ class LEEMImg(Loadable):
 
     @property
     def timestamp(self):
-        """Start voltage."""
-        if self.time_dtobject == datetime.min:
+        if self._timestamp == 0:
             return np.nan
-        return self.time_dtobject.timestamp()
+        return self._timestamp
 
     @property
     def time(self):
-        """Start voltage."""
-        if self.time_dtobject == datetime.min:
+        if np.isnan(self.timestamp):
             return "??-??-?? ??:??:??"
-        return self.time_dtobject.strftime("%Y-%m-%d %H:%M:%S")
+        return datetime.fromtimestamp(self.timestamp).strftime("%Y-%m-%d %H:%M:%S")
 
     @property
     def rel_time(self):
         """Relative time in s (see set_time_origin()). Only makes sense for a stack."""
-        if self.time_dtobject == datetime.min:
-            return np.nan
-        return (self.time_dtobject - self._time_origin).seconds
-
-    @property
-    def time_origin(self):
-        """Expects a timestamp."""
-        return self._time_origin
-    @time_origin.setter
-    def time_origin(self, value):
-        """Expects a timestamp."""
-        try:
-            self._time_origin = datetime.fromtimestamp(value)
-        except ValueError:
-            self._time_origin = value
+        return self.timestamp - self.time_origin
 
     @property
     def fov(self):
@@ -302,7 +290,7 @@ class LEEMStack(Loadable):
     _unique_attrs = ("fnames", "path", "_images", "_virtual", "virtual",
                      "_time_origin", "time_origin", "_silent")
 
-    def __init__(self, path, virtual=False, nolazy=False, time_origin=datetime.min,
+    def __init__(self, path, virtual=False, nolazy=False, time_origin=-1,
                  verbose=False):
         # pylint: disable=too-many-branches, too-many-arguments
         self.path = path
@@ -452,6 +440,7 @@ class LEEMStack(Loadable):
             raise AttributeError(f"Unknown attribute {attr}")
 
     def __setattr__(self, attr, value):
+        #TODO cant overwrite attrs on virtual stacks?
         if attr in self._unique_attrs:
             super().__setattr__(attr, value)
         elif hasattr(value, "__len__") and len(self) == len(value):
@@ -488,12 +477,12 @@ class LEEMStack(Loadable):
 
     @property
     def time_origin(self):
-        if self._time_origin == datetime.min:
+        if self._time_origin == 0:
             try:
-                self._time_origin = self._images[0].time_dtobject
+                self._time_origin = self._images[0].timestamp
             except (IndexError, TypeError):
                 try:
-                    self._time_origin = LEEMImg(self.fnames[0]).time_dtobject
+                    self._time_origin = LEEMImg(self.fnames[0]).timestamp
                 except (IndexError, TypeError):
                     pass
         return self._time_origin
@@ -511,7 +500,7 @@ def calculate_dose(stack, pressurefield="pressure1", approx=1):
     """Maybe get rid of approx?."""
     pressure = getattr(stack, pressurefield)[::approx]
     rel_time = stack.rel_time[::approx]
-    approx_dose = np.cumsum(pressure * np.gradient(rel_time))
+    approx_dose = np.cumsum(pressure * np.gradient(rel_time)) * 1e6
     # scale up to original length:
     long_dose = np.repeat(approx_dose, approx)
     cutoff = len(long_dose) - len(stack)
@@ -534,11 +523,10 @@ def _parse_bytes(buffer, pos, encoding):
     elif encoding == "float":
         return struct.unpack("<f", buffer[pos:pos + 4])[0]
     elif encoding == "time":
-        epoch_start = datetime(year=1601, month=1, day=1)  # begin of windows time
-        timestamp = struct.unpack("<Q", buffer[pos:pos + 8])[0]
-        seconds_since_epoch = timestamp / 10**7  # conversion from 100ns to s
-        utc_time = epoch_start + timedelta(seconds=seconds_since_epoch)
-        return utc_time.replace(tzinfo=timezone.utc).astimezone(tz=None).replace(tzinfo=None)
+        epoch_start = datetime(year=1601, month=1, day=1, tzinfo=timezone.utc) # WIN epoch
+        win_timestamp = struct.unpack("<Q", buffer[pos:pos + 8])[0] / 1e7 # convert 100ns -> s
+        utc_time = epoch_start + timedelta(seconds=win_timestamp)
+        return utc_time.timestamp()
     elif encoding == "bool":
         return struct.unpack("<?", buffer[pos:pos + 1])[0]
     else:
