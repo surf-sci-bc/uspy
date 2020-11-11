@@ -23,6 +23,21 @@ $ git remote add deployment user@192.168.2.63:/home/agfalta/git_host/agfalta_too
 
 Now, when you do `git pull` you will get your files from github. For pushing, you can do either `git push` to push to github or `git push deployment` to push to the IFP server.
 
+##### Fancy way:
+
+If you want to do it fancy, you can push to both pushes simultaneously with [this](https://stackoverflow.com/questions/5785549/able-to-push-to-all-git-remotes-with-the-one-command):
+
+```sh
+$ git remote add all git@github.com:surf-sci-bc/agfalta_tools.git
+$ git remote set-url --push --add all sfischer@192.168.2.63:/home/agfalta/git_host/agfalta_tools.git
+$ git remote set-url --push --add all git@github.com:surf-sci-bc/agfalta_tools.git
+```
+
+And then push with
+
+```sh
+$ git push all --all
+```
 
 ## Installation
 
