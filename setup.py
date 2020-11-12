@@ -7,6 +7,8 @@ from setuptools import setup, find_packages
 setup(
     name="agfalta",
     use_scm_version={
+        "root": ".",
+        "relative_to": __file__,
         "fallback_version": "NOT-INSTALLED-VERSION"
     },
     author="Simon Fischer, Lars Buß, Jon-Olaf Krisponeit",

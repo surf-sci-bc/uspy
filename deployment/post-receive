@@ -2,17 +2,18 @@
 
 # put this into agfalta_tools.git/hooks/ and make it executable
 
-TARGET="/home/agfalta/jupyter_notebooks/agfalta_tools"
-GIT_DIR="/home/agfalta/git_host/agfalta_tools.git"
+TARGET="/home/agfalta/test_deploy/agfalta_tools"
+GIT_DIR="/home/agfalta/test_git/agfalta_tools.git"
 BRANCH="master"
 
 while read oldrev newrev ref
 do
 	# only checking out the master (or whatever branch you would like to deploy)
-	if [ "${ref}" = "refs/heads/${BRANCH}" ];
-	then
+	if [ "${ref}" = "refs/heads/${BRANCH}" ] || [[ "${ref}" =~ "/refs/tags/.*" ]]; then
 		echo "Ref ${ref} received. Deploying ${BRANCH} branch to production..."
 		git --work-tree=${TARGET} --git-dir=${GIT_DIR} checkout -f ${BRANCH}
+        # replace git root "relative_to" value for setuptools_scm
+        sed -i 's/"relative_to": __file__/"relative_to": '"${GIT_DIR}"'/' "${TARGET}/setup.py"
 	else
 		echo "Ref ${ref} received. Doing nothing: only the ${BRANCH} branch may be deployed on this server."
 	fi
