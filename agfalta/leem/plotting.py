@@ -5,18 +5,14 @@
 
 import math
 from os.path import basename
-# import ipywidgets as widgets
+
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
+# import ipywidgets as widgets
 from IPython.display import display #, HTML
 
-from agfalta.leem.base import LEEMBASE_VERSION
 from agfalta.leem.utility import try_load_stack, try_load_img
-
-if LEEMBASE_VERSION > 1.1:
-    print("WARNING: LEEM_base version is newer than expected.")
-
 
 
 def calc_dose(stack):

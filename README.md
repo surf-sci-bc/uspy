@@ -11,34 +11,6 @@ $ git clone https://github.com/surf-sci-bc/agfalta_tools.git
 $ git clone git@github.com:surf-sci-bc/agfalta_tools.git
 ```
 
-### Pushing to the jupyterlab production server
-
-*skip this if you only want to install locally*
-
-If you want to push to the jupyterlab production server in the IFP group at Uni Bremen, you need to add this as a separate remote (call it `deployment`). You also need ssh access to the machine and a user that is in the `githost` group so you have write access to the server. 
-
-```sh
-$ git remote add deployment user@192.168.2.63:/home/agfalta/git_host/agfalta_tools.git
-```
-
-Now, when you do `git pull` you will get your files from github. For pushing, you can do either `git push` to push to github or `git push deployment` to push to the IFP server.
-
-##### Fancy way:
-
-If you want to do it fancy, you can push to both pushes simultaneously with [this](https://stackoverflow.com/questions/5785549/able-to-push-to-all-git-remotes-with-the-one-command):
-
-```sh
-$ git remote add all git@github.com:surf-sci-bc/agfalta_tools.git
-$ git remote set-url --push --add all sfischer@192.168.2.63:/home/agfalta/git_host/agfalta_tools.git
-$ git remote set-url --push --add all git@github.com:surf-sci-bc/agfalta_tools.git
-```
-
-And then push with
-
-```sh
-$ git push all --all
-```
-
 ## Installation
 
 ##### Create venv
@@ -83,7 +55,6 @@ And finally, install your local `agfalta` module in editable mode:
 
 Now everything should run and you can do `import agfalta` from your virtual environment.
 
-
 ## Testing
 
 The project and its `testdata` folder are two separate repositories because all the binary data in `testdata` makes the pushing and pulling too slow otherwise. If you don't do tests, you don't need `testdata`. If you do, do this in the agfalta_tools repo:
@@ -99,8 +70,48 @@ For running the tests, just go into `agfalta_tools` venv and do
 (venv) $ pytest
 ```
 
+## Deployment
 
-## Set up the git repos on the server
+### Versioning
+
+Versioning is managed by `setuptools_scm`, which uses the current git tag to determine the version. The syntax of the version identifier is  [Semantic Versioning](https://semver.org/) and therefore follows the classic `MAJOR.MINOR.PATCH` scheme. You can tag the **last commit** as version `{x}.{y}.{z}` with the following command:
+
+```sh
+$ git tag -a "{x}.{y}.{z}" -m "Version description"
+```
+
+Check the current tag via `$ git describe`. If the current commit has not been tagged, the version is called `{x}.{y}.{z+1}.dev{d}+g{commit hash}.d{date}` where the last part is only present if the repo is dirty (= uncommitted changes).
+
+You can get the current version by `from agfalta.version import __version__`. This will either retrieve the version from git if `setuptools_scm` is installed and the install lives in a git repository. Otherwise, it will look in the package metadata which are from installation time and might thus be outdated on editable installs.
+
+### Pushing to the jupyterlab server
+
+If you want to push to the jupyterlab production server in the IFP group at Uni Bremen, you need to add this as a separate remote (call it `deployment`). You also need ssh access to the machine and a user that is in the `githost` group so you have write access to the server. 
+
+```sh
+$ git remote add deployment user@192.168.2.63:/home/agfalta/git_host/agfalta_tools.git
+```
+
+Now, when you do `git pull` you will get your files from github. For pushing, you can do either `git push` to push to github or `git push deployment` to push to the IFP server.
+
+##### Fancy way:
+
+If you want to do it fancy, you can push to both remotes simultaneously with [this](https://stackoverflow.com/questions/5785549/able-to-push-to-all-git-remotes-with-the-one-command):
+
+```sh
+$ git remote add all git@github.com:surf-sci-bc/agfalta_tools.git
+$ git remote set-url --push --add all sfischer@192.168.2.63:/home/agfalta/git_host/agfalta_tools.git
+$ git remote set-url --push --add all git@github.com:surf-sci-bc/agfalta_tools.git
+```
+
+And then push both to origin and deployment with
+
+```sh
+$ git push all --all
+```
+
+
+### Set up the git repos on the server
 
 *NOTE: Maybe it is easier to just clone the repo from github instead of creating a bare repo and pushing to it?*
 

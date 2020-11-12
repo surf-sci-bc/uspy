@@ -17,9 +17,6 @@ import numpy as np
 from agfalta.utility import progress_bar
 
 
-LEEMBASE_VERSION = 1.1
-
-
 class Loadable:
     _pickle_extension = ".unknown"
 

@@ -5,6 +5,5 @@
 *.backup
 *.coverage
 
-leemvenv
 venv
 agfalta/dev

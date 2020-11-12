@@ -2,12 +2,13 @@
 # pylint: disable=invalid-name
 
 from setuptools import setup, find_packages
-from agfalta.version import __version__
 
 
 setup(
     name="agfalta",
-    version=__version__,
+    use_scm_version={
+        "fallback_version": "NOT-INSTALLED-VERSION"
+    },
     author="Simon Fischer, Lars Buß, Jon-Olaf Krisponeit",
     description="LEEM data analysis (and more...?)",
     packages=find_packages(include=["agfalta", "agfalta.*"]),
@@ -17,6 +18,7 @@ setup(
     ),
     # license="GPLv3",
     keywords="physics LEEM microscopy spectroscopy",
+    setup_requires=["setuptools_scm"],
     install_requires=[
         "numpy",
         "matplotlib",
@@ -29,6 +31,7 @@ setup(
         "opencv-contrib-python<4.0",
         "kneed",
         "ipython",
+        "setuptools_scm",       # see agfalta/version.py
     ],
     dependency_links=['https://github.com/annoviko/pyclustering/tarball/master'],
     python_requires="~=3.6",
