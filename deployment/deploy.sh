@@ -5,7 +5,7 @@
 : "${GIT_GROUP:=githost}"
 
 main() {
-    GIT_DIR="${1}"
+    GIT_DIR=$(realpath "${1}")
     TARGET=$(dirname $(dirname $(realpath "${0}")))
 
     echo "GIT_DIR is \"${GIT_DIR}\""
@@ -24,7 +24,7 @@ main() {
 
     # manage rights
     echo "Giving all users in group \"${GIT_GROUP}\" write access to the repo (need sudo for that)"
-    chgrp -R "${GIT_GROUP}" "${GIT_DIR}"
+    sudo chgrp -R "${GIT_GROUP}" "${GIT_DIR}"
     sudo find "${GIT_DIR}" -type d -exec chmod g+s '{}' +
     git --git-dir="${GIT_DIR}" config core.sharedRepository group
 }

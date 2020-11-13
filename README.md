@@ -107,13 +107,32 @@ $ git remote set-url --push --add all git@github.com:surf-sci-bc/agfalta_tools.g
 And then push both to origin and deployment with
 
 ```sh
-$ git push all --all
+$ git push all
 ```
 
 
 ### Set up the git repos on the server
 
-*NOTE: Maybe it is easier to just clone the repo from github instead of creating a bare repo and pushing to it?*
+All commands are on the server, so ssh there first. Don't forget to adjust the paths `repo` and `deploy_dir`. The last command is important as it installs the post-receive hook and sets the file permissions correctly (for that it needs `sudo`).
+
+```sh
+$ mkdir -p repo
+$ git clone --bare https://github.com/surf-sci-bc/agfalta_tools.git repo/agfalta_tools.git
+$ mkdir -p deploy_dir
+$ git clone repo/agfalta_tools.git deploy_dir/agfalta_tools
+$ deploy_dir/agfalta_tools/deployment/deploy.sh repo/agfalta_tools.git
+```
+
+Now everything should be set and you can add `user@server:repo/agfalta_tools.git` as your deployment remote (see [above](#Pushing-to-the-jupyterlab-server)). You can now install `agfalta_tools` by doing this from the venv that you intend to use:
+
+```sh
+(venv) $ cd deploy_dir/agfalta_tools
+(venv) $ python3 -m pip install -e .
+```
+
+##### Old method
+
+*NOTE: Dont do this anymore*
 
 If you need to set up the server again, you need to keep an up-to-date working copy on some machine. Then, create an empty repo in `/home/agfalta/git_host` (if you change this location, do update this manual). See also [this github gist](https://gist.github.com/noelboss/3fe13927025b89757f8fb12e9066f2fa).
 
