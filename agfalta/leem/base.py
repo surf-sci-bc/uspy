@@ -320,7 +320,7 @@ class LEEMStack(Loadable):
                 if not self.fnames:
                     raise AttributeError
                 self.path = "NO_PATH"
-            except AttributeError:
+            except (TypeError, AttributeError):
                 try:        # now, try everything else
                     self.parse_nondat(path)
                     self._virtual = False
@@ -388,6 +388,14 @@ class LEEMStack(Loadable):
             self._load_images()
             return LEEMStack(self._images.__getitem__(indexes),
                              time_origin=self.time_origin, verbose=self.verbose)
+
+    def get_at(self, attr, value):
+        for img in self:
+            if getattr(img, attr) == value:
+                return img
+        vec = getattr(self, attr)
+        idx = np.abs(vec - value).argmin()
+        return self[int(idx)]
 
     def __setitem__(self, indexes, imges):
         if isinstance(indexes, int) and isinstance(imges, LEEMImg):
