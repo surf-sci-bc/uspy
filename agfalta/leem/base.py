@@ -79,19 +79,17 @@ class LEEMImg(Loadable):
         - averaging         0: sliding average
         - Objective         lens current in mA
     """
-    _attrs_with_unit = {
-        "energy": "Start Voltage",
-        "temperature": "Sample Temp.",
-        "pressure1": "Gauge #1",
-        "pressure2": "Gauge #2",
-        "objective": "Objective",
-    }
     _attrs = {
         "width": "width",
         "height": "height",
         "_timestamp": "time",
         "exposure": "Camera Exposure",
         "averaging": "Average Images",
+        "energy": "Start Voltage",
+        "temperature": "Sample Temp.",
+        "pressure1": "Gauge #1",
+        "pressure2": "Gauge #2",
+        "objective": "Objective",
     }
     _fallback_units = {
         "energy": "V",
@@ -115,6 +113,7 @@ class LEEMImg(Loadable):
         self.path = path
         self.time_origin = time_origin
         self._meta = None
+        self._meta_units = None
         self._data = None
 
         try:                        # assume datfile or pickle
@@ -150,6 +149,7 @@ class LEEMImg(Loadable):
             "width": data.shape[1],
             "time": 0
         }
+        self._meta_units = {}
 
     def copy(self):
         return copy.deepcopy(self)
@@ -170,17 +170,11 @@ class LEEMImg(Loadable):
         try:
             return self.meta.get(self._attrs[attr], np.nan)
         except KeyError:
-            try:
-                return self.meta.get(self._attrs_with_unit[attr], (np.nan, None))[0]
-            except KeyError:
-                raise AttributeError(f"No attribute named {attr}")
+            raise AttributeError(f"No attribute named {attr}")
 
     def __setattr__(self, attr, value):
         if attr in self._attrs:
             self.meta[self._attrs[attr]] = value
-        elif attr in self._attrs_with_unit:
-            unit = self._fallback_units[attr]
-            self.meta[self._attrs_with_unit[attr]] = (value, unit)
         else:
             super().__setattr__(attr, value)
 
@@ -188,18 +182,22 @@ class LEEMImg(Loadable):
     def meta(self):
         """Dictionary containing all header attributes."""
         if self._meta is None:
-            self._meta = parse_header(self.path)
+            self._meta, self._meta_units = parse_header(self.path)
         return self._meta
 
     @property
+    def meta_units(self):
+        """Dictionary containing all header attribute units."""
+        if self._meta_units is None:
+            self._meta, self._meta_units = parse_header(self.path)
+        return self._meta_units
+
+    @property
     def additional_meta(self):
-        if self._meta is None:
-            self._meta = parse_header(self.path)
         add_meta = dict([
-            (key, self._meta[key])
-            for key in self._meta
+            (key, self.meta[key])
+            for key in self.meta
             if key not in self._attrs.values()
-            and key not in self._attrs_with_unit.values()
             and key not in ("FoV", )
         ])
         return add_meta
@@ -219,9 +217,9 @@ class LEEMImg(Loadable):
     def get_unit(self, field):
         """Unit string for the specified field."""
         try:
-            return self.meta.get(self._attrs_with_unit[field], (np.nan, None))[1]
+            return self.meta_units[self._attrs[field]]
         except KeyError:
-            if hasattr(self, field):
+            if hasattr(self, field) or self._attrs[field] in self.meta:
                 return self._fallback_units.get(field, "")
             raise ValueError(f"Unknown field {field}")
 
@@ -230,6 +228,8 @@ class LEEMImg(Loadable):
         value = getattr(self, field)
         if value == np.nan:
             return "NaN"
+        if not isinstance(value, (int, float)):
+            return f"{value} {self.get_unit(field)}".strip()
         return f"{value:.5g} {self.get_unit(field)}".strip()
 
     @property
@@ -571,9 +571,11 @@ UNIT_CODES = {"1": "V", "2": "mA", "3": "A", "4": "°C",
 
 def parse_header(fname):
     meta = {}
+    meta_units = {}
     def parse_block(block, field_dict):
         for key, (pos, encoding) in field_dict.items():
             meta[key] = _parse_bytes(block, pos, encoding)
+            meta_units[key] = ""
 
     with open(fname, 'rb') as f:
         parse_block(f.read(104), HEADER_ONE)                    # first fixed header
@@ -595,9 +597,8 @@ def parse_header(fname):
                 parse_block(buffer, field_dict)
             elif b in (106, 107, 108, 109, 235, 236, 237):      # varian pressures
                 key = _parse_string_until_null(f)
-                unit = _parse_string_until_null(f)
-                value = _parse_bytes(f.read(4), 0, "float")
-                meta[key] = (value, unit)
+                meta_units[key] = _parse_string_until_null(f)
+                meta[key] = _parse_bytes(f.read(4), 0, "float")
             elif b in (110, 238):                               # field of view
                 fov_str = _parse_string_until_null(f)
                 meta["LEED"] = "LEED" in fov_str
@@ -608,10 +609,10 @@ def parse_header(fname):
                 if not keyunit:     # happens for some b?
                     b = f.read(1)[0]
                     continue
-                unit = UNIT_CODES.get(keyunit[-1], "")
-                meta[keyunit[:-1]] = (_parse_bytes(f.read(4), 0, "float"), unit)
+                meta_units[keyunit[:-1]] = UNIT_CODES.get(keyunit[-1], "")
+                meta[keyunit[:-1]] = _parse_bytes(f.read(4), 0, "float")
             b = f.read(1)[0]
-    return meta
+    return meta, meta_units
 
 
 def parse_data(fname, width=None, height=None):
