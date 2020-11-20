@@ -82,17 +82,31 @@ $ git tag -a "{x}.{y}.{z}" -m "Version description"
 
 Check the current tag via `$ git describe`. If the current commit has not been tagged, the version is called `{x}.{y}.{z+1}.dev{d}+g{commit hash}.d{date}` where the last part is only present if the repo is dirty (= uncommitted changes).
 
+Remember that after tagging a commit, you have to push the tags in addition to the normal commits, so for pushing both to all, do:
+
+```sh
+$ git push all
+$ git push all --tags
+```
+
 You can get the current version by `from agfalta.version import __version__`. This will either retrieve the version from git if `setuptools_scm` is installed and the install lives in a git repository. Otherwise, it will look in the package metadata which are from installation time and might thus be outdated on editable installs.
 
 ### Pushing to the jupyterlab server
 
+Current parameters:
+
+* `server`: `192.168.2.63`
+* `repo`: `/home/agfalta/git_host/agfalta_tools.git`
+* `deploy_dir`: `/home/agfalta/jupyterlab_notebooks/agfalta_tools` (see [below](Set-up-the-git-repos-on-the-server))
+* unix group for users that can push to deployment: `githost`
+
 If you want to push to the jupyterlab production server in the IFP group at Uni Bremen, you need to add this as a separate remote (call it `deployment`). You also need ssh access to the machine and a user that is in the `githost` group so you have write access to the server. 
 
 ```sh
-$ git remote add deployment user@192.168.2.63:/home/agfalta/git_host/agfalta_tools.git
+$ git remote add deployment user@server:repo/agfalta_tools.git
 ```
 
-Now, when you do `git pull` you will get your files from github. For pushing, you can do either `git push` to push to github or `git push deployment` to push to the IFP server.
+Now, when you do `git pull` you will get your files from github. For pushing, you can do either `git push --tags` to push to github or `git push deployment` to push to the IFP server.
 
 ##### Fancy way:
 
@@ -100,7 +114,7 @@ If you want to do it fancy, you can push to both remotes simultaneously with [th
 
 ```sh
 $ git remote add all git@github.com:surf-sci-bc/agfalta_tools.git
-$ git remote set-url --push --add all sfischer@192.168.2.63:/home/agfalta/git_host/agfalta_tools.git
+$ git remote set-url --push --add all user@server:repo/agfalta_tools.git
 $ git remote set-url --push --add all git@github.com:surf-sci-bc/agfalta_tools.git
 ```
 
@@ -113,17 +127,20 @@ $ git push all
 
 ### Set up the git repos on the server
 
-All commands are on the server, so ssh there first. Don't forget to adjust the paths `repo` and `deploy_dir`. The last command is important as it installs the post-receive hook and sets the file permissions correctly (for that it needs `sudo`).
+All commands are on the server, so ssh there first. Don't forget to adjust the paths `repo` and `deploy_dir`. The last command is important as it installs the post-receive hook and sets the file permissions correctly (for that it asks for the `sudo` password).
 
 ```sh
 $ mkdir -p repo
 $ git clone --bare https://github.com/surf-sci-bc/agfalta_tools.git repo/agfalta_tools.git
 $ mkdir -p deploy_dir
 $ git clone repo/agfalta_tools.git deploy_dir/agfalta_tools
+$ sudo groupadd githost
 $ deploy_dir/agfalta_tools/deployment/deploy.sh repo/agfalta_tools.git
 ```
 
-Now everything should be set and you can add `user@server:repo/agfalta_tools.git` as your deployment remote (see [above](#Pushing-to-the-jupyterlab-server)). You can now install `agfalta_tools` by doing this from the venv that you intend to use:
+Now everything should be set and you can add `user@server:repo/agfalta_tools.git` as your deployment remote (see [above](#Pushing-to-the-jupyterlab-server)). For that, the `user` needs to be in the `githost` group (you can change this group in `deployment/deploy.sh`). 
+
+You can now install `agfalta_tools` by executing these lines from the venv that you intend to use:
 
 ```sh
 (venv) $ cd deploy_dir/agfalta_tools

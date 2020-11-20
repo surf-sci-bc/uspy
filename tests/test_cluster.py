@@ -27,7 +27,7 @@ def main():
         stack = base.LEEMStack(TESTDATA_DIR + "pendried_stack.lstk")
         loaded = True
     except FileNotFoundError:
-        stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_RuO2_normed_aligned.tif")
+        stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_RuO2_normed_aligned_80-130.tif")
         stack.energy = np.linspace(3.0, 50.0, len(stack))
         stack = stack[10:]
 
@@ -80,7 +80,7 @@ def pendry_stack():
         stack = base.LEEMStack(TESTDATA_DIR + "pendried_stack.lstk")
         loaded = True
     except FileNotFoundError:
-        stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_RuO2_normed_aligned.tif")
+        stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_RuO2_normed_aligned_80-130.tif")
         stack.energy = np.linspace(3.0, 50.0, len(stack))
 
     X, _, _ = cluster.stack2vectors(stack, mask_outer=0.2) # cut away 20% on every side

@@ -17,12 +17,6 @@ from .conftest import (
 )
 
 
-### General
-
-def test_version():
-    assert base.LEEMBASE_VERSION > 1.0
-
-
 ### Image loading
 
 @pytest.mark.parametrize("nolazy", [True, False])

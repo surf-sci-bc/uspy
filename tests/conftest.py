@@ -25,7 +25,7 @@ TESTDATA_DIR = os.path.dirname(__file__) + "/../testdata/"
 STACK_FNAMES = [
     TESTDATA_DIR + "test_stack_IV_RuO2",
     TESTDATA_DIR + "test_stack_IV_g-Cu",
-    TESTDATA_DIR + "test_stack_IV_RuO2_normed_aligned.tif",
+    TESTDATA_DIR + "test_stack_IV_RuO2_normed_aligned_80-130.tif",
 ]
 STACK_INCOMPATIBLE_IMG_FNAME = TESTDATA_DIR + "elettra.dat"
 
@@ -65,7 +65,7 @@ def stack(stack_fname):
 
 @pytest.fixture(scope="module")
 def single_stack():
-    stack = LEEMStack(TESTDATA_DIR + "test_stack_IV_RuO2_normed_aligned.tif")
+    stack = LEEMStack(TESTDATA_DIR + "test_stack_IV_RuO2_normed_aligned_80-130.tif")
     stack.energy = np.linspace(3.0, 50.0, len(stack))
     return stack
 
