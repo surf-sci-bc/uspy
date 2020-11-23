@@ -83,13 +83,14 @@ class LEEMImg(Loadable):
         "width": "width",
         "height": "height",
         "_timestamp": "time",
-        "exposure": "Camera Exposure",
-        "averaging": "Average Images",
         "energy": "Start Voltage",
         "temperature": "Sample Temp.",
         "pressure1": "Gauge #1",
         "pressure2": "Gauge #2",
         "objective": "Objective",
+        "exposure": "Camera Exposure",
+        "averaging": "Average Images",
+        "fov": "fov"
     }
     _fallback_units = {
         "energy": "V",
@@ -432,7 +433,6 @@ class LEEMStack(Loadable):
         return len(self.fnames)
 
     def __getattr__(self, attr):
-        #TODO add buffering of vectors
         if attr in self._unique_attrs:
             raise AttributeError
         try:
@@ -445,7 +445,6 @@ class LEEMStack(Loadable):
             raise AttributeError(f"Unknown attribute {attr}")
 
     def __setattr__(self, attr, value):
-        #TODO cant overwrite attrs on virtual stacks?
         if attr in self._unique_attrs:
             super().__setattr__(attr, value)
         elif hasattr(value, "__len__") and len(self) == len(value):
@@ -453,7 +452,7 @@ class LEEMStack(Loadable):
                 for img, single_value in zip(self, value):
                     setattr(img, attr, single_value)
             else:
-                super().__setattr__(attr, value)
+                raise ValueError(f"Can't set attribute {attr} for virtual stacks")
         elif not hasattr(self[0], attr):
             super().__setattr__(attr, value)
         else:
@@ -501,17 +500,6 @@ class LEEMStack(Loadable):
     #         self._data = np.stack([img.data for img in self._images], axis=0)
     #     return self._data
 
-def calculate_dose(stack, pressurefield="pressure1", approx=1):
-    """Maybe get rid of approx?."""
-    pressure = getattr(stack, pressurefield)[::approx]
-    rel_time = stack.rel_time[::approx]
-    approx_dose = np.cumsum(pressure * np.gradient(rel_time)) * 1e6
-    # scale up to original length:
-    long_dose = np.repeat(approx_dose, approx)
-    cutoff = len(long_dose) - len(stack)
-    if cutoff < 0:
-        raise ValueError("Error calculating dose")
-    return long_dose[cutoff // 2 : len(stack) + cutoff // 2]
 
 
 def _parse_string_until_null(fd):

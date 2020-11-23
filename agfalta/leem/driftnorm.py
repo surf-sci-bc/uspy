@@ -9,16 +9,16 @@ Tools for drift alignment and normalization.
 import cv2 as cv
 import numpy as np
 
-from agfalta.leem.utility import try_load_img, try_load_stack
+from agfalta.leem.utility import imgify, stackify
 from agfalta.utility import progress_bar
 
 
 
 def normalize_image(img, mcp, dark_counts=100):
-    img = try_load_img(img)
-    mcp = try_load_img(mcp)
+    img = imgify(img)
+    mcp = imgify(mcp)
     if not isinstance(dark_counts, (int, float, complex)):
-        dark_image = try_load_img(dark_counts)
+        dark_image = imgify(dark_counts)
         dark_counts = dark_image.data
 
     img = img.copy()
@@ -31,10 +31,10 @@ def normalize_image(img, mcp, dark_counts=100):
     return img
 
 def normalize_stack(stack, mcp, dark_counts=100):
-    stack = try_load_stack(stack)
-    mcp = try_load_img(mcp)
+    stack = stackify(stack)
+    mcp = imgify(mcp)
     if not isinstance(dark_counts, (int, float, complex)):
-        dark_counts = try_load_img(dark_counts)
+        dark_counts = imgify(dark_counts)
 
     stack_normed = stack.copy()
     for i, img in enumerate(progress_bar(stack, "Normalizing...")):
@@ -45,7 +45,7 @@ def normalize_stack(stack, mcp, dark_counts=100):
     return stack_normed
 
 def align_stack(stack, **kwargs):
-    stack = try_load_stack(stack)
+    stack = stackify(stack)
     alignment = find_alignment_matrices(stack, **kwargs)
     stack = apply_alignment_matrices(stack, alignment)
     stack.alignment = alignment

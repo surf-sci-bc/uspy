@@ -12,12 +12,12 @@ import pandas as pd
 # import ipywidgets as widgets
 from IPython.display import display #, HTML
 
-from agfalta.leem.utility import try_load_stack, try_load_img
+from agfalta.leem.utility import stackify, imgify
 
 
 def calc_dose(stack):
     print("WARNING: calc_dose() is deprecated")
-    stack = try_load_stack(stack)
+    stack = stackify(stack)
     # dose = np.zeros(len(stack.pressure1))
     for i, _ in enumerate(stack):
         if i == 0:
@@ -36,7 +36,7 @@ def calc_dose(stack):
 def plot_img(img, *args, ax=None, title=None,
              fields=("temperature", "pressure1", "energy", "fov"),
              figsize=(6, 6), ticks=False, **kwargs):
-    img = try_load_img(img)
+    img = imgify(img)
 
     if ax is None:
         _, ax = plt.subplots(figsize=figsize)
@@ -81,7 +81,7 @@ def plot_img(img, *args, ax=None, title=None,
 
 def plot_movie(stack, *args, start_index=None, end_index=None, increment=None,
                cols=4, virtual=False, **kwargs):
-    stack = try_load_stack(stack, virtual=virtual)
+    stack = stackify(stack, virtual=virtual)
     images = list(stack[start_index:end_index:increment])
 
     cols = 4
@@ -108,7 +108,7 @@ def plot_movie(stack, *args, start_index=None, end_index=None, increment=None,
 
 
 def plot_meta(stack, fields="temperature"):
-    stack = try_load_stack(stack)
+    stack = stackify(stack)
     if isinstance(fields, str):
         fields = [fields]
 
@@ -135,7 +135,7 @@ def plot_meta(stack, fields="temperature"):
 
 def print_meta(stack, fields=("temperature", "pressure1",)):
     # stack = LEEMStack(stack)
-    stack = try_load_stack(stack)
+    stack = stackify(stack)
     try:
         meta_stack = []
         for img in stack:
@@ -189,7 +189,7 @@ def get_roi(*args, **kwargs):
 
 
 def get_marker_intensity(stack, x0, y0, r=10):
-    stack = try_load_stack(stack)
+    stack = stackify(stack)
     h, w = stack[0].height, stack[0].width
     x, y = np.arange(0, w), np.arange(0, h)
     mask = (x[np.newaxis, :] - x0)**2 + (y[:, np.newaxis] - y0)**2 < r
@@ -219,7 +219,7 @@ def draw_marker(ax, markers):
         ax.add_artist(circle)
 
 def plot_intensity_img(stack, markers, xaxis="energy", img_idx=None):
-    stack = try_load_stack(stack)
+    stack = stackify(stack)
     _, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
     for marker in markers:
         plot_intensity(stack, *marker, ax=ax1, xaxis=xaxis)
@@ -235,7 +235,7 @@ def plot_iv_img(stack, markers, **kwargs):
 
 
 def get_max_variance_img(stack):
-    stack = try_load_stack(stack)
+    stack = stackify(stack)
     max_var = 0
     max_index = 0
     for i, img in enumerate(stack):

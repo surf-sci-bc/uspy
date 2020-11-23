@@ -11,12 +11,12 @@ from datetime import datetime, timedelta
 from agfalta.leem.base import LEEMImg, LEEMStack
 
 
-def try_load_img(img):
+def imgify(img):
     if isinstance(img, LEEMImg):
         return img
     return LEEMImg(img)
 
-def try_load_stack(stack, virtual=False):
+def stackify(stack, virtual=False):
     if isinstance(stack, LEEMStack):
         return stack
     return LEEMStack(stack, virtual=virtual)

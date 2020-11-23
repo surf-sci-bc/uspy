@@ -6,16 +6,19 @@ import numpy as np
 import scipy.constants as sc
 from scipy import signal
 
+from agfalta.leem.utility import stackify
 from agfalta.utility import progress_bar
 
 
 def rsm(stack, start, end, xy0, kpara_per_pix=7.67e7):
+    stack = stackify(stack)
     cut = RSMCut(start=start, end=end)
     kx, ky, z = get_rsm(stack, cut, xy0=xy0, kpara_per_pix=kpara_per_pix)
     return kx, ky, z
 
 
 def get_rsm(stack, cut, xy0, kpara_per_pix):
+    stack = stackify(stack)
     res_y, res_x = len(stack), np.rint(cut.length).astype(int)
 
     z = np.zeros((res_y, res_x))
