@@ -39,7 +39,10 @@ def stack2vectors(stack, mask_outer=0.2):
     _, h0, w0 = len(stack), stack[0].data.shape[0], stack[0].data.shape[1]
     dy, dx = (int(mask_outer * h0), int(mask_outer * w0))
     h, w = (h0 - 2 * dy, w0 - 2 * dx)
-    data = np.array([img.data[dy:-dy, dx:-dx].flatten() for img in stack]).T
+    if mask_outer == 0:
+        data = np.array([img.data.flatten() for img in stack]).T
+    else:
+        data = np.array([img.data[dy:-dy, dx:-dx].flatten() for img in stack]).T
     return data, h, w
 
 def vectors2stack(X, h, w, mask_outer=0):

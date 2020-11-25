@@ -118,10 +118,10 @@ def test_pca_full(short_stack, algorithm):
     X2 = inv_trafo(W)
     assert X.shape == X2.shape
 
-@pytest.mark.parametrize("algorithm", ["pc-kmeans", "pc-xmeans"])
+@pytest.mark.parametrize("algorithm", ["pc-kmeans", "pc-xmeans", "sk-birch"])
 def test_cluster(short_stack, algorithm):
     X, h, w = cluster.stack2vectors(short_stack, mask_outer=0.2)
-    labels, _ = cluster.cluster_analysis(X, algorithm)
+    labels, _ = cluster.cluster_analysis(X, algorithm, metric="euclidean_square")
     assert len(labels) == h * w
 
 if __name__ == "__main__":

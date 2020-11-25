@@ -43,6 +43,8 @@ def progress_bar(it, suffix="", total=None, size=25, fill="▇", empty="░", si
     start_time = datetime.now()
     if total is None:
         total = len(it)
+    if total == 0:
+        return
     def display(i):
         x = i / total
         prog = fill * int(x * size) + empty * (size - int(x * size))
