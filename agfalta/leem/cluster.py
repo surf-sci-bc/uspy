@@ -116,8 +116,8 @@ def cluster_analysis(X, algorithm="pc-kmeans", **params_):
     constructor, params = copy.deepcopy(CLUSTERING_DEFAULTS[algorithm])
     params.update(params_)
     metric_type = params.pop("metric", "euclidean")
-    initializer = PC_INITIALIZERS[params.pop("init")]
-    n_clusters = params["n_clusters"]
+    initializer = PC_INITIALIZERS[params.pop("init", None)]
+    n_clusters = params.get("n_clusters", N_CLUSTERS)
 
     for kw in params.copy():
         if kw not in inspect.signature(constructor).parameters.keys():
