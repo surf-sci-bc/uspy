@@ -5,6 +5,7 @@
 import os
 import pickle
 import copy
+import inspect
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -114,21 +115,25 @@ def cluster_analysis(X, algorithm="pc-kmeans", **params_):
     algorithm = algorithm.lower()
     constructor, params = copy.deepcopy(CLUSTERING_DEFAULTS[algorithm])
     params.update(params_)
+    metric_type = params.pop("metric", "euclidean")
+    initializer = PC_INITIALIZERS[params.pop("init")]
+    n_clusters = params["n_clusters"]
+
+    for kw in params.copy():
+        if kw not in inspect.signature(constructor).parameters.keys():
+            params.pop(kw)
 
     if algorithm.startswith("nltk-"):
         model = constructor(**params)
         labels = model.cluster(X, True)
 
     if algorithm.startswith("pc-"):
-        n_clusters = params.pop("n_clusters")
         if algorithm.startswith("pc-k") or algorithm == "pc-xmeans":
-            metric_type = params.pop("metric", "euclidean")
             if callable(metric_type):
                 metric = pc_metric.distance_metric(
                     pc_metric.type_metric.USER_DEFINED, func=metric_type)
             else:
                 metric = PC_METRICS[metric_type]
-            initializer = PC_INITIALIZERS[params.pop("init")]
             use_indices = "medoids" in algorithm
             initial_centers = initializer(X, n_clusters).initialize(return_index=use_indices)
             model = constructor(X, initial_centers, metric=metric, **params)
