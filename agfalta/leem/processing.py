@@ -11,6 +11,7 @@ from agfalta.leem.utility import stackify, imgify
 
 def calculate_dose(stack, pressurefield="pressure1", approx=1):
     """Maybe get rid of approx?."""
+    stack = stackify(stack)
     pressure = getattr(stack, pressurefield)[::approx]
     rel_time = stack.rel_time[::approx]
     approx_dose = np.cumsum(pressure * np.gradient(rel_time)) * 1e6
@@ -28,11 +29,11 @@ class ROI:
         "rectangle": {"width": 50, "height": 50},
         "ellipse": {"xr": 10, "yr": 20}
     }
-    def __init__(self, x0, y0, **kwargs):
+    def __init__(self, x0, y0, type_="circle", **kwargs):
         self.position = x0, y0
         self._img_shape = None
         self._mask = None
-        self._type = kwargs.pop("type")
+        self._type = type_
         assert self._type in self._defaults
         self.params = copy.deepcopy(self._defaults["self._type"])
         self.params.update(kwargs)
@@ -68,15 +69,15 @@ def roify(*args, **kwargs):
         return args[0]
     return ROI(*args, **kwargs)
 
-def get_img_roi_avg(img, x0, y0, **kwargs):
+def get_img_roi_avg(img, *args, **kwargs):
     img = imgify(img)
-    roi = ROI(x0, y0, **kwargs)
+    roi = roify(*args, **kwargs)
     cutout = roi.apply(img.data)
     return np.mean(cutout)
 
-def get_roi_intensity(stack, x0, y0, **kwargs):
+def get_roi_intensity(stack, *args, **kwargs):
     stack = stackify(stack)
-    roi = ROI(x0, y0, **kwargs)
+    roi = roify(*args, **kwargs)
     intensity = np.zeros(len(stack))
     for i, img in enumerate(stack):
         intensity[i] = np.mean(roi.apply(img.data))

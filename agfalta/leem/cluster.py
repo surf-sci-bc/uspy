@@ -94,7 +94,7 @@ def _pendry_distance(p1, p2):
                      np.sum(np.square(p1) + np.square(p2)))
 PC_METRICS = {
     None: pc_metric.distance_metric(pc_metric.type_metric.EUCLIDEAN),
-    "eucliean": pc_metric.distance_metric(pc_metric.type_metric.EUCLIDEAN),
+    "euclidean": pc_metric.distance_metric(pc_metric.type_metric.EUCLIDEAN),
     "euclidean_square": pc_metric.distance_metric(pc_metric.type_metric.EUCLIDEAN_SQUARE),
     "canberra": pc_metric.distance_metric(pc_metric.type_metric.CANBERRA),
     "chi_square": pc_metric.distance_metric(pc_metric.type_metric.CHI_SQUARE),
@@ -121,8 +121,8 @@ def cluster_analysis(X, algorithm="pc-kmeans", **params_):
 
     if algorithm.startswith("pc-"):
         n_clusters = params.pop("n_clusters")
-        if algorithm.startswith("pc-k"):
-            metric_type = params.pop("metric")
+        if algorithm.startswith("pc-k") or algorithm == "pc-xmeans":
+            metric_type = params.pop("metric", "euclidean")
             if callable(metric_type):
                 metric = pc_metric.distance_metric(
                     pc_metric.type_metric.USER_DEFINED, func=metric_type)

@@ -106,10 +106,9 @@ def test_pca_pendry(pendry_stack, n_components):
     W = trafo(pendry_stack.pendry)
     assert W.shape == (pendry_stack.pendry.shape[0], n_components)
 
-@pytest.mark.parametrize("algorithm", ["pca", "nmf"])
-def test_pca_full(single_stack, algorithm):
-    single_stack = single_stack[10:30]
-    X, _, _ = cluster.stack2vectors(single_stack, mask_outer=0.2)
+@pytest.mark.parametrize("algorithm", ["pca"])#, "nmf"])
+def test_pca_full(short_stack, algorithm):
+    X, _, _ = cluster.stack2vectors(short_stack, mask_outer=0.2)
     trafo, _, model = cluster.component_analysis(
         X, algorithm=algorithm, n_components=7
     )
@@ -119,6 +118,11 @@ def test_pca_full(single_stack, algorithm):
     X2 = inv_trafo(W)
     assert X.shape == X2.shape
 
+@pytest.mark.parametrize("algorithm", ["pc-kmeans", "pc-xmeans"])
+def test_cluster(short_stack, algorithm):
+    X, h, w = cluster.stack2vectors(short_stack, mask_outer=0.2)
+    labels, _ = cluster.cluster_analysis(X, algorithm)
+    assert len(labels) == h * w
 
 if __name__ == "__main__":
     main()
