@@ -32,10 +32,12 @@ setup(
         "opencv-python<4.0",
         "opencv-contrib-python<4.0",
         "kneed",
+        "lmfit",
         "ipython",
         "setuptools_scm",       # see agfalta/version.py
     ],
     dependency_links=['https://github.com/annoviko/pyclustering/tarball/master'],
+    package_data={"agfalta.xps": ["rsf.db"]},
     python_requires="~=3.6",
     tests_require=["pytest"]
 )
