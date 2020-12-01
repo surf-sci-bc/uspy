@@ -6,7 +6,7 @@
 
 main() {
     GIT_DIR=$(realpath "${1}")
-    TARGET=$(dirname $(dirname $(realpath "${0}")))
+    TARGET=$(dirname $(dirname $(dirname $(realpath "${0}"))))
 
     echo "GIT_DIR is \"${GIT_DIR}\""
     echo "TARGET is \"${TARGET}\""
@@ -15,7 +15,7 @@ main() {
 
     sed -e 's|TARGET=""|TARGET="'"${TARGET}"'"|' \
         -e 's|GIT_DIR=""|GIT_DIR="'"${GIT_DIR}"'"|' \
-        "${TARGET}/deployment/post-receive" > "/tmp/post-receive"
+        "${TARGET}/deployment/jupyterlab/post-receive" > "/tmp/post-receive"
 
     # install hook
     echo "Installing post-receive hook"
