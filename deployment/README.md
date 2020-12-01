@@ -1,4 +1,13 @@
- 
+# agfalta_tools deployment
+
+## TLJH
+
+### Creating the docker image
+
+bla 
+
+
+
 ## Jupyterlab single server
 
 ### Pushing to the jupyterlab server
