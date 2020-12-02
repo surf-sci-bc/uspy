@@ -24,11 +24,16 @@ RUN python3 -m pip install --upgrade pip && \
     fix-permissions "/home/${NB_USER}"
 
 WORKDIR /tmp
-RUN git clone https://github.com/surf-sci-bc/agfalta_tools.git && \
-    cd agfalta_tools && \
-    python3 -m pip install . && \
+
+# currently relies on agfalta_tools beeing in the same directory as the Dockerfile
+
+COPY --chown=${NB_UID}:${NB_GID} agfalta_tools agfalta_tools
+
+RUN python3 -m pip install agfalta_tools/. && \
     rm -rf /tmp/agfalta_tools && \
+    fix-permissions "${CONDA_DIR}" && \
     fix-permissions "/home/${NB_USER}"
+
 
 # Import matplotlib the first time to build the font cache.
 ENV XDG_CACHE_HOME="/home/${NB_USER}/.cache/"
