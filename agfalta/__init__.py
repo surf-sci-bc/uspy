@@ -1,10 +1,10 @@
 """Data directories."""
 
-import os
+from pathlib import Path
 
 from agfalta.version import __version__
 
-DATADIR = os.getenv("HOME") + "/data/"
+DATADIR = str(Path.home() + "/data/") + "/"
 LEEMDIR = DATADIR + "LEEM/"
 XPSDIR = DATADIR + "XPS/"
-STMDIR = DATADIR + "STM/home/stmwizard/Documents"
+STMDIR = DATADIR + "STM/home/stmwizard/Documents/"

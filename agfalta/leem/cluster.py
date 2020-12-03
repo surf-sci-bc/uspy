@@ -3,6 +3,7 @@
 # pylint:disable=missing-docstring
 
 import os
+from pathlib import Path
 import pickle
 import copy
 import inspect
@@ -278,7 +279,7 @@ def extract_IVs(X, labels):
 def save_model(model, fname):
     if not os.path.exists(os.path.dirname(fname)):
         os.makedirs(os.path.dirname(fname))
-    with open(fname, "wb") as pfile:
+    with Path(fname).open("wb") as pfile:
         try:
             pickle.dump(model, pfile)
             print(f"Saved model to {fname}")
@@ -287,13 +288,13 @@ def save_model(model, fname):
 
 
 def load_pca_model(fname):
-    with open(fname, "rb") as pfile:
+    with Path(fname).open("rb") as pfile:
         model = pickle.load(pfile)
     print(f"Loaded PCA model from {fname}")
     return model.transform, model.inverse_transform, model
 
 def load_cluster_model(fname):
-    with open(fname, "rb") as pfile:
+    with Path(fname).open("rb") as pfile:
         model = pickle.load(pfile)
     labels = model.labels_
     labels[labels < 0] = np.ma.masked

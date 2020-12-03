@@ -3,6 +3,7 @@
 # pylint: disable=global-statement
 
 import os
+from pathlib import Path
 import re
 import sqlite3
 
@@ -12,7 +13,7 @@ import numpy as np
 def parse_spectrum_file(fname):
     """Checks file extension and calls appropriate parsing method."""
     specdicts = []
-    with open(fname, "r") as sfile:
+    with Path(fname).open("r") as sfile:
         firstline = sfile.readline()
     if fname.split(".")[-1] == "txt":
         if "Region" in firstline:
@@ -54,7 +55,7 @@ def parse_eistxt(fname):
     skip_once_regex = re.compile(r"Layer.*")
     skip_regex = re.compile(r"^[0-9]+\s*False.*")
     split_eislines = []
-    with open(fname, "br") as eisfile:
+    with Path(fname).open("br") as eisfile:
         for line in eisfile:
             line = line.decode("utf-8", "backslashreplace")
             if re.match(splitregex, line):
@@ -97,7 +98,7 @@ def parse_arpestxt(fname):
     datarow_regex = re.compile(
         r"^\s[0-9]+\.?[0-9]*(E\+)?[0-9]*\s*[0-9]+\.?[0-9]*(E\+)?[0-9]*\s*$"
     )
-    with open(fname, "r") as afile:
+    with Path(fname).open("r") as afile:
         for line in afile:
             if "=" in line:
                 key, value = line.split("=")[:2]

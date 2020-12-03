@@ -10,6 +10,7 @@ import pickle
 from datetime import datetime, timedelta, timezone
 import glob
 import copy
+from pathlib import Path
 
 from skimage.io import imread
 import numpy as np
@@ -35,7 +36,7 @@ class Loadable:
     def unpickle(cls, path, *_args, **kwargs):
         # pylint: disable=protected-access
         if path.endswith(cls._pickle_extension):
-            with open(path, "rb") as pfile:
+            with Path(path).open("rb") as pfile:
                 # print(f"Loading stack from '{path}'")
                 instance = pickle.load(pfile)
                 if "time_origin" in kwargs:
@@ -46,7 +47,7 @@ class Loadable:
     def save(self, path):
         if not path.endswith(self._pickle_extension):
             path += self._pickle_extension
-        with open(path, "wb") as pfile:
+        with Path(path).open("wb") as pfile:
             try:
                 pickle.dump(self, pfile, protocol=4)
             except RecursionError:
@@ -573,7 +574,7 @@ def parse_header(fname):
             meta[key] = _parse_bytes(block, pos, encoding)
             meta_units[key] = ""
 
-    with open(fname, 'rb') as f:
+    with Path(fname).open("rb") as f:
         parse_block(f.read(104), HEADER_ONE)                    # first fixed header
 
         if meta["_recipe_size"] > 0:                            # optional recipe
@@ -612,7 +613,7 @@ def parse_header(fname):
 
 
 def parse_data(fname, width=None, height=None):
-    with open(fname, "rb") as f:
+    with Path(fname).open("rb") as f:
         if None in (width, height):
             block = f.read(104)
             width = _parse_bytes(block, *HEADER_ONE["width"])
