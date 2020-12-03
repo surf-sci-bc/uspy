@@ -453,7 +453,7 @@ class LEEMStack(Loadable):
                 for img, single_value in zip(self, value):
                     setattr(img, attr, single_value)
             else:
-                raise ValueError(f"Can't set attribute {attr} for virtual stacks")
+                super().__setattr__(attr, value)
         elif not hasattr(self[0], attr):
             super().__setattr__(attr, value)
         else:
