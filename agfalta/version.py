@@ -5,5 +5,4 @@ try:
     __version__ = get_version(root="..", relative_to=__file__)
 except (ImportError, LookupError):
     from pkg_resources import get_distribution
-    print("WARNING: Version might be incorrect on editable installs")
     __version__ = get_distribution(__package__).version
