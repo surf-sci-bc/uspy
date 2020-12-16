@@ -131,7 +131,7 @@ class LEEMImg(Loadable):
             try:
                 self.parse_nondat(path)
             except (ValueError, TypeError, AttributeError):
-                raise ValueError(f"{path} does not exist or has wrong file format.")
+                raise ValueError(f"{path} does not exist or has wrong file format.") from None
 
     def parse_nondat(self, path):
         """Use this for other formats than pickle (which is already
@@ -171,8 +171,8 @@ class LEEMImg(Loadable):
             raise AttributeError
         try:
             return self.meta.get(self._attrs[attr], np.nan)
-        except KeyError:
-            raise AttributeError(f"No attribute named {attr}")
+        except KeyError as e:
+            raise AttributeError(f"No attribute named {attr}") from e
 
     def __setattr__(self, attr, value):
         if attr in self._attrs:
@@ -223,7 +223,7 @@ class LEEMImg(Loadable):
         except KeyError:
             if hasattr(self, field) or self._attrs[field] in self.meta:
                 return self._fallback_units.get(field, "")
-            raise ValueError(f"Unknown field {field}")
+            raise ValueError(f"Unknown field {field}") from None
 
     def get_field_string(self, field):
         """Returns a string with the field value and unit."""
@@ -314,13 +314,13 @@ class LEEMStack(Loadable):
                 if isinstance(path[0], LEEMImg):
                     self.fnames = [img.path for img in path]
                     if not [img.data.shape == path[0].data.shape for img in path]:
-                        raise ValueError("Incompatible image dimensions")
+                        raise ValueError("Incompatible image dimensions") from None
                     self._images = [img for img in path]
                     self._virtual = False
                 else:
                     self.fnames = [fname for fname in path if fname.endswith(".dat")]
                 if not self.fnames:
-                    raise AttributeError
+                    raise AttributeError from None
                 self.path = "NO_PATH"
             except (TypeError, AttributeError):
                 try:        # now, try everything else
@@ -328,7 +328,7 @@ class LEEMStack(Loadable):
                     self._virtual = False
                 except (AttributeError, ValueError):
                     raise ValueError(f"'{self.path}' does not exist, cannot be read"
-                                     " successfully or contains no *.dat files")
+                                     " successfully or contains no *.dat files") from None
         if nolazy:
             for img in self:
                 _ = img.meta
@@ -443,7 +443,7 @@ class LEEMStack(Loadable):
                 iterator = self
             return np.array([getattr(img, attr) for img in iterator])
         except AttributeError:
-            raise AttributeError(f"Unknown attribute {attr}")
+            raise AttributeError(f"Unknown attribute {attr}") from None
 
     def __setattr__(self, attr, value):
         if attr in self._unique_attrs:
