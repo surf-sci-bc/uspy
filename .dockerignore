@@ -1,3 +1,5 @@
 .git
 README.md
 venv
+agfalta.egg-info
+testdata

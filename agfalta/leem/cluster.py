@@ -319,6 +319,7 @@ def plot_IVs(stack, labels, ax=None, mask_outer=0.2, cmap="seismic"):
     IV_curves = extract_IVs(X, labels)
     for i, IV_curve in enumerate(IV_curves):
         ax.plot(stack.energy, IV_curve, color=plt.get_cmap(cmap)(i / len(IV_curves)))
+    return ax
 
 def plot_IVs2(energy, IV_curves, ax=None, cmap="seismic"):
     """Plot IV curves."""
