@@ -11,7 +11,7 @@ from agfalta.stm.base import STMImage
 from agfalta.stm import processing
 
 
-def plot_image(fname, background="planar"):
+def plot_img(fname, background="planar"):
     img = STMImage(fname)
     if background is None:
         data = img.z
