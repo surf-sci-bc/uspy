@@ -3,247 +3,253 @@
 # pylint: disable=missing-docstring
 # pylint: disable=too-many-arguments
 
-import math
 from os.path import basename
+import itertools
 
+import math
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 # import ipywidgets as widgets
-from IPython.display import display #, HTML
+from IPython.display import display
 
 from agfalta.leem.utility import stackify, imgify
+from agfalta.leem.processing import ROI, roify, get_max_variance_idx
 
 
-def calc_dose(stack):
-    print("WARNING: calc_dose() is deprecated")
-    stack = stackify(stack)
-    # dose = np.zeros(len(stack.pressure1))
-    for i, _ in enumerate(stack):
-        if i == 0:
-            stack[0].dose = 0
-            continue
-        stack[i].dose = (
-            stack[i - 1].dose
-            + (stack.pressure1[i] + stack.pressure1[i - 1])
-            / (stack.rel_time[i] - stack.rel_time[i - 1])
-            / 2
-            * 1e6
-        )
-    return stack
+
+def info(obj):
+    """Prints info about a LEEM image or stack."""
+    try:
+        img = imgify(obj)
+        print("Image attributes:")
+        for attr in img.attrs:
+            print(f"\t{attr}: {img.get_field_string(attr)}")
+        return
+    except FileNotFoundError:
+        pass
+    try:
+        stack = stackify(obj)
+        print("Stack attributes:")
+        for attr in stack.unique_attrs:
+            if attr.startswith("_"):
+                continue
+            val = str(getattr(stack, attr))
+            if len(val) > 100:
+                val = val[:80] + "..."
+            print(f"\t{attr}: {val}")
+        if len(stack) == 0:
+            print("\tStack object is empty")
+            return
+        print("Stack attributes from its images (only value of first "
+              "image is given):")
+        for attr in stack[0].attrs:
+            print(f"\t{attr}, {stack[0].get_field_string(attr)}")
+    except FileNotFoundError:
+        print("Object is not valid (maybe wrong path?)")
 
 
-def plot_img(img, *args, ax=None, title=None,
+def plot_img(img, ax=None, title=None,
              fields=("temperature", "pressure1", "energy", "fov"),
              figsize=(6, 6), ticks=False, **kwargs):
+    """Plots a single LEEM image with some metadata. If ax is given,
+    the image is plotted onto that axes object. Takes either
+    a file name or a LEEMImg object. Fields given are shown in the
+    corners of the image."""
     img = imgify(img)
-
-    if ax is None:
-        _, ax = plt.subplots(figsize=figsize)
-    if title is None:
+    if title is None and img.path != "NO_PATH":
         title = img.path
-        if len(title) > 25:
-            title = "..." + title[-25:]
+    if title is not None and len(title) > 25:
+        title = f"...{title[-25:]}"
+
+    ax = _get_ax(ax, figsize=figsize, ticks=ticks, title=title)
     ax.imshow(
-        img.data, *args,
+        img.data,
         cmap="gray",
         clim=(np.nanmin(img.data), np.nanmax(img.data)),
         aspect=1,
         **kwargs
     )
 
-    ax.set_title(title)
-    if not ticks:
-        ax.set_xticks([])
-        ax.set_yticks([])
-    pos = {
-        0: ("top", "left", 0.01, 1),
-        1: ("top", "right", 1, 1),
-        2: ("bottom", "left", 0.01, 0.01),
-        3: ("bottom", "right", 1, 0.01),
-    }
+    if fields is None:
+        return ax
     for i, field in enumerate(fields):
+        if i > 3:
+            print(f"Ignoring field {field}, not enough space")
+            continue
         if field is None:
             continue
-        label = img.get_field_string(field)
         ax.text(
-            pos[i][2],
-            pos[i][3],
-            label,
-            verticalalignment=pos[i][0],
-            horizontalalignment=pos[i][1],
-            transform=ax.transAxes,
-            color="yellow",
-            fontsize=14,
+            x=IMG_POS[i][2], y=IMG_POS[i][3], 
+            s=img.get_field_string(field),
+            va=IMG_POS[i][0], ha=IMG_POS[i][1],
+            transform=ax.transAxes, color="yellow", fontsize=14,
         )
     return ax
 
+def plot_image(*args, **kwargs):
+    """Alias for agfalta.leem.plotting.plot_img()."""
+    return plot_img(*args, **kwargs)
 
-def plot_movie(stack, *args, start_index=None, end_index=None, increment=None,
-               cols=4, virtual=False, **kwargs):
+
+def plot_mov(stack, cols=4, virtual=False, **kwargs):
+    """Uses plot_img() to plot LEEMImges on axes objects in a grid.
+    Takes either a file name, folder name or LEEMStack object."""
     stack = stackify(stack, virtual=virtual)
-    images = list(stack[start_index:end_index:increment])
 
-    cols = 4
-    rows = math.ceil(len(images) / cols)
-
+    ncols = 4
+    nrows = math.ceil(len(stack) / ncols)
     fig, axes = plt.subplots(
-        ncols=cols, nrows=rows, figsize=(cols * 5, rows * 5)
-    )  # , constrained_layout=True)
-    if rows > 1:
-        for i, img in enumerate(images):
-            ax = axes[i // cols, i % cols]
-            plot_img(img, ax=ax, *args, **kwargs)
-        for i in range(len(images), rows * cols):
-            ax = axes[i // cols, i % cols]
-            fig.delaxes(ax)
-    else:
+        ncols=ncols, nrows=nrows, figsize=(ncols * 5, nrows * 5)
+    )
 
-        for i, img in enumerate(images):
-            ax = axes[i]
-            plot_img(img, ax=ax, *args, **kwargs)
-        for i in range(len(images), cols):
-            ax = axes[i]
+    # zip_longest() pads the shorter list with None
+    for ax, img in itertools.zip_longest(axes.flatten(), stack):
+        if img is None:
             fig.delaxes(ax)
+        else:
+            plot_img(img, ax=ax, **kwargs)
+
+def plot_movie(*args, **kwargs):
+    """Alias for agfalta.leem.plotting.plot_mov()."""
+    return plot_mov(*args, **kwargs)
 
 
 def plot_meta(stack, fields="temperature"):
+    """Plots some metadata of the stack over time."""
     stack = stackify(stack)
     if isinstance(fields, str):
         fields = [fields]
 
-    fig, ax = plt.subplots(len(fields), figsize=(6, len(fields) * 3))
-
-    # Reshape in case the supplot has only one plot, so it stays iterable
-    ax = np.array(ax).reshape(-1)
+    fig, axes = plt.subplots(len(fields), figsize=(6, len(fields) * 3))
     fig.subplots_adjust(hspace=0.3)
+    # Reshape in case the supplot has only one plot, so it stays iterable
+    axes = np.array(axes).reshape(-1)
 
     time = stack.rel_time
     for i, field in enumerate(fields):
-        ax[i].set_title(field)
-        # print(field)
         val = getattr(stack, field)
         if field == "temperature":
-            ax[i].plot(time[val < 2000], val[val < 2000])
+            axes[i].plot(time[val < 2000], val[val < 2000])
             if len(time[val < 2000]) < len(time):
                 print("Points have been excluded from plot because of unreasonably "
                       "high temperature")
         else:
-            ax[i].plot(time, val)
-        if field in ('pressure1', 'pressure2'):
-            ax[i].set_yscale('log')
+            axes[i].plot(time, val)
+        if field in ("pressure", "pressure1", "pressure2"):
+            axes[i].set_yscale('log')
+        axes[i].set_ylabel(f"{field} in {stack[0].get_unit(field)}")
+        axes[i].set_xlabel("Time in s")
 
-def print_meta(stack, fields=("temperature", "pressure1",)):
-    # stack = LEEMStack(stack)
+
+def print_meta(stack, fields=("energy", "temperature", "pressure1",
+                              "pressure2", "objective", "fov",
+                              "exposure", "averaging", "width", "height")):
+    """Prints metadata of a stack as a table."""
+    if isinstance(fields, str):
+        fields = [fields]
     stack = stackify(stack)
-    try:
-        meta_stack = []
-        for img in stack:
-            meta_img = [basename(img.path)]
-            for field in fields:
-                meta_img.append(img.get_field_string(field))
-            meta_stack.append(meta_img)
-        pd.set_option('display.expand_frame_repr', False)
-        table = pd.DataFrame(meta_stack)#, columns=[fields])
-        table.columns = ("Name",)+fields
-        display(table)#, columns=[fields]))
-        #display(HTML(table.to_html()))
-    except TypeError:       # if stack is not iterable, it is a single image?
-        meta = []
+
+    table = []
+    for img in stack:
+        row = [basename(img.path)]
         for field in fields:
-            meta.append([field, stack.get_field_string(field)])
-
-        table = pd.DataFrame(meta, columns=["Metadata", "Value"])
-        display(table)
-
-
-class ROI:
-    # pylint: disable=too-few-public-methods
-    def __init__(self, x0, y0, **kwargs):
-        self.x0 = x0
-        self.y0 = y0
-        if "r" in kwargs:
-            self.r = kwargs["r"]
-            self._type = "circle"
-        else:
-            raise ValueError("ROI needs more arguments, unknown ROI type")
-
-    def get_mask(self, width, height):
-        x, y = np.arange(0, width), np.arange(0, height)
-        if self._type == "circle":
-            mask = (
-                (x[np.newaxis, :] - self.x0)**2
-                + (y[:, np.newaxis] - self.y0)**2
-                < self.r
-            )
-        else:
-            raise ValueError("Unknown ROI type")
-        return mask
-
-def get_roi(*args, **kwargs):
-    if isinstance(args[0], ROI):
-        if kwargs or len(args) > 1:
-            print("WARNING: too many arguments for get_img_area()")
-        return args[0]
-    return ROI(*args, **kwargs)
+            row.append(img.get_field_string(field))
+        table.append(row)
+    pd.set_option('display.expand_frame_repr', False)
+    df = pd.DataFrame(table)
+    df.columns = ("Name", *fields)
+    display(df)
 
 
-def get_marker_intensity(stack, x0, y0, r=10):
+def plot_intensity(stack, *args, xaxis="energy", ax=None, **kwargs):
+    """Plots the image intensity in a specified ROI over a specified
+    x axis. The x axis can be any attribute of the stack.
+    Either you give the ROI object itself or the parameters for a ROI
+    The ROI is defined by its center x0, y0 and either of:
+    - type_="circle", radius=XX
+    - type_="rectangle", width=XX, height=XX
+    - type_="ellipse", xradius=XX, yradius=XX
+    You can omit type_, then it selects a circle. The radius can then
+    also be omitted, defaulting to 10.
+    Examples:
+        plot_intensity(stack, x0, y0, radius=3)
+        plot_intensity(stack, roi)
+        plot_intensity(stack, x0, y0, type_="rectangle", width=5, height=4)
+    Returns a tuple of the axes object and the ROI
+    """
     stack = stackify(stack)
-    h, w = stack[0].height, stack[0].width
-    x, y = np.arange(0, w), np.arange(0, h)
-    mask = (x[np.newaxis, :] - x0)**2 + (y[:, np.newaxis] - y0)**2 < r
+    rois = roify(*args, **kwargs)
+    if len(rois) > 1:
+        raise ValueError("Cant handle multiple ROIs")
+    roi = rois[0]
+    #TODO add support for multiple ROIs
+
+    x = getattr(stack, xaxis)
+
     intensity = np.zeros(len(stack))
     for i, img in enumerate(stack):
-        intensity[i] = np.mean(img.data * mask)
-    return intensity
+        for roi in rois:
+            intensity[i] = np.mean(roi.apply(img.data))
 
-def plot_intensity(stack, x0, y0, r=10, ax=None, xaxis="energy"):
-    x = getattr(stack, xaxis)
-    intensity = get_marker_intensity(stack, x0, y0, r=r)
-    if ax is None:
-        _, ax = plt.subplots()
-        ax.set_xlabel("Energy")
+    ax = _get_ax(ax, xlabel=xaxis, ylabel="Intensity in a.u.")
     ax.plot(x, intensity)
-    return ax, (x0, y0, r)
+    return ax, roi
 
-def plot_iv(stack, x0, y0, r=10, ax=None):
-    return plot_intensity(stack, x0, y0, r=r, ax=ax, xaxis="energy")
+def plot_iv(*args, **kwargs):
+    """Alias for agfalta.leem.plotting.plot_intensity() with xaxis set
+    to "energy"."""
+    return plot_intensity(*args, xaxis="energy", **kwargs)
 
-def draw_marker(ax, markers):
-    # colors = ('r','g','b','c','m','y','w')
-    prop_cycle = plt.rcParams["axes.prop_cycle"]
-    colors = prop_cycle.by_key()["color"]
-    for i, (m0, m1, m2) in enumerate(markers):
-        circle = plt.Circle((m0, m1), m2, color=colors[i], fill=False)
-        ax.add_artist(circle)
 
-def plot_intensity_img(stack, markers, xaxis="energy", img_idx=None):
+def plot_intensity_img(stack, *args, xaxis="energy", img_idx=None, **kwargs):
+    """Does the same thing as agfalta.leem.plotting.plot_intensity() 
+    but also shows an image of the stack and the ROI on it on the right.
+    """
     stack = stackify(stack)
+    rois = roify(*args, **kwargs)
+    
     _, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
-    for marker in markers:
-        plot_intensity(stack, *marker, ax=ax1, xaxis=xaxis)
-    if img_idx is not None:
-        img = stack[img_idx]
-    else:
-        img = get_max_variance_img(stack)
-    draw_marker(plot_img(img, ax=ax2, ticks=True), markers=markers)
-    return (ax1, ax2)
 
-def plot_iv_img(stack, markers, **kwargs):
-    return plot_intensity_img(stack, markers, xaxis="energy", **kwargs)
+    if img_idx is None:
+        img_idx = get_max_variance_idx(stack)
+    plot_img(stack[img_idx], ax=ax2, ticks=True)
+
+    colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    for i, roi in enumerate(rois):
+        plot_intensity(stack, roi, ax=ax1, xaxis=xaxis)
+        ax2.add_artist(roi.artist(colors[i]))
+
+    return ax1, ax2
+
+def plot_iv_img(*args, **kwargs):
+    """Alias for agfalta.leem.plotting.plot_intensity_img() with xaxis set
+    to "energy"."""
+    return plot_intensity_img(*args, xaxis="energy", **kwargs)
 
 
-def get_max_variance_img(stack):
-    stack = stackify(stack)
-    max_var = 0
-    max_index = 0
-    for i, img in enumerate(stack):
-        var = np.var(
-            (img.data.flatten() - np.amin(img.data))
-            / (np.amax(img.data) - np.amin(img.data))
-        )
-        if var > max_var:
-            max_var = var
-            max_index = i
-    return stack[max_index]
+
+# Utility:
+
+IMG_POS = {    # (verticalalignment, horizontalalignment, x, y)
+    0: ("top", "left", 0.01, 1),
+    1: ("top", "right", 1, 1),
+    2: ("bottom", "left", 0.01, 0.01),
+    3: ("bottom", "right", 1, 0.01),
+}
+
+
+def _get_ax(ax, **kwargs):
+    """Helper for preparing an axis object"""
+    if ax is None:
+        _, ax = plt.subplots(figsize=kwargs.get("figsize", (6.4, 4.8)))
+    if not kwargs.get("ticks", True):
+        ax.set_xticks([])
+        ax.set_yticks([])
+    if kwargs.get("title", False):
+        ax.set_title(kwargs["title"])
+    if kwargs.get("xlabel", False):
+        ax.set_xlabel(kwargs["xlabel"])
+    if kwargs.get("ylabel", False):
+        ax.set_ylabel(kwargs["ylabel"])
+    return ax

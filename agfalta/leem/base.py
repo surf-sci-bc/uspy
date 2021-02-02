@@ -80,7 +80,7 @@ class LEEMImg(Loadable):
         - averaging         0: sliding average
         - Objective         lens current in mA
     """
-    _attrs = {
+    attrs = {
         "width": "width",
         "height": "height",
         "_timestamp": "time",
@@ -131,7 +131,7 @@ class LEEMImg(Loadable):
             try:
                 self.parse_nondat(path)
             except (ValueError, TypeError, AttributeError):
-                raise ValueError(f"{path} does not exist or has wrong file format.") from None
+                raise FileNotFoundError(f"{path} does not exist or has wrong file format.") from None
 
     def parse_nondat(self, path):
         """Use this for other formats than pickle (which is already
@@ -170,13 +170,13 @@ class LEEMImg(Loadable):
         if attr in ("path", "_meta", "_data", "time_origin"):
             raise AttributeError
         try:
-            return self.meta.get(self._attrs[attr], np.nan)
+            return self.meta.get(self.attrs[attr], np.nan)
         except KeyError as e:
             raise AttributeError(f"No attribute named {attr}") from e
 
     def __setattr__(self, attr, value):
-        if attr in self._attrs:
-            self.meta[self._attrs[attr]] = value
+        if attr in self.attrs:
+            self.meta[self.attrs[attr]] = value
         else:
             super().__setattr__(attr, value)
 
@@ -199,7 +199,7 @@ class LEEMImg(Loadable):
         add_meta = dict([
             (key, self.meta[key])
             for key in self.meta
-            if key not in self._attrs.values()
+            if key not in self.attrs.values()
             and key not in ("FoV", )
         ])
         return add_meta
@@ -219,9 +219,9 @@ class LEEMImg(Loadable):
     def get_unit(self, field):
         """Unit string for the specified field."""
         try:
-            return self.meta_units[self._attrs[field]]
+            return self.meta_units[self.attrs[field]]
         except KeyError:
-            if hasattr(self, field) or self._attrs[field] in self.meta:
+            if hasattr(self, field) or self.attrs[field] in self.meta:
                 return self._fallback_units.get(field, "")
             raise ValueError(f"Unknown field {field}") from None
 
@@ -286,8 +286,8 @@ class LEEMStack(Loadable):
             print("yes")
     """
     _pickle_extension = ".lstk"
-    _unique_attrs = ("fnames", "path", "_images", "_virtual", "virtual",
-                     "_time_origin", "time_origin", "_silent")
+    unique_attrs = ("fnames", "path", "_images", "_virtual", "virtual",
+                    "_time_origin", "time_origin", "_silent")
 
     def __init__(self, path, virtual=False, nolazy=False, time_origin=-1,
                  verbose=False):
@@ -327,8 +327,9 @@ class LEEMStack(Loadable):
                     self.parse_nondat(path)
                     self._virtual = False
                 except (AttributeError, ValueError):
-                    raise ValueError(f"'{self.path}' does not exist, cannot be read"
-                                     " successfully or contains no *.dat files") from None
+                    raise FileNotFoundError(
+                        f"'{self.path}' does not exist, cannot be read"
+                        " successfully or contains no *.dat files") from None
         if nolazy:
             for img in self:
                 _ = img.meta
@@ -434,7 +435,7 @@ class LEEMStack(Loadable):
         return len(self.fnames)
 
     def __getattr__(self, attr):
-        if attr in self._unique_attrs:
+        if attr in self.unique_attrs:
             raise AttributeError
         try:
             if self.virtual:
@@ -446,7 +447,7 @@ class LEEMStack(Loadable):
             raise AttributeError(f"Unknown attribute {attr}") from None
 
     def __setattr__(self, attr, value):
-        if attr in self._unique_attrs:
+        if attr in self.unique_attrs:
             super().__setattr__(attr, value)
         elif hasattr(value, "__len__") and len(self) == len(value):
             if not self.virtual:
@@ -482,7 +483,7 @@ class LEEMStack(Loadable):
 
     @property
     def time_origin(self):
-        if self._time_origin == 0:
+        if self._time_origin <= 0:
             try:
                 self._time_origin = self._images[0].timestamp
             except (IndexError, TypeError):
