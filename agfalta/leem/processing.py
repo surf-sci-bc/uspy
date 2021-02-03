@@ -90,11 +90,11 @@ def roify(*args, **kwargs):
     """Takes either a single ROI, an iterable of ROIs or a set of
     arguments for the ROI constructor. Returns a list of ROIs (for the 
     first and latter case, this list has length 1)."""
-    if isinstance(args[0], ROI):
+    if args and isinstance(args[0], ROI):
         if kwargs or len(args) > 1:
             print("WARNING: too many arguments for roify()")
         return [args[0]]
-    elif isinstance(args[0], Iterable):
+    elif args and isinstance(args[0], Iterable):
         if all(isinstance(roi, ROI) for roi in args[0]):
             if kwargs or len(args) > 1:
                 print("WARNING: too many arguments for roify()")

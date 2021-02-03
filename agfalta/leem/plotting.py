@@ -51,7 +51,7 @@ def info(obj):
 
 def plot_img(img, ax=None, title=None,
              fields=("temperature", "pressure1", "energy", "fov"),
-             figsize=(6, 6), ticks=False, **kwargs):
+             figsize=(6, 6), ticks=False, log=False, **kwargs):
     """Plots a single LEEM image with some metadata. If ax is given,
     the image is plotted onto that axes object. Takes either
     a file name or a LEEMImg object. Fields given are shown in the
@@ -61,12 +61,18 @@ def plot_img(img, ax=None, title=None,
         title = img.path
     if title is not None and len(title) > 25:
         title = f"...{title[-25:]}"
+    if isinstance(fields, str):
+        fields = [fields]
 
     ax = _get_ax(ax, figsize=figsize, ticks=ticks, title=title)
+    if log:
+        data = np.log(img.data)
+    else:
+        data = img.data
     ax.imshow(
-        img.data,
+        data,
         cmap="gray",
-        clim=(np.nanmin(img.data), np.nanmax(img.data)),
+        clim=(np.nanmin(data), np.nanmax(data)),
         aspect=1,
         **kwargs
     )
@@ -92,10 +98,12 @@ def plot_image(*args, **kwargs):
     return plot_img(*args, **kwargs)
 
 
-def plot_mov(stack, cols=4, virtual=False, **kwargs):
+def plot_mov(stack, cols=4, virtual=False, skip=None, **kwargs):
     """Uses plot_img() to plot LEEMImges on axes objects in a grid.
     Takes either a file name, folder name or LEEMStack object."""
     stack = stackify(stack, virtual=virtual)
+    if skip:
+        stack = stack[::skip]
 
     ncols = 4
     nrows = math.ceil(len(stack) / ncols)
@@ -148,7 +156,10 @@ def print_meta(stack, fields=("energy", "temperature", "pressure1",
     """Prints metadata of a stack as a table."""
     if isinstance(fields, str):
         fields = [fields]
-    stack = stackify(stack)
+    try:
+        stack = stackify(stack)
+    except FileNotFoundError:
+        stack = stackify([imgify(stack)])
 
     table = []
     for img in stack:
