@@ -13,6 +13,13 @@ from agfalta.leem.utility import imgify, stackify
 from agfalta.utility import progress_bar
 
 
+def normalize(img_or_stack, *args, **kwargs):
+    try:
+        img = imgify(img_or_stack)
+        return normalize_image(img, *args, **kwargs)
+    except FileNotFoundError:
+        stack = stackify(img_or_stack)
+        return normalize_stack(stack, *args, **kwargs)
 
 def normalize_image(img, mcp, dark_counts=100):
     img = imgify(img)
@@ -44,12 +51,28 @@ def normalize_stack(stack, mcp, dark_counts=100):
     stack_normed.dark_counts = dark_counts
     return stack_normed
 
-def align_stack(stack, **kwargs):
+def align(stack, **kwargs):
+    """
+    Use these keyword arguments:
+    algorithm={"ecc","sift"}
+    mask_outer=fraction   (fraction of outer image to discard, default=0.2)
+    for ecc:
+        max_iter=int      (maximum iterations, default=500)
+        eps=number        (threshold to reach, default=1e-10)
+    for sift:
+        trafo={"full-affine","affine","homography"}   (default=full-affine)
+        min_matches=int    (minimum matches between two images, default=10)
+    """
     stack = stackify(stack)
     alignment = find_alignment_matrices(stack, **kwargs)
     stack = apply_alignment_matrices(stack, alignment)
     stack.alignment = alignment
-    return stack
+    return stack, alignment
+
+def align_stack(*args, **kwargs):
+    print("align_stack() is DEPRECATED, use align()")
+    return align(*args, **kwargs)
+
 
 def apply_alignment_matrices(stack, alignment):
     stack = stack.copy()

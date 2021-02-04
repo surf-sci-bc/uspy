@@ -115,6 +115,31 @@ PC_INITIALIZERS = {
 @enforce_clustershape(0)
 @timing_notification("cluster analysis")
 def cluster_analysis(X, algorithm="pc-kmeans", **params_):
+    """
+    There are different models to choose from. The following table lists them
+    and on the right, the keyword arguments that they take are listed with the
+    default values.
+    For more information look at the scikit-learn (sk), pyclustering (pc) and
+    ntltk packages online.
+
+    "sk-birch":         "threshold": 0.1, "n_clusters": 15
+    "sk-optics":        "min_samples": 0.03, "xi": 0.00005, 
+                        "min_cluster_size": 0.01, "n_jobs": 1
+    "sk-dbscan":        "eps": 0.06, "min_samples": 400
+    "sk-kmeans":        "init": "k-means++", "n_clusters": N_CLUSTERS, 
+                        "n_init": 10, "max_iter": 300
+    "sk-bgm":           "n_components": N_CLUSTERS, "n_init": 1, "max_iter": 200
+    "sk-kmeans-auto":   "init": "k-means++", "n_init": 5, "max_iter": 300
+    "pc-kmeans":        "init": "k-means++", "n_clusters": N_CLUSTERS
+    "pc-kmeans-elbow":  "init": "k-means++"
+    "pc-kmeans-iter":   "init": "random"
+    "pc-kmedoids":      "init": "k-means++", "n_clusters": N_CLUSTERS
+    "pc-xmeans":        "init": "k-means++", "n_clusters": N_CLUSTERS
+    "pc-cure":          "init": "n_clusters", "n_clusters": N_CLUSTERS
+    "pc-agglomerative": "init": "n_clusters", "n_clusters": N_CLUSTERS
+    "nltk-kmeans":      "num_means": N_CLUSTERS, "repeats": 10,
+                        "distance": nltk_cluster.euclidean_distance, 
+    """
     # pylint: disable=too-many-locals
     algorithm = algorithm.lower()
     constructor, params = copy.deepcopy(CLUSTERING_DEFAULTS[algorithm])
