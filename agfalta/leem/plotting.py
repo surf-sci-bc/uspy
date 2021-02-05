@@ -95,6 +95,7 @@ def plot_img(img, ax=None, title=None,
 
 def plot_image(*args, **kwargs):
     """Alias for agfalta.leem.plotting.plot_img()."""
+    print("plot_image() is DEPRECATED, use plot_img() instead")
     return plot_img(*args, **kwargs)
 
 
@@ -102,6 +103,8 @@ def plot_mov(stack, cols=4, virtual=True, skip=None, **kwargs):
     """Uses plot_img() to plot LEEMImges on axes objects in a grid.
     Takes either a file name, folder name or LEEMStack object."""
     stack = stackify(stack, virtual=virtual)
+    if "increment" in kwargs:
+        kwargs["skip"] = kwargs.pop("increment")
     if skip:
         stack = stack[::skip]
 
@@ -120,6 +123,7 @@ def plot_mov(stack, cols=4, virtual=True, skip=None, **kwargs):
 
 def plot_movie(*args, **kwargs):
     """Alias for agfalta.leem.plotting.plot_mov()."""
+    print("plot_movie() is DEPRECATED, use plot_mov() instead")
     return plot_mov(*args, **kwargs)
 
 
