@@ -104,7 +104,7 @@ def plot_mov(stack, cols=4, virtual=True, skip=None, **kwargs):
     Takes either a file name, folder name or LEEMStack object."""
     stack = stackify(stack, virtual=virtual)
     if "increment" in kwargs:
-        kwargs["skip"] = kwargs.pop("increment")
+        skip = kwargs.pop("increment")
     if skip:
         stack = stack[::skip]
 
