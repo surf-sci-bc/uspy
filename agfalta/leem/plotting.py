@@ -98,7 +98,7 @@ def plot_image(*args, **kwargs):
     return plot_img(*args, **kwargs)
 
 
-def plot_mov(stack, cols=4, virtual=False, skip=None, **kwargs):
+def plot_mov(stack, cols=4, virtual=True, skip=None, **kwargs):
     """Uses plot_img() to plot LEEMImges on axes objects in a grid.
     Takes either a file name, folder name or LEEMStack object."""
     stack = stackify(stack, virtual=virtual)
