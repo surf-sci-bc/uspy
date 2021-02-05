@@ -217,7 +217,7 @@ def plot_iv(*args, **kwargs):
     return plot_intensity(*args, xaxis="energy", **kwargs)
 
 
-def plot_intensity_img(stack, *args, xaxis="energy", img_idx=None, **kwargs):
+def plot_intensity_img(stack, *args, xaxis="rel_time", img_idx=None, **kwargs):
     """Does the same thing as agfalta.leem.plotting.plot_intensity() 
     but also shows an image of the stack and the ROI on it on the right.
     """
