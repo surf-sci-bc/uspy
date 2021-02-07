@@ -1,6 +1,7 @@
 import pytest
 import sqlite3
 from shutil import copyfile
+import numpy as np
 
 from agfalta.leem import ivdb
 
@@ -50,7 +51,7 @@ def test_readonly():
     with pytest.raises(AttributeError):
         ivc.materialId = 2
     with pytest.raises(AttributeError):
-        ivc.data = "Test"
+        ivc.data = np.array([[1,2],[3,4]])
     with pytest.raises(AttributeError):
         ivc.name = "Test"
     with pytest.raises(AttributeError):
@@ -76,7 +77,7 @@ def test_writable():
     
     ivc.substrateId = 3
     ivc.materialId = 2
-    ivc.data = "Test"
+    ivc.data = np.array([[1,2],[3,4]])
     ivc.name = "Test"
     ivc.tagIds = [1, 2, 3]
     ivc.comment = "Test"
@@ -84,7 +85,7 @@ def test_writable():
 
     assert ivc.substrateId == 3
     assert ivc.materialId == 2
-    assert ivc.data == "Test"
+    assert np.array_equiv(ivc.data, np.array([[1,2],[3,4]]))
     assert ivc.name == "Test"
     assert ivc.comment == "Test"
     assert ivc.source == "Test"
@@ -103,14 +104,21 @@ def test_tags():
 def test_newCurve():
     db = ivdb.iv_database(db_path)
     ivc = ivdb.iv_curve(db = db, readonly = False)
-    ivc.newCurve(name = "Test", substrateId = 1, materialId = 1, source = "Test", data = "[1,2,3]", comment = "Insert Test", tagIds=[1,2])
+    ivc.newCurve(name = "Test", substrateId = 1, materialId = 1, source = "Test", data = np.array([[1,2],[3,4]]), comment = "Insert Test", tagIds=[1,2])
     assert ivc.name == "Test"
     assert ivc.substrateId == 1
     assert ivc.materialId == 1
     assert ivc.source == "Test"
-    assert ivc.data == "[1,2,3]"
+    assert np.array_equal(ivc.data, np.array([[1,2],[3,4]]))
     assert ivc.comment == "Insert Test"
     assert ivc.tagIds == [1,2]
     assert ivc.tags == ['Bilayer', 'Multilayer']
 
+def test_np2json():
+    db = ivdb.iv_database(db_path)
+    ivc = ivdb.iv_curve(db = db, id = 1)
+    print(ivc.data)
     
+
+    assert np.array_equal(ivc.data, np.array([[1,2,3,4],[9,8,7,6]]))
+    assert ivc.np2json(ivc.data) == "[[1, 2, 3, 4], [9, 8, 7, 6]]"

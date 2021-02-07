@@ -1,4 +1,6 @@
 import sqlite3
+import json
+import numpy as np
 from contextlib import closing
 
 
@@ -69,14 +71,14 @@ class iv_curve():
  
     def __getattr__(self, attr):
         if self._id is not None:
-            if attr in ["substrateId", "materialId", "source", "data", "comment", "name"]:
+            if attr in ["substrateId", "materialId", "source", "comment", "name"]:
                 return self.db.query(f"SELECT {self.attrs[attr]} FROM Measurement WHERE Id=(?)", (self._id, ))[0][0]
+            if attr in ["data"]:
+                return self.json2np(self.db.query(f"SELECT {self.attrs[attr]} FROM Measurement WHERE Id=(?)", (self._id, ))[0][0])
             if attr in ["substrate", "material"]:
                 return self.db.query(f"SELECT Name FROM {self.attrs[attr][0]} WHERE Id=(?)", (getattr(self, self.attrs[attr][1]), ))[0][0]
             if attr in ["tagIds", "tags"]:
                 query = f"SELECT Tags. {self.attrs[attr]} FROM MeasurementTags INNER JOIN Tags ON MeasurementTags.TagsId = Tags.Id WHERE MeasurementId = (?)"
-                print("----------------------------")
-                print([self.db.query(query, (self._id, ))])
                 currentTags = self.db.query(query, (self._id, ))
                 if isinstance(currentTags,int):
                     return []
@@ -115,20 +117,10 @@ class iv_curve():
             oldtagIds = tagIds[0]
         else:
             newtagIds, oldtagIds = None, None
-        print(tagIds)
 
-        print(name,substrateId,materialId,source,data,comment)
-        print(f"Id: {self._id}")
-        # if self._id is None:
-        #     query = "INSERT INTO Measurement (Name, SubstrateId, MaterialId, Source, Data, Comment) VALUES (?,?,?,?,?,?)"
-        #     rowid = self.db.query(query, (name, substrateId, materialId, source, data, comment))
-        #     query = "SELECT Id FROM Measurement WHERE ROWID = (?)"
-        #     self._id = self.db.query(query,(rowid,))[0][0]
-        #     print(self._id)
-        #else:
-        if any([name, substrateId, materialId, source, data, comment]):
+        if any([name, substrateId, materialId, source, self.validData(data), comment]):
             query = "UPDATE Measurement SET Name = (?), SubstrateId = (?), MaterialId = (?), Source = (?), Data = (?), Comment = (?) WHERE Id = (?)"
-            self.db.query(query, (name, substrateId, materialId, source, data, comment, self._id))
+            self.db.query(query, (name, substrateId, materialId, source, self.np2json(data), comment, self._id))
         
         if tagIds is not None:
             for tagId in newtagIds:
@@ -139,21 +131,28 @@ class iv_curve():
                     query = "DELETE FROM MeasurementTags WHERE TagsId = (?) AND MeasurementId = (?)"
                     self.db.query(query, (tagId, self._id))
 
-            
-    #def newCurve(self, name = None, substrateId = None, materialId = None, source = None, data = None, comment = None):
     def newCurve(self, name, substrateId, materialId, source, data, comment = None, tagIds = None):
-        print([name, substrateId, materialId, source, data, comment])
-        if None in [name, substrateId, materialId, source, data, comment]:
+        if None in [name, substrateId, materialId, source]:
             raise AttributeError("Values must not be None")
+        elif not self.validData(data):
+            raise TypeError(f"Data must be Numpy Array. Data is of type {type(data)}")
         else:
-            # Update Measurement
+            # Insert Measurement
             query = "INSERT INTO Measurement (Name, SubstrateId, MaterialId, Source, Data, Comment) VALUES (?,?,?,?,?,?)"
-            rowid = self.db.query(query, (name, substrateId, materialId, source, data, comment))
+            rowid = self.db.query(query, (name, substrateId, materialId, source, self.np2json(data), comment))
             query = "SELECT Id FROM Measurement WHERE ROWID = (?)"
             self._id = self.db.query(query,(rowid,))[0][0]
-            print(f"New ID {self._id}")
             
             self.tagIds = tagIds
+    
+    def np2json(self,data):
+        return json.dumps(data.tolist())
+
+    def json2np(self,data):
+        return np.asarray(json.loads(data))
+
+    def validData(self,data):
+        return isinstance(data,np.ndarray)
             
 
         
@@ -168,18 +167,27 @@ class iv_curve():
     #def substrate()
 
 
-#db = iv_database('/Users/larsbuss/Projects/adminer/iv.sqlite')
-# ivc = iv_curve(db = db, id = 1, readonly=False)
-# print(ivc.tags)
-# ivc.tagIds = [1,2,3]
-# print(ivc.tags)
+# db = iv_database('/Users/larsbuss/Projects/adminer/iv.sqlite')
+# # ivc = iv_curve(db = db, id = 1, readonly=False)
+# # print(ivc.tags)
+# # ivc.tagIds = [1,2,3]
+# # print(ivc.tags)
 
-#ivc = iv_curve(db = db, readonly=False)
-#ivc.newCurve(name = "Test", substrateId = 1, materialId = 1, source = "Test", data = "[1,2,3,4,5,6,7,8,9,10]")
-
-
+# ivc = iv_curve(db = db, readonly=False)
+# data = [[1,2,3,4,5,6,7,8,9],[11,12,13,14,15,16,17,18,19]]
+# ivc.newCurve(name = "Test", substrateId = 1, materialId = 1, source = "Test", data = data, comment = "Insert Test", tagIds=[1,2])
+# string = json.dumps(data)
+# print(string)
+# print(ivc.data[1:-1])
+# print(json.loads(ivc.data[1:-1])[1])
 
 #ivc.writeToDB(name = 1, data = "[1,2,3,4,5,6,7,8,9,10]")
 
 
 #print(ivc.tags)
+
+#db = iv_database('/Users/larsbuss/Projects/adminer/iv.sqlite')
+#ivc = iv_curve(db = db, id = 1, readonly = False)#
+#peak = ivc.data
+#print(peak)
+#print(ivc.data)
