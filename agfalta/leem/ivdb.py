@@ -75,7 +75,13 @@ class iv_curve():
                 return self.db.query(f"SELECT Name FROM {self.attrs[attr][0]} WHERE Id=(?)", (getattr(self, self.attrs[attr][1]), ))[0][0]
             if attr in ["tagIds", "tags"]:
                 query = f"SELECT Tags. {self.attrs[attr]} FROM MeasurementTags INNER JOIN Tags ON MeasurementTags.TagsId = Tags.Id WHERE MeasurementId = (?)"
-                return [tag[0] for tag in self.db.query(query, (self._id, ))]
+                print("----------------------------")
+                print([self.db.query(query, (self._id, ))])
+                currentTags = self.db.query(query, (self._id, ))
+                if isinstance(currentTags,int):
+                    return []
+                else:
+                    return [tag[0] for tag in self.db.query(query, (self._id, ))]
         else:
             return None
     
@@ -95,91 +101,6 @@ class iv_curve():
             raise AttributeError("Readonly")
         else:
             self.__dict__[attr] = value
-            
-
-
-
-    ## Name of the Substrate
-    # @property
-    # def substrate(self):
-    #     if self._substrateId is not None:
-    #         return self.db.query("SELECT Name FROM Substrate WHERE Id=(?)", (self._substrateId, ))[0][0]
-    #     else:
-    #         return None
-
-    ## Name of the Material
-    # @property
-    # def material(self):
-    #     if self._materialId is not None:
-    #         return self.db.query("SELECT Name FROM Material WHERE Id=(?)", (self._materialId, ))[0][0]
-    #     else:
-    #         return None
-
-    ## Names of Tags
-    # @property
-    # def tags(self):
-    #     if self._tagIds is not None:
-    #         query = """SELECT Tags.Name FROM MeasurementTags INNER JOIN Tags ON MeasurementTags.TagsId = Tags.Id WHERE MeasurementId = (?)"""
-    #         #tags.
-    #         #tags = [tag[0] for tag in self.db.query(query, (self._id, ))]
-    #         return tags
-    #     else:
-    #         return None
-
-    # @property
-    # def substrateId(self):
-    #     return self.db.query("SELECT SubstrateId FROM Measurement WHERE Id=(?)", (self._id, ))[0][0]
-    
-    # @substrateId.setter
-    # def substrateId(self, newSubstrateId):
-    #     if not self.readonly:
-    #         self.writeToDB(substrateId = newSubstrateId)
-    #     else:
-    #         raise AttributeError("Readonly")
-
-    # @property
-    # def materialId(self):
-    #     return self.db.query("SELECT MaterialId FROM Measurement WHERE Id=(?)", (self._id, ))[0][0]
-    
-    # @materialId.setter
-    # def materialId(self, newMaterialId):
-    #     if not self.readonly:
-    #          self.writeToDB(materialId=newMaterialId)
-    #     else:
-    #         raise AttributeError("Readonly")
-    
-    # @property
-    # def data(self):
-    #     return self._data
-    
-    # @data.setter
-    # def data(self, newData):
-    #     if not self.readonly:
-    #         self._data = newData
-    #     else:
-    #         raise AttributeError("Readonly")
-
-    # @property
-    # def tagIds(self):
-    #     return self._tagIds
-    
-    # @tagIds.setter
-    # def tagIds(self, newTagIds):
-    #     if not self.readonly:
-    #         self._tagIds = newTagIds
-    #     else:
-    #         raise AttributeError("Readonly")
-
-    # @property
-    # def name(self):
-    #     return self._name
-    
-    # @name.setter
-    # def name(self, newName):
-    #     if not self.readonly:
-    #         self._name = newName
-    #     else:
-    #         raise AttributeError("Readonly")
     
     def updateDB(self, name = None, substrateId = None, materialId = None, source = None, data = None, comment = None, tagIds = None):
         
@@ -220,16 +141,20 @@ class iv_curve():
 
             
     #def newCurve(self, name = None, substrateId = None, materialId = None, source = None, data = None, comment = None):
-    def newCurve(self, **kwargs):
-        for arg in kwargs:
-            print(arg)
-
-        for arg in ["name", "substrateId", "materialId", "source", "data"]:
-            #print(arg)
-            if arg not in kwargs:
-                raise AttributeError
-        if None in [name, substrateId, materialId, source, data]:
+    def newCurve(self, name, substrateId, materialId, source, data, comment = None, tagIds = None):
+        print([name, substrateId, materialId, source, data, comment])
+        if None in [name, substrateId, materialId, source, data, comment]:
             raise AttributeError("Values must not be None")
+        else:
+            # Update Measurement
+            query = "INSERT INTO Measurement (Name, SubstrateId, MaterialId, Source, Data, Comment) VALUES (?,?,?,?,?,?)"
+            rowid = self.db.query(query, (name, substrateId, materialId, source, data, comment))
+            query = "SELECT Id FROM Measurement WHERE ROWID = (?)"
+            self._id = self.db.query(query,(rowid,))[0][0]
+            print(f"New ID {self._id}")
+            
+            self.tagIds = tagIds
+            
 
         
 
@@ -243,13 +168,14 @@ class iv_curve():
     #def substrate()
 
 
-db = iv_database('/Users/larsbuss/Projects/adminer/iv.sqlite')
-ivc = iv_curve(db = db, id = 1, readonly=False)
-print(ivc.tags)
-ivc.tagIds = [1,2,3]
-print(ivc.tags)
+#db = iv_database('/Users/larsbuss/Projects/adminer/iv.sqlite')
+# ivc = iv_curve(db = db, id = 1, readonly=False)
+# print(ivc.tags)
+# ivc.tagIds = [1,2,3]
+# print(ivc.tags)
 
-# ivc.newCurve(name = "Test")
+#ivc = iv_curve(db = db, readonly=False)
+#ivc.newCurve(name = "Test", substrateId = 1, materialId = 1, source = "Test", data = "[1,2,3,4,5,6,7,8,9,10]")
 
 
 

@@ -100,4 +100,17 @@ def test_tags():
     ivc.tagIds = [2,4]
     assert ivc.tags == ['Multilayer', 'Intercalation']
 
+def test_newCurve():
+    db = ivdb.iv_database(db_path)
+    ivc = ivdb.iv_curve(db = db, readonly = False)
+    ivc.newCurve(name = "Test", substrateId = 1, materialId = 1, source = "Test", data = "[1,2,3]", comment = "Insert Test", tagIds=[1,2])
+    assert ivc.name == "Test"
+    assert ivc.substrateId == 1
+    assert ivc.materialId == 1
+    assert ivc.source == "Test"
+    assert ivc.data == "[1,2,3]"
+    assert ivc.comment == "Insert Test"
+    assert ivc.tagIds == [1,2]
+    assert ivc.tags == ['Bilayer', 'Multilayer']
+
     
