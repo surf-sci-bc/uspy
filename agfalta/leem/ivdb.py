@@ -1,10 +1,16 @@
+# pylint: disable=attribute-defined-outside-init
+# pylint: disable=missing-docstring
+# pylint: disable=too-many-arguments
+# pylint: disable=line-too-long
+
+from contextlib import closing
+
 import sqlite3
 import json
 import numpy as np
-from contextlib import closing
 
 
-class iv_database():
+class IVDatabase():
     def __init__(self, db_file):
         self.db_file = db_file
         self.conn = None
@@ -24,170 +30,117 @@ class iv_database():
             else:
                 return result
 
-class iv_curve():
+class IVCurve():
 
     """
     Substrate, Name, Adlayer, Measurement
     """
 
-    def __init__(self, db, id = None, readonly = True):
+    def __init__(self, db, id_ = None, readonly = True):
         self.readonly = readonly
         self.db = db
-        self._id = id
-        #if id is not None:
-            #self._id = id
-            #self.db = db
-            #self.c = self.db.conn.cursor()
+        self._id = id_
 
-            ## Get Information
-            # self.c.execute("""SELECT Measurement.Name, Substrate.Name, Material.Name, Measurement.Data, Measurement.Comment 
-            #                 FROM Measurement INNER JOIN Substrate ON Measurement.Substrate_Id = Substrate.Id 
-            #                 INNER JOIN Material ON Measurement.Material_Id = Material.Id WHERE Measurement.Id=(?)""", (self._id,))
-            #query = """SELECT Name, SubstrateId, MaterialId, Data, Comment, Source FROM Measurement WHERE Id = (?) """
-            #(self._name, self._substrateId, self._materialId, self._data, self._comment, self._source) = self.db.query(query, (self._id,))[0]
-
-            ## Get Tags
-            #query = """SELECT Tags.Name FROM MeasurementTags INNER JOIN Tags ON MeasurementTags.TagsId = Tags.Id WHERE MeasurementId = (?)"""
-            #query = """SELECT Tags.Id FROM MeasurementTags INNER JOIN Tags ON MeasurementTags.TagsId = Tags.Id WHERE MeasurementId = (?)"""
-            #self._tagIds = self.db.query(query, (self._id,))
-        # if id is None:
-        #     for arg in kwargs:
-        #         print(arg)
-            #self.newCurve(kwargs)
-            #self._id, self._name, self._substrateId, self._materialId, self._data, self._comment, self._tagIds = None, None, None, None, None, None, None
-    
     attrs = { #var name : db name
-        "substrateId": "SubstrateId", # Attributes from Measurement
-        "materialId": "MaterialId",
+        "substrate_id": "SubstrateId", # Attributes from Measurement
+        "material_id": "MaterialId",
         "name": "Name",
         "source": "Source",
         "data": "Data",
         "comment": "Comment",
-        "substrate": ["Substrate", "substrateId"],
-        "material": ["Material", "materialId"],
-        "tagIds": "Id",
+        "substrate": ["Substrate", "substrate_id"],
+        "material": ["Material", "material_id"],
+        "tag_ids": "Id",
         "tags": "Name"
     }
- 
+
     def __getattr__(self, attr):
         if self._id is not None:
-            if attr in ["substrateId", "materialId", "source", "comment", "name"]:
-                return self.db.query(f"SELECT {self.attrs[attr]} FROM Measurement WHERE Id=(?)", (self._id, ))[0][0]
+            if attr in ["substrate_id", "material_id", "source", "comment", "name"]:
+                return self.db.query(
+                    f"SELECT {self.attrs[attr]} FROM Measurement WHERE Id=(?)",
+                    (self._id, ))[0][0]
             if attr in ["data"]:
-                return self.json2np(self.db.query(f"SELECT {self.attrs[attr]} FROM Measurement WHERE Id=(?)", (self._id, ))[0][0])
+                return self.json2np(self.db.query(
+                    f"SELECT {self.attrs[attr]} FROM Measurement WHERE Id=(?)",
+                    (self._id, ))[0][0])
             if attr in ["substrate", "material"]:
-                return self.db.query(f"SELECT Name FROM {self.attrs[attr][0]} WHERE Id=(?)", (getattr(self, self.attrs[attr][1]), ))[0][0]
-            if attr in ["tagIds", "tags"]:
-                query = f"SELECT Tags. {self.attrs[attr]} FROM MeasurementTags INNER JOIN Tags ON MeasurementTags.TagsId = Tags.Id WHERE MeasurementId = (?)"
-                currentTags = self.db.query(query, (self._id, ))
-                if isinstance(currentTags,int):
+                return self.db.query(
+                    f"SELECT Name FROM {self.attrs[attr][0]} WHERE Id=(?)",
+                    (getattr(self, self.attrs[attr][1]), ))[0][0]
+            if attr in ["tag_ids", "tags"]:
+                query = f"SELECT Tags. {self.attrs[attr]} FROM MeasurementTags " \
+                + "INNER JOIN Tags ON MeasurementTags.TagsId = Tags.Id WHERE MeasurementId = (?)"""
+                current_tags = self.db.query(query, (self._id, ))
+                if isinstance(current_tags,int):
                     return []
-                else:
-                    return [tag[0] for tag in self.db.query(query, (self._id, ))]
-        else:
-            return None
-    
+                return [tag[0] for tag in self.db.query(query, (self._id, ))]
+
+        return None
+
     def __setattr__(self, attr, value):
 
-        if attr in ("substrateId", "materialId", "source", "data", "comment", "name"):
+        if attr in ("substrate_id", "material_id", "source", "data", "comment", "name"):
             if not self.readonly:
-                self.updateDB(**{attr: value})
+                self.update_db(**{attr: value})
             else:
                 raise AttributeError("Readonly")
-        elif attr in ("tagIds",):
+        elif attr in ("tag_ids",):
             if not self.readonly:
-                self.updateDB(**{attr: (getattr(self, attr), value)})
+                self.update_db(**{attr: (getattr(self, attr), value)})
             else:
                 raise AttributeError("Readonly")
         elif attr in ("substrate", "material", "tags"):
             raise AttributeError("Readonly")
         else:
             self.__dict__[attr] = value
-    
-    def updateDB(self, name = None, substrateId = None, materialId = None, source = None, data = None, comment = None, tagIds = None):
-        
+
+
+    def update_db(self, name = None, substrate_id = None, material_id = None, source = None, data = None, comment = None, tag_ids = None):
+
         name = [self.name, name][name is not None]
-        substrateId = [self.substrateId, substrateId][substrateId is not None]
-        materialId = [self.materialId, materialId][materialId is not None]
+        substrate_id = [self.substrate_id, substrate_id][substrate_id is not None]
+        material_id = [self.material_id, material_id][material_id is not None]
         source = [self.source, source][source is not None]
         data = [self.data, data][data is not None]
         comment = [self.comment, comment][comment is not None]
-        if tagIds is not None:
-            newtagIds = tagIds[1]
-            oldtagIds = tagIds[0]
+        if tag_ids is not None:
+            new_tag_ids = tag_ids[1]
+            old_tag_ids = tag_ids[0]
         else:
-            newtagIds, oldtagIds = None, None
+            new_tag_ids, old_tag_ids = None, None
 
-        if any([name, substrateId, materialId, source, self.validData(data), comment]):
+        if any([name, substrate_id, material_id, source, self.valid_data(data), comment]):
             query = "UPDATE Measurement SET Name = (?), SubstrateId = (?), MaterialId = (?), Source = (?), Data = (?), Comment = (?) WHERE Id = (?)"
-            self.db.query(query, (name, substrateId, materialId, source, self.np2json(data), comment, self._id))
-        
-        if tagIds is not None:
-            for tagId in newtagIds:
-                query = "INSERT OR IGNORE INTO MeasurementTags (TagsId, MeasurementId) VALUES (?, ?)"
-                self.db.query(query, (tagId, self._id))
-            for tagId in oldtagIds:
-                if tagId not in newtagIds:
-                    query = "DELETE FROM MeasurementTags WHERE TagsId = (?) AND MeasurementId = (?)"
-                    self.db.query(query, (tagId, self._id))
+            self.db.query(query, (name, substrate_id, material_id, source, self.np2json(data), comment, self._id))
 
-    def newCurve(self, name, substrateId, materialId, source, data, comment = None, tagIds = None):
-        if None in [name, substrateId, materialId, source]:
+        if tag_ids is not None:
+            for tag_id in new_tag_ids:
+                query = "INSERT OR IGNORE INTO MeasurementTags (TagsId, MeasurementId) VALUES (?, ?)"
+                self.db.query(query, (tag_id, self._id))
+            for tag_id in old_tag_ids:
+                if tag_id not in new_tag_ids:
+                    query = "DELETE FROM MeasurementTags WHERE TagsId = (?) AND MeasurementId = (?)"
+                    self.db.query(query, (tag_id, self._id))
+
+    def new_curve(self, name, substrate_id, material_id, source, data, comment = None, tag_ids = None):
+        if None in [name, substrate_id, material_id, source]:
             raise AttributeError("Values must not be None")
-        elif not self.validData(data):
+        elif not self.valid_data(data):
             raise TypeError(f"Data must be Numpy Array. Data is of type {type(data)}")
         else:
             # Insert Measurement
             query = "INSERT INTO Measurement (Name, SubstrateId, MaterialId, Source, Data, Comment) VALUES (?,?,?,?,?,?)"
-            rowid = self.db.query(query, (name, substrateId, materialId, source, self.np2json(data), comment))
+            rowid = self.db.query(query, (name, substrate_id, material_id, source, self.np2json(data), comment))
             query = "SELECT Id FROM Measurement WHERE ROWID = (?)"
             self._id = self.db.query(query,(rowid,))[0][0]
-            
-            self.tagIds = tagIds
-    
-    def np2json(self,data):
+            self.tag_ids = tag_ids
+
+    def np2json(self, data):
         return json.dumps(data.tolist())
 
-    def json2np(self,data):
+    def json2np(self, data):
         return np.asarray(json.loads(data))
 
-    def validData(self,data):
-        return isinstance(data,np.ndarray)
-            
-
-        
-
-
-
-
-    
-
-    
-    #@substrate.setter
-    #def substrate()
-
-
-# db = iv_database('/Users/larsbuss/Projects/adminer/iv.sqlite')
-# # ivc = iv_curve(db = db, id = 1, readonly=False)
-# # print(ivc.tags)
-# # ivc.tagIds = [1,2,3]
-# # print(ivc.tags)
-
-# ivc = iv_curve(db = db, readonly=False)
-# data = [[1,2,3,4,5,6,7,8,9],[11,12,13,14,15,16,17,18,19]]
-# ivc.newCurve(name = "Test", substrateId = 1, materialId = 1, source = "Test", data = data, comment = "Insert Test", tagIds=[1,2])
-# string = json.dumps(data)
-# print(string)
-# print(ivc.data[1:-1])
-# print(json.loads(ivc.data[1:-1])[1])
-
-#ivc.writeToDB(name = 1, data = "[1,2,3,4,5,6,7,8,9,10]")
-
-
-#print(ivc.tags)
-
-#db = iv_database('/Users/larsbuss/Projects/adminer/iv.sqlite')
-#ivc = iv_curve(db = db, id = 1, readonly = False)#
-#peak = ivc.data
-#print(peak)
-#print(ivc.data)
+    def valid_data(self, data):
+        return isinstance(data, np.ndarray)
