@@ -81,11 +81,18 @@ class iv_curve():
     
     def __setattr__(self, attr, value):
 
-        if attr in ["substrateId", "materialId", "source", "data", "comment", "name"]:
+        if attr in ("substrateId", "materialId", "source", "data", "comment", "name"):
             if not self.readonly:
                 self.updateDB(**{attr: value})
             else:
                 raise AttributeError("Readonly")
+        elif attr in ("tagIds",):
+            if not self.readonly:
+                self.updateDB(**{attr: (getattr(self, attr), value)})
+            else:
+                raise AttributeError("Readonly")
+        elif attr in ("substrate", "material", "tags"):
+            raise AttributeError("Readonly")
         else:
             self.__dict__[attr] = value
             
@@ -174,27 +181,44 @@ class iv_curve():
     #     else:
     #         raise AttributeError("Readonly")
     
-    def updateDB(self, name = None, substrateId = None, materialId = None, source = None, data = None, comment = None):
+    def updateDB(self, name = None, substrateId = None, materialId = None, source = None, data = None, comment = None, tagIds = None):
         
-        name = [self._name, name][name is not None]
-        substrateId = [self._substrateId, substrateId][substrateId is not None]
-        materialId = [self._materialId, materialId][materialId is not None]
-        source = [self._source, source][source is not None]
-        data = [self._data, data][data is not None]
-        comment = [self._comment, comment][comment is not None]
+        name = [self.name, name][name is not None]
+        substrateId = [self.substrateId, substrateId][substrateId is not None]
+        materialId = [self.materialId, materialId][materialId is not None]
+        source = [self.source, source][source is not None]
+        data = [self.data, data][data is not None]
+        comment = [self.comment, comment][comment is not None]
+        if tagIds is not None:
+            newtagIds = tagIds[1]
+            oldtagIds = tagIds[0]
+        else:
+            newtagIds, oldtagIds = None, None
+        print(tagIds)
 
         print(name,substrateId,materialId,source,data,comment)
         print(f"Id: {self._id}")
-        if self._id is None:
-            query = "INSERT INTO Measurement (Name, SubstrateId, MaterialId, Source, Data, Comment) VALUES (?,?,?,?,?,?)"
-            rowid = db.query(query, (name, substrateId, materialId, source, data, comment))
-            query = "SELECT Id FROM Measurement WHERE ROWID = (?)"
-            self._id = db.query(query,(rowid,))[0][0]
-            print(self._id)
-        else:
+        # if self._id is None:
+        #     query = "INSERT INTO Measurement (Name, SubstrateId, MaterialId, Source, Data, Comment) VALUES (?,?,?,?,?,?)"
+        #     rowid = self.db.query(query, (name, substrateId, materialId, source, data, comment))
+        #     query = "SELECT Id FROM Measurement WHERE ROWID = (?)"
+        #     self._id = self.db.query(query,(rowid,))[0][0]
+        #     print(self._id)
+        #else:
+        if any([name, substrateId, materialId, source, data, comment]):
             query = "UPDATE Measurement SET Name = (?), SubstrateId = (?), MaterialId = (?), Source = (?), Data = (?), Comment = (?) WHERE Id = (?)"
-            db.query(query, (name, substrateId, materialId, source, data, comment, self._id))
-    
+            self.db.query(query, (name, substrateId, materialId, source, data, comment, self._id))
+        
+        if tagIds is not None:
+            for tagId in newtagIds:
+                query = "INSERT OR IGNORE INTO MeasurementTags (TagsId, MeasurementId) VALUES (?, ?)"
+                self.db.query(query, (tagId, self._id))
+            for tagId in oldtagIds:
+                if tagId not in newtagIds:
+                    query = "DELETE FROM MeasurementTags WHERE TagsId = (?) AND MeasurementId = (?)"
+                    self.db.query(query, (tagId, self._id))
+
+            
     #def newCurve(self, name = None, substrateId = None, materialId = None, source = None, data = None, comment = None):
     def newCurve(self, **kwargs):
         for arg in kwargs:
@@ -220,9 +244,12 @@ class iv_curve():
 
 
 db = iv_database('/Users/larsbuss/Projects/adminer/iv.sqlite')
-ivc = iv_curve(db = db)
+ivc = iv_curve(db = db, id = 1, readonly=False)
+print(ivc.tags)
+ivc.tagIds = [1,2,3]
+print(ivc.tags)
 
-ivc.newCurve(name = "Test")
+# ivc.newCurve(name = "Test")
 
 
 
