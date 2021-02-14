@@ -27,6 +27,7 @@ setup(
         "pandas",
         "scikit-learn",
         "scikit-image",
+        "scikit-video",
         "pyclustering",
         "nltk",
         "opencv-python<4.0",
