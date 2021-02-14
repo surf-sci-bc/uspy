@@ -3,12 +3,13 @@
 # pylint: disable=invalid-name
 
 import copy
-from collections.abc import Iterable
+from collections import abc
 
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.patches
 
-from agfalta.leem.utility import stackify, imgify
+from agfalta.leem.utility import stackify
 
 
 def calculate_dose(stack, pressurefield="pressure1", approx=1):
@@ -31,13 +32,20 @@ class ROI:
         "rectangle": {"width": 50, "height": 50},
         "ellipse": {"xradius": 10, "yradius": 20}
     }
-    def __init__(self, x0, y0, type_="circle", **kwargs):
+    def __init__(self, x0, y0, type_=None, **kwargs):
         self.position = x0, y0
         self._img_shape = None
         self._mask = None
-        self._type = type_
-        assert self._type in self._defaults
-        self.params = copy.deepcopy(self._defaults[self._type])
+        if type_ is None:
+            for t, props in self._defaults.items():
+                if any(k in kwargs for k in props):
+                    type_ = t
+                    break
+            else:
+                type_ = "circle"
+        self.type_ = type_
+        assert self.type_ in self._defaults
+        self.params = copy.deepcopy(self._defaults[self.type_])
         self.params.update(kwargs)
 
     def apply(self, img_array):
@@ -50,13 +58,13 @@ class ROI:
         x, y = np.arange(0, img_width), np.arange(0, img_height)
         x, y = x[:, np.newaxis], y[np.newaxis, :]
         x0, y0 = self.position
-        if self._type == "circle":
+        if self.type_ == "circle":
             r = self.params["radius"]
             mask = (x - x0)**2 + (y - y0)**2 < r
-        elif self._type == "ellipse":
+        elif self.type_ == "ellipse":
             xr, yr = self.params["xradius"], self.params["yradius"]
             mask = ((x - x0) / xr)**2 + ((y - y0) / yr)**2 < 1
-        elif self._type == "rectangle":
+        elif self.type_ == "rectangle":
             w, h = self.params["width"], self.params["height"]
             mask = (x >= x0) & (x < x0 + w) & (y >= y0) & (y < y0 + h)
         else:
@@ -64,18 +72,18 @@ class ROI:
         return mask
 
     def artist(self, color="k"):
-        if self._type == "circle":
+        if self.type_ == "circle":
             art = plt.Circle(
-                self.position, self.params["radius"], 
+                self.position, self.params["radius"],
                 color=color, fill=False
             )
-        elif self._type == "ellipse":
-            art = plt.Ellipse(
-                self.position, 
+        elif self.type_ == "ellipse":
+            art = matplotlib.patches.Ellipse(
+                self.position,
                 self.params["xradius"] * 2, self.params["yradius"] * 2,
                 color=color, fill=False
             )
-        elif self._type == "rectangle":
+        elif self.type_ == "rectangle":
             art = plt.Rectangle(
                 self.position, self.params["width"], self.params["height"],
                 color=color, fill=False
@@ -83,18 +91,18 @@ class ROI:
         else:
             raise ValueError("Unknown ROI type")
         return art
-        
+
 
 
 def roify(*args, **kwargs):
     """Takes either a single ROI, an iterable of ROIs or a set of
-    arguments for the ROI constructor. Returns a list of ROIs (for the 
+    arguments for the ROI constructor. Returns a list of ROIs (for the
     first and latter case, this list has length 1)."""
     if args and isinstance(args[0], ROI):
         if kwargs or len(args) > 1:
             print("WARNING: too many arguments for roify()")
         return [args[0]]
-    elif args and isinstance(args[0], Iterable):
+    elif args and isinstance(args[0], abc.Iterable):
         if all(isinstance(roi, ROI) for roi in args[0]):
             if kwargs or len(args) > 1:
                 print("WARNING: too many arguments for roify()")

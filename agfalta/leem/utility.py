@@ -19,6 +19,8 @@ def imgify(img):
 def stackify(stack, virtual=False):
     if isinstance(stack, LEEMStack):
         return stack
+    if isinstance(stack, LEEMImg):
+        raise ValueError("LEEMStack expected, but got LEEMImg")
     return LEEMStack(stack, virtual=virtual)
 
 def timing_notification(title=""):

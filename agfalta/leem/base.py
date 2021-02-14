@@ -131,7 +131,7 @@ class LEEMImg(Loadable):
             try:
                 self.parse_nondat(path)
             except (ValueError, TypeError, AttributeError):
-                raise FileNotFoundError(f"{path} does not exist or has wrong file format.") from None
+                raise FileNotFoundError(f"{path} does not exist or can't read.") from None
 
     def parse_nondat(self, path):
         """Use this for other formats than pickle (which is already
@@ -230,6 +230,12 @@ class LEEMImg(Loadable):
         value = getattr(self, field)
         if value == np.nan:
             return "NaN"
+        if field == "rel_time":
+            return f"{value:5.0f} {self.get_unit(field)}"
+        if field == "energy":
+            return f"{value:4.1f} {self.get_unit(field)}"
+        if "pressure" in field:
+            return f"{value:.2g} {self.get_unit(field)}"
         if not isinstance(value, (int, float)):
             return f"{value} {self.get_unit(field)}".strip()
         return f"{value:.5g} {self.get_unit(field)}".strip()
