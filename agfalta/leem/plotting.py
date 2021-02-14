@@ -3,18 +3,20 @@
 # pylint: disable=missing-docstring
 # pylint: disable=too-many-arguments
 
-from os.path import basename
+import os.path
 import itertools
+from collections import abc
 
 import math
 import numpy as np
-import matplotlib.pyplot as plt
+import cv2
+from matplotlib import pyplot as plt
 import pandas as pd
-# import ipywidgets as widgets
-from IPython.display import display
+import skvideo.io
+from IPython.display import display, Video
 
 from agfalta.leem.utility import stackify, imgify
-from agfalta.leem.processing import ROI, roify, get_max_variance_idx
+from agfalta.leem.processing import roify, get_max_variance_idx
 
 
 
@@ -51,7 +53,7 @@ def info(obj):
 
 def plot_img(img, ax=None, title=None,
              fields=("temperature", "pressure1", "energy", "fov"),
-             figsize=(6, 6), ticks=False, log=False, **kwargs):
+             figsize=None, ticks=False, log=False, **kwargs):
     """Plots a single LEEM image with some metadata. If ax is given,
     the image is plotted onto that axes object. Takes either
     a file name or a LEEMImg object. Fields given are shown in the
@@ -59,7 +61,7 @@ def plot_img(img, ax=None, title=None,
     img = imgify(img)
     if title is None and img.path != "NO_PATH":
         title = img.path
-    if title is not None and len(title) > 25:
+    if title and len(title) > 25:
         title = f"...{title[-25:]}"
     if isinstance(fields, str):
         fields = [fields]
@@ -86,9 +88,9 @@ def plot_img(img, ax=None, title=None,
         if field is None:
             continue
         ax.text(
-            x=IMG_POS[i][2], y=IMG_POS[i][3], 
+            x=_MPL_IMG_POS[i][2], y=_MPL_IMG_POS[i][3],
             s=img.get_field_string(field),
-            va=IMG_POS[i][0], ha=IMG_POS[i][1],
+            va=_MPL_IMG_POS[i][0], ha=_MPL_IMG_POS[i][1],
             transform=ax.transAxes, color="yellow", fontsize=14,
         )
     return ax
@@ -99,7 +101,109 @@ def plot_image(*args, **kwargs):
     return plot_img(*args, **kwargs)
 
 
-def plot_mov(stack, cols=4, virtual=True, skip=None, **kwargs):
+
+def make_video(stack, ofile, skip=None, fps=24,
+               overwrite=True, scale=0.5, contrast="auto",
+               fields=None, log=False, **kwargs):
+    """
+    Save a movie as an mp4 file and display it.
+    * ofile sets the output file, which should have an .mp4 extension. It
+      can also be in a subfolder, for example like this:
+      ofile="subfolder/movie.mp4"
+    * fields works the same way as for plot_img
+    * contrast can either be "auto" (each image is autoscaled),
+      or "maximum" where everything is scaled according to the most extreme
+      intensity values (may be slow)
+      or an integer, in which case the min/max values are taken from that
+      image number in the stack
+      or two numbers (as list or tuple) that are the min/max contrast values
+    * fps sets the fps of the output video (i.e. speed)
+    * scale will make the video larger/smaller (default scale=0.5 will
+      produce half-sized videos)
+    * skip=n will use only every n-th frame
+    * if overwrite is set to False, make_video will be faster and only
+      display the video file that is given but not update it
+    """
+    if not overwrite and os.path.isfile(ofile):
+        return Video(ofile)
+    # make input sane
+    stack = stackify(stack, virtual=True)
+    if "increment" in kwargs:
+        skip = kwargs.pop("increment")
+    if skip:
+        stack = stack[::skip]
+    if isinstance(fields, str):
+        fields = [fields]
+
+    # find the contrast values
+    if contrast == "auto":
+        print("WARNING: The video is on auto contrast.")
+    elif contrast == "maximum":
+        c0, c1 = 2e16, 0
+        for img in stack:
+            c0 = min(c0, np.nanmin(img.data))
+            c1 = max(c1, np.nanmax(img.data))
+        contrast = sorted((c0, c1))
+    elif isinstance(contrast, int):
+        c0 = np.nanmin(stack[contrast].data)
+        c1 = np.nanmax(stack[contrast].data)
+        contrast = sorted((c0, c1))
+    elif not isinstance(contrast, abc.Iterable) and not len(contrast) == 2:
+        raise ValueError(f"Invalid '{contrast=}'")
+    if contrast != "auto" and log:
+        c0 = np.log(contrast[0])
+        c1 = np.log(contrast[1])
+        contrast = sorted((c0, c1))
+
+    # set up ffmpeg
+    ffmpeg_indict = {"-r": str(fps)}
+    ffmpeg_outdict = {
+        "-vf": f"scale=iw*{scale}:-1",
+        "-vcodec": "libx264",
+        "-pix_fmt": "yuv420p",
+        "-profile:v": "high",
+    }
+    writer = skvideo.io.FFmpegWriter(
+        ofile, inputdict=ffmpeg_indict, outputdict=ffmpeg_outdict
+    )
+
+    # loop through the images
+    height, width = stack[0].data.shape
+    for img in stack:
+        data = img.data
+        if log:
+            data = np.log(data)
+        # set contrast
+        if contrast == "auto":
+            data = np.nan_to_num(data)
+            data = cv2.normalize(
+                data, np.ones_like(data, dtype=np.uint8),
+                0, 255, norm_type=cv2.NORM_MINMAX
+            )
+        else:
+            data = (data - contrast[0]) / (contrast[1] - contrast[0]) * 255
+            data = np.clip(data, 0, 255).astype(np.uint8)
+        # write metadata
+        if fields:
+            data = cv2.cvtColor(data, cv2.COLOR_GRAY2RGB)
+            for i, field in enumerate(fields):
+                text = img.get_field_string(field).encode("ascii", errors="ignore").decode()
+                for pos, char in enumerate(text):
+                    xy = _CV2_IMG_POS(i, height, width, text, pos=pos)
+                    data = cv2.putText(
+                        data, char,
+                        org=xy, fontFace=cv2.FONT_HERSHEY_SIMPLEX,
+                        fontScale=1, color=(255, 255, 0), thickness=2,
+                        lineType=cv2.LINE_AA
+                    )
+        writer.writeFrame(data)
+    writer.close()
+
+    # return display in jupyter
+    return Video(ofile)
+
+
+def plot_mov(stack, ncols=4, virtual=True, skip=None, **kwargs):
     """Uses plot_img() to plot LEEMImges on axes objects in a grid.
     Takes either a file name, folder name or LEEMStack object."""
     stack = stackify(stack, virtual=virtual)
@@ -108,7 +212,6 @@ def plot_mov(stack, cols=4, virtual=True, skip=None, **kwargs):
     if skip:
         stack = stack[::skip]
 
-    ncols = 4
     nrows = math.ceil(len(stack) / ncols)
     fig, axes = plt.subplots(
         ncols=ncols, nrows=nrows, figsize=(ncols * 5, nrows * 5)
@@ -167,7 +270,7 @@ def print_meta(stack, fields=("energy", "temperature", "pressure1",
 
     table = []
     for img in stack:
-        row = [basename(img.path)]
+        row = [os.path.basename(img.path)]
         for field in fields:
             row.append(img.get_field_string(field))
         table.append(row)
@@ -195,20 +298,15 @@ def plot_intensity(stack, *args, xaxis="energy", ax=None, **kwargs):
     """
     stack = stackify(stack)
     rois = roify(*args, **kwargs)
-    if len(rois) > 1:
-        raise ValueError("Cant handle multiple ROIs")
-    roi = rois[0]
-    #TODO add support for multiple ROIs
-
-    x = getattr(stack, xaxis)
-
-    intensity = np.zeros(len(stack))
-    for i, img in enumerate(stack):
-        for roi in rois:
-            intensity[i] = np.mean(roi.apply(img.data))
 
     ax = _get_ax(ax, xlabel=xaxis, ylabel="Intensity in a.u.")
-    ax.plot(x, intensity)
+    x = getattr(stack, xaxis)
+    for roi in rois:
+        intensity = np.zeros(len(stack))
+        for i, img in enumerate(stack):
+            intensity[i] = np.mean(roi.apply(img.data))
+        ax.plot(x, intensity)
+
     return ax, roi
 
 def plot_iv(*args, **kwargs):
@@ -218,12 +316,12 @@ def plot_iv(*args, **kwargs):
 
 
 def plot_intensity_img(stack, *args, xaxis="rel_time", img_idx=None, **kwargs):
-    """Does the same thing as agfalta.leem.plotting.plot_intensity() 
+    """Does the same thing as agfalta.leem.plotting.plot_intensity()
     but also shows an image of the stack and the ROI on it on the right.
     """
     stack = stackify(stack)
     rois = roify(*args, **kwargs)
-    
+
     _, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
 
     if img_idx is None:
@@ -243,10 +341,19 @@ def plot_iv_img(*args, **kwargs):
     return plot_intensity_img(*args, xaxis="energy", **kwargs)
 
 
+def plot_rois(img, *args, **kwargs):
+    img = imgify(img)
+    rois = roify(*args, **kwargs)
+    ax = plot_img(img, ticks=True)
+
+    colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    for i, roi in enumerate(rois):
+        ax.add_artist(roi.artist(colors[i]))
+
 
 # Utility:
 
-IMG_POS = {    # (verticalalignment, horizontalalignment, x, y)
+_MPL_IMG_POS = {    # (verticalalignment, horizontalalignment, x, y)
     0: ("top", "left", 0.01, 1),
     1: ("top", "right", 1, 1),
     2: ("bottom", "left", 0.01, 0.01),
@@ -254,10 +361,31 @@ IMG_POS = {    # (verticalalignment, horizontalalignment, x, y)
 }
 
 
+_CV2_CONTRASTS = {
+    "auto": cv2.NORM_MINMAX,
+}
+def _CV2_IMG_POS(idx, height, width, text="", pos=0):
+    """Applies only for FONT_HERSHEY_SIMPLEX (~20px wide chars)"""
+    margin = 0.01
+    charwidth, charheight = 20, 23
+    x = width
+    y = height
+    if idx in (0, 2):
+        x *= margin
+    if idx in (1, 3):
+        x = x * (1 - margin) - len(text) * charwidth
+    x += pos * charwidth
+    if idx in (0, 1):
+        y = y * margin + charheight
+    if idx in (2, 3):
+        y = y * (1 - margin)
+    return int(x), int(y)
+
+
 def _get_ax(ax, **kwargs):
     """Helper for preparing an axis object"""
     if ax is None:
-        _, ax = plt.subplots(figsize=kwargs.get("figsize", (6.4, 4.8)))
+        _, ax = plt.subplots(figsize=kwargs.get("figsize", None))
     if not kwargs.get("ticks", True):
         ax.set_xticks([])
         ax.set_yticks([])

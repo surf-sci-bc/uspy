@@ -17,7 +17,9 @@ from agfalta import LEEMDIR
 
 from agfalta.leem.base import LEEMImg, LEEMStack
 from agfalta.leem.plotting import (
-    plot_img, plot_mov, plot_movie, plot_meta, print_meta,
-    plot_intensity, plot_iv, plot_intensity_img, plot_iv_img
+    plot_img,
+    plot_mov, plot_movie, plot_meta, make_video,
+    print_meta,
+    plot_intensity, plot_iv, plot_intensity_img, plot_iv_img, plot_rois
 )
-from agfalta.leem.processing import calculate_dose
+from agfalta.leem.processing import calculate_dose, ROI

@@ -7,4 +7,6 @@
 *.ipynb_checkpoints
 
 venv
+dev
+.vscode
 agfalta/dev
