@@ -150,10 +150,12 @@ def make_video(stack, ofile, skip=None, fps=24,
         contrast = sorted((c0, c1))
     elif not isinstance(contrast, abc.Iterable) and not len(contrast) == 2:
         raise ValueError(f"Invalid '{contrast=}'")
+
     if contrast != "auto" and log:
-        c0 = np.log(contrast[0])
-        c1 = np.log(contrast[1])
+        c0 = min(np.log(contrast[0]), 1)
+        c1 = min(np.log(contrast[1]), 1)
         contrast = sorted((c0, c1))
+        print(f"Contrast set to {c0} -- {c1}")
 
     # set up ffmpeg
     ffmpeg_indict = {"-r": str(fps)}
@@ -181,7 +183,7 @@ def make_video(stack, ofile, skip=None, fps=24,
                 0, 255, norm_type=cv2.NORM_MINMAX
             )
         else:
-            data = (data - contrast[0]) / (contrast[1] - contrast[0]) * 255
+            data = (data - contrast[0]) / min((contrast[1] - contrast[0]), 1) * 255
             data = np.clip(data, 0, 255).astype(np.uint8)
         # write metadata
         if fields:
