@@ -74,18 +74,18 @@ class ROI:
     def artist(self, color="k"):
         if self.type_ == "circle":
             art = plt.Circle(
-                self.position, self.params["radius"],
+                self.position[::-1], self.params["radius"],
                 color=color, fill=False
             )
         elif self.type_ == "ellipse":
             art = matplotlib.patches.Ellipse(
-                self.position,
+                self.position[::-1],
                 self.params["xradius"] * 2, self.params["yradius"] * 2,
                 color=color, fill=False
             )
         elif self.type_ == "rectangle":
             art = plt.Rectangle(
-                self.position, self.params["width"], self.params["height"],
+                self.position[::-1], self.params["width"], self.params["height"],
                 color=color, fill=False
             )
         else:
