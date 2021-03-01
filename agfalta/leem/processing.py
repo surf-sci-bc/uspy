@@ -55,8 +55,8 @@ class ROI:
         return img_array * mask
 
     def create_mask(self, img_width=None, img_height=None):
-        x, y = np.arange(0, img_width), np.arange(0, img_height)
-        x, y = x[:, np.newaxis], y[np.newaxis, :]
+        y, x = np.arange(0, img_width), np.arange(0, img_height)
+        y, x = y[:, np.newaxis], x[np.newaxis, :]
         x0, y0 = self.position
         if self.type_ == "circle":
             r = self.params["radius"]
@@ -74,18 +74,18 @@ class ROI:
     def artist(self, color="k"):
         if self.type_ == "circle":
             art = plt.Circle(
-                self.position[::-1], self.params["radius"],
+                self.position, self.params["radius"],
                 color=color, fill=False
             )
         elif self.type_ == "ellipse":
             art = matplotlib.patches.Ellipse(
-                self.position[::-1],
+                self.position,
                 self.params["xradius"] * 2, self.params["yradius"] * 2,
                 color=color, fill=False
             )
         elif self.type_ == "rectangle":
             art = plt.Rectangle(
-                self.position[::-1], self.params["width"], self.params["height"],
+                self.position, self.params["width"], self.params["height"],
                 color=color, fill=False
             )
         else:
