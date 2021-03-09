@@ -223,7 +223,7 @@ class LEEMImg(Loadable):
         except KeyError:
             if hasattr(self, field) or self.attrs[field] in self.meta:
                 return self._fallback_units.get(field, "")
-            raise ValueError(f"Unknown field {field}") from None
+            return ""
 
     def get_field_string(self, field):
         """Returns a string with the field value and unit."""
@@ -236,6 +236,8 @@ class LEEMImg(Loadable):
             return f"{value:4.1f} {self.get_unit(field)}"
         if "pressure" in field:
             return f"{value:.2g} {self.get_unit(field)}"
+        if field == "fov" and self.fov == 0:
+            return "LEED"
         if not isinstance(value, (int, float)):
             return f"{value} {self.get_unit(field)}".strip()
         return f"{value:.5g} {self.get_unit(field)}".strip()

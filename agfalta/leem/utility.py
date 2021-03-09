@@ -58,12 +58,11 @@ def progress_bar(it, suffix="", total=None, size=25, fill="▇", empty="░", si
     start_time = datetime.now()
     if total is None:
         total = len(it)
-    def display(i):
-        x = i / total
-        prog = fill * int(x * size) + empty * (size - int(x * size))
+    def display(perc):
+        prog = fill * int(perc * size) + empty * (size - int(perc * size))
         duration = datetime.now() - start_time
-        statement = f"\r▕{prog}▏ {100*x:.1f} % {suffix} ({str(duration).split('.')[0]}"
-        eta = duration * (1 / max(x, 1e-5) - 1)
+        statement = f"\r▕{prog}▏ {100*perc:.1f} % {suffix} ({str(duration).split('.')[0]}"
+        eta = duration * (1 / max(perc, 1e-5) - 1)
         if eta > timedelta(days=1):
             statement += " / ETA: > 1 day"
         elif eta > timedelta(seconds=3):
@@ -71,7 +70,10 @@ def progress_bar(it, suffix="", total=None, size=25, fill="▇", empty="░", si
         statement += ")"
         return statement
     for i, item in enumerate(it):
-        print("\033[K" + display(i), end="\r")
+        # avoid spamming output (do it max. 1000 times):
+        if i / total > share + 0.001:
+            share = i / total
+            print("\033[K" + display(i / total), end="\r")
         yield item
     print("\033[K" + display(total))
 
