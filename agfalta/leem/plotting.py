@@ -306,7 +306,7 @@ def plot_intensity(stack, *args, xaxis="energy", ax=None, **kwargs):
     for roi in rois:
         intensity = np.zeros(len(stack))
         for i, img in enumerate(stack):
-            intensity[i] = np.mean(roi.apply(img.data))
+            intensity[i] = roi.apply(img.data).sum() / roi.area
         ax.plot(x, intensity)
 
     return ax, roi

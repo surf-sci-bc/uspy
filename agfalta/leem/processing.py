@@ -35,6 +35,7 @@ class ROI:
     def __init__(self, x0, y0, type_=None, **kwargs):
         self.position = x0, y0
         self._img_shape = None
+        self.area = None
         self._mask = None
         if type_ is None:
             for t, props in self._defaults.items():
@@ -51,16 +52,17 @@ class ROI:
     def apply(self, img_array):
         if img_array.shape != self._img_shape or self._mask is None:
             self._mask = self.create_mask(*img_array.shape)
+            self._img_shape = img_array.shape
         mask = self._mask
         return img_array * mask
 
-    def create_mask(self, img_width=None, img_height=None):
-        y, x = np.arange(0, img_width), np.arange(0, img_height)
+    def create_mask(self, img_height=None, img_width=None):
+        y, x = np.arange(0, img_height), np.arange(0, img_width)
         y, x = y[:, np.newaxis], x[np.newaxis, :]
         x0, y0 = self.position
         if self.type_ == "circle":
             r = self.params["radius"]
-            mask = (x - x0)**2 + (y - y0)**2 < r
+            mask = (x - x0)**2 + (y - y0)**2 < r**2
         elif self.type_ == "ellipse":
             xr, yr = self.params["xradius"], self.params["yradius"]
             mask = ((x - x0) / xr)**2 + ((y - y0) / yr)**2 < 1
@@ -69,6 +71,7 @@ class ROI:
             mask = (x >= x0) & (x < x0 + w) & (y >= y0) & (y < y0 + h)
         else:
             raise ValueError("Unknown ROI type")
+        self.area = mask.sum()
         return mask
 
     def artist(self, color="k"):
@@ -98,6 +101,8 @@ def roify(*args, **kwargs):
     """Takes either a single ROI, an iterable of ROIs or a set of
     arguments for the ROI constructor. Returns a list of ROIs (for the
     first and latter case, this list has length 1)."""
+    if "rois" in kwargs:
+        args = (*args, kwargs.pop("rois"))
     if args and isinstance(args[0], ROI):
         if kwargs or len(args) > 1:
             print("WARNING: too many arguments for roify()")
