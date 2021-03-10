@@ -53,11 +53,24 @@ def info(obj):
 
 def plot_img(img, ax=None, title=None,
              fields=("temperature", "pressure1", "energy", "fov"),
-             figsize=None, ticks=False, log=False, **kwargs):
+             figsize=None, ticks=False, log=False, cutout_diameter=None,
+             **kwargs):
     """Plots a single LEEM image with some metadata. If ax is given,
     the image is plotted onto that axes object. Takes either
     a file name or a LEEMImg object. Fields given are shown in the
-    corners of the image."""
+    corners of the image. Keyword arguments:
+    - ax: if given, uses this matplotlib axes to plot on
+    - title: defaults to the filename, set to "" to disable it
+    - fields: list of metadata fields to show in the image,
+      set to None to disable
+    - figsize: size of image in inches (determines also resolution)
+    - ticks: whether to show x and y coordinates for the pixels
+    - log: whether to show the logarithmic
+    - cutout_diameter: cut away the beam tube for publication-ready images
+      a value of 1 means to use the biggest circle that fits in the image,
+      lower values mean smaller cutouts. Also sets the fields font color
+      to black
+    """
     img = imgify(img)
     if title is None and img.path != "NO_PATH":
         title = img.path
@@ -66,11 +79,19 @@ def plot_img(img, ax=None, title=None,
     if isinstance(fields, str):
         fields = [fields]
 
-    ax = _get_ax(ax, figsize=figsize, ticks=ticks, title=title)
+    ax = _get_ax(ax, figsize=figsize, ticks=ticks, title=title, axis_off=True)
     if log:
         data = np.log(img.data)
     else:
         data = img.data
+    if cutout_diameter:
+        h, w = data.shape
+        radius = min(h, w) / 2 * cutout_diameter
+        y, x = np.arange(0, h), np.arange(0, w)
+        y, x = y[:, np.newaxis], x[np.newaxis, :]
+        mask = (x - w/2)**2 + (y - h/2)**2 > radius**2
+        data = np.ma.masked_where(mask, data)
+
     ax.imshow(
         data,
         cmap="gray",
@@ -81,6 +102,10 @@ def plot_img(img, ax=None, title=None,
 
     if fields is None:
         return ax
+
+    color = "yellow"
+    if cutout_diameter:
+        color = "black"
     for i, field in enumerate(fields):
         if i > 3:
             print(f"Ignoring field {field}, not enough space")
@@ -91,7 +116,7 @@ def plot_img(img, ax=None, title=None,
             x=_MPL_IMG_POS[i][2], y=_MPL_IMG_POS[i][3],
             s=img.get_field_string(field),
             va=_MPL_IMG_POS[i][0], ha=_MPL_IMG_POS[i][1],
-            transform=ax.transAxes, color="yellow", fontsize=14,
+            transform=ax.transAxes, color=color, fontsize=14,
         )
     return ax
 
@@ -391,6 +416,8 @@ def _get_ax(ax, **kwargs):
     if not kwargs.get("ticks", True):
         ax.set_xticks([])
         ax.set_yticks([])
+        if kwargs.get("axis_off", False):
+            ax.set_axis_off()
     if kwargs.get("title", False):
         ax.set_title(kwargs["title"])
     if kwargs.get("xlabel", False):
