@@ -53,8 +53,8 @@ def info(obj):
 
 def plot_img(img, ax=None, title=None,
              fields=("temperature", "pressure1", "energy", "fov"),
-             figsize=None, ticks=False, log=False, cutout_diameter=None,
-             **kwargs):
+             figsize=None, dpi=100, ticks=False, log=False,
+             cutout_diameter=None, **kwargs):
     """Plots a single LEEM image with some metadata. If ax is given,
     the image is plotted onto that axes object. Takes either
     a file name or a LEEMImg object. Fields given are shown in the
@@ -79,7 +79,10 @@ def plot_img(img, ax=None, title=None,
     if isinstance(fields, str):
         fields = [fields]
 
-    ax = _get_ax(ax, figsize=figsize, ticks=ticks, title=title, axis_off=True)
+    ax = _get_ax(
+        ax, figsize=figsize, dpi=dpi,
+        ticks=ticks, title=title, axis_off=True
+    )
     if log:
         data = np.log(img.data)
     else:
@@ -412,7 +415,10 @@ def _CV2_IMG_POS(idx, height, width, text="", pos=0):
 def _get_ax(ax, **kwargs):
     """Helper for preparing an axis object"""
     if ax is None:
-        _, ax = plt.subplots(figsize=kwargs.get("figsize", None))
+        _, ax = plt.subplots(
+            figsize=kwargs.get("figsize", None),
+            dpi=kwargs.get("dpi", 100)
+        )
     if not kwargs.get("ticks", True):
         ax.set_xticks([])
         ax.set_yticks([])
