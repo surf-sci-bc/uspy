@@ -88,6 +88,8 @@ class LEEMImg(Loadable):
         "temperature": "Sample Temp.",
         "pressure1": "Gauge #1",
         "pressure2": "Gauge #2",
+        "MCH": "MCH",
+        "PCH": "PCH",
         "objective": "Objective",
         "exposure": "Camera Exposure",
         "averaging": "Average Images",
@@ -96,6 +98,7 @@ class LEEMImg(Loadable):
     _fallback_units = {
         "energy": "V",
         "temperature": "°C",
+        "pressure": "Torr",
         "pressure1": "Torr",
         "pressure2": "Torr",
         "objective": "mA",
@@ -104,10 +107,6 @@ class LEEMImg(Loadable):
         "exposure": "s",
         "rel_time": "s",
         "dose": "L",
-    }
-    _mappings = {
-        "MCH": "pressure1",
-        "PCH": "pressure2"
     }
     _pickle_extension = ".limg"
 
@@ -170,6 +169,10 @@ class LEEMImg(Loadable):
         if attr in ("path", "_meta", "_data", "time_origin"):
             raise AttributeError
         try:
+            if attr == "pressure":
+                for pfield in ("pressure1", "pressure2", "MCH", "PCH"):
+                    if self.attrs[pfield] in self.meta:
+                        return self.meta.get(self.attrs[pfield])
             return self.meta.get(self.attrs[attr], np.nan)
         except KeyError as e:
             raise AttributeError(f"No attribute named {attr}") from e
