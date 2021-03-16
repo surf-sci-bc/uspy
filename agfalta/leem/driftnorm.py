@@ -32,8 +32,8 @@ def normalize_image(img, mcp, dark_counts=100):
     try:
         normed_mcp = np.clip(np.nan_to_num(mcp.data - dark_counts), 1, None)
         normed = (img.data - dark_counts) / normed_mcp
-    except ValueError:
-        raise ValueError("Normalize: Resolution of MCP or dark image does not match.")
+    except ValueError as e:
+        raise ValueError("Normalize: Resolution of MCP or dark image does not match.") from e
     img.data = np.nan_to_num(np.clip(normed, 0, None))
     return img
 
@@ -125,10 +125,14 @@ def find_alignment_matrices_sift(stack, trafo="full-affine", min_matches=10, mas
             print(f"No match at image {i}")
             warp_matrix = np.eye(3, 3, dtype=np.float32)
         else:
-            src = np.array([data8bit[i][1][m.queryIdx].pt for m in good_matches],
-                           dtype=np.float32).reshape(-1, 1, 2)
-            dst = np.array([data8bit[i + 1][1][m.trainIdx].pt for m in good_matches],
-                           dtype=np.float32).reshape(-1, 1, 2)
+            src = np.array(             # pylint: disable=too-many-function-args
+                [data8bit[i][1][m.queryIdx].pt for m in good_matches],
+                dtype=np.float32
+            ).reshape(-1, 1, 2)
+            dst = np.array(             # pylint: disable=too-many-function-args
+                [data8bit[i + 1][1][m.trainIdx].pt for m in good_matches],
+                dtype=np.float32
+            ).reshape(-1, 1, 2)
             if trafo == "homography":
                 warp_matrix, _ = cv.findHomography(src, dst)
             else:
