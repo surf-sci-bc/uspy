@@ -520,7 +520,12 @@ def _parse_string_until_null(fd):
     while b"\x00" not in buffer:
         buffer += fd.read(1)
     # print("\t" + str(buffer))
-    return buffer[:-1].decode("cp1252")
+    try:
+        return buffer[:-1].decode("cp1252")
+    except UnicodeDecodeError:
+        val = buffer[:-1].decode("cp1252", errors="ignore")
+        print(f"WARNING: Decoding error in string '{val}'")
+        return val
 
 def _parse_bytes(buffer, pos, encoding):
     if encoding == "cp1252":
