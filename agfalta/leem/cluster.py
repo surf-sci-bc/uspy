@@ -333,6 +333,7 @@ def plot_clustermap(clustermap, ax=None, out_prefix=None, cmap="seismic"):
     ax.imshow(clustermap, interpolation="none", origin="upper", cmap=cmap)
     ax.set_xticks([])
     ax.set_yticks([])
+    ax.set_axis_off()
     if out_prefix is not None:
         plt.imsave(f"{out_prefix}_clustermap.png", clustermap, origin="upper", cmap=cmap)
 
