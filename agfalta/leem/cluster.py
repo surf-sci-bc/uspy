@@ -234,7 +234,7 @@ def elbow_cluster_analysis(X, algorithm="pc-kmeans", start=2, end=15, **params_)
 def pendryfy(X, energy=None, smoothing_params=None):
     if energy is None or np.isnan(energy).any():
         print("WARNING: NaN values in energy, guessing 3eV + 0.2eV * idx")
-        energy = np.linspace(3.0, 3.0 + len(energy) * 0.2, len(energy))
+        energy = np.linspace(3.0, 3.0 + X.shape[1] * 0.2, X.shape[1])
     PY = np.zeros_like(X)
     V0i_sq = energy**(2/3)      # square of energy**(1/3)
     dE = np.gradient(energy)
