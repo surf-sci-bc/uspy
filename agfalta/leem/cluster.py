@@ -9,6 +9,7 @@ import copy
 import inspect
 
 import numpy as np
+import matplotlib.colors
 import matplotlib.pyplot as plt
 
 from scipy.signal import savgol_filter
@@ -33,10 +34,12 @@ from sklearn import metrics as sk_metrics     # pylint: disable=ungrouped-import
 import kneed
 
 from agfalta.leem.base import LEEMStack
+from agfalta.leem.utility import stackify
 from agfalta.utility import timing_notification, progress_bar, silence
 
 
 def stack2vectors(stack, mask_outer=0.2):
+    stack = stackify(stack)
     _, h0, w0 = len(stack), stack[0].data.shape[0], stack[0].data.shape[1]
     dy, dx = (int(mask_outer * h0), int(mask_outer * w0))
     h, w = (h0 - 2 * dy, w0 - 2 * dx)
@@ -50,6 +53,17 @@ def vectors2stack(X, h, w, mask_outer=0):
     h, w = (h - 2 * int(mask_outer * h), w - 2 * int(mask_outer * w))
     data = (X.T).reshape(X.shape[1], h, w)
     return LEEMStack(data)
+
+def cutout_stack(stack, mask_outer=0.2):
+    stack = stackify(stack)
+    _, h0, w0 = len(stack), stack[0].data.shape[0], stack[0].data.shape[1]
+    dy, dx = (int(mask_outer * h0), int(mask_outer * w0))
+    if mask_outer == 0:
+        data = np.array([img.data for img in stack])
+    else:
+        data = np.array([img.data[dy:-dy, dx:-dx] for img in stack])
+    return LEEMStack(data)
+
 
 def enforce_clustershape(mask_outer=0):
     def enforcer(wrapped):
@@ -74,7 +88,22 @@ def combine_labels(labels, combinations):
     for combination in combinations:
         for label in combination:
             combined_labels[labels == label] = combination[0]
+
+    for i in np.unique(combined_labels):
+        size = np.count_nonzero(combined_labels == i)
+        print(f"Combined cluster {int(i)}: {size} pixels ({100*size/labels.size} %)")
     return combined_labels
+
+def make_cmap(phases, labels):
+    colors_list = []
+    legend = {}
+    color = "#fff"
+    for i in range(int(labels.max() + 1)):
+        name, color = phases.get(i, ("", color))
+        colors_list.append(color)
+        legend[i] = name
+    cmap = matplotlib.colors.ListedColormap(colors_list)
+    return cmap, legend
 
 
 @enforce_clustershape(0)
@@ -293,14 +322,6 @@ def denormalize(Xn, integrals):
         X[i, :] = Xn[i, :] * integrals[i]
     return X
 
-@enforce_clustershape(0)
-def extract_IVs(X, labels):
-    IV_means = []
-    for klass in np.unique(labels):
-        IVs = X[labels == klass, :]
-        IV_means.append(IVs.mean(axis=0))
-    return np.array(IV_means)
-
 def save_model(model, fname):
     if not os.path.exists(os.path.dirname(fname)):
         os.makedirs(os.path.dirname(fname))
@@ -310,7 +331,6 @@ def save_model(model, fname):
             print(f"Saved model to {fname}")
         except RecursionError:
             print("Did not save model due to recursion error (Too big?).")
-
 
 def load_pca_model(fname):
     with Path(fname).open("rb") as pfile:
@@ -323,7 +343,8 @@ def load_cluster_model(fname):
         model = pickle.load(pfile)
     try:
         clusters = model.get_clusters()
-        labels = np.zeros((X.shape[0],)) - 1
+        n_of_pix = max(map(max, clusters)) + 1
+        labels = np.zeros((n_of_pix,)) - 1
         for i, cluster in enumerate(clusters):
             labels[cluster] = i
     except AttributeError:
@@ -332,25 +353,85 @@ def load_cluster_model(fname):
     print(f"Loaded cluster model from {fname}")
     return sort_labels(labels), model
 
-def plot_clustermap(clustermap, ax=None, out_prefix=None, cmap="seismic"):
+def plot_clustermap(clustermap, ax=None, ofile=None, cmap="brg"):
     """Plot 2d numpy array with integer values to colormap."""
     if ax is None:
-        _, ax = plt.subplots(figsize=(8, 8))
+        _, ax = plt.subplots(figsize=(5, 5))
     ax.imshow(clustermap, interpolation="none", origin="upper", cmap=cmap)
     ax.set_xticks([])
     ax.set_yticks([])
     ax.set_axis_off()
-    if out_prefix is not None:
-        plt.imsave(f"{out_prefix}_clustermap.png", clustermap, origin="upper", cmap=cmap)
+    if ofile is not None:
+        plt.imsave(ofile, clustermap, origin="upper", cmap=cmap)
 
-def plot_IVs(stack, labels, ax=None, mask_outer=0.2, cmap="seismic"):
+def plot_single_clusters(clustermap, cmap="brg"):
+    n_clusters = int(clustermap.max()) + 1
+    nrows = int(np.ceil(n_clusters / 4))
+    fig, axes = plt.subplots(nrows, 4, figsize=(20, 5 * nrows))
+    for i in range(n_clusters):
+        idx = i // 4, i % 4
+        single_map = np.zeros_like(clustermap)
+        single_map[clustermap == i] = 1
+        plot_clustermap(single_map, ax=axes[idx], cmap=cmap)
+        axes[idx].set_title(f"Single cluster: {i}")
+    for i in range(n_clusters, axes.size):
+        idx = i // 4, i % 4
+        fig.delaxes(axes[idx])
+
+def plot_raw(img, mask_outer, ax=None, ofile=None):
+    h0, w0 = img.data.shape
+    dy, dx = (int(mask_outer * h0), int(mask_outer * w0))
+    if mask_outer == 0:
+        data = img.data
+    else:
+        data = img.data[dy:-dy, dx:-dx]
+    if ax is None:
+        _, ax = plt.subplots(figsize=(5, 5))
+    ax.imshow(data, interpolation="none", origin="upper", cmap="gray")
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_axis_off()
+    if ofile is not None:
+        plt.imsave(ofile, data, origin="upper", cmap="gray")
+
+
+
+@enforce_clustershape(0)
+def extract_IVs(X, labels):
+    IV_means = {}
+    for klass in np.unique(labels):
+        IVs = X[labels == klass, :]
+        IV_means[klass] = IVs.mean(axis=0)
+    return IV_means
+
+def plot_IVs(stack, labels, ax=None, ofile=None, mask_outer=0.2,
+             cmap="seismic", legend=None):
     """Plot IV curves."""
     if ax is None:
         _, ax = plt.subplots(figsize=(8, 5))
+        ax.set_xlabel("Energy in eV")
+        ax.set_ylabel("Intensity in a.u.")
+        ax.set_yticks([])
+    if legend is None:
+        legend = {}
     X, _, _ = stack2vectors(stack, mask_outer=mask_outer)
     IV_curves = extract_IVs(X, labels)
-    for i, IV_curve in enumerate(IV_curves):
-        ax.plot(stack.energy, IV_curve, color=plt.get_cmap(cmap)(i / len(IV_curves)))
+
+    for i, IV_curve in IV_curves.items():
+        if isinstance(cmap, str):
+            color = plt.get_cmap(cmap)(i / len(IV_curves))
+        else:
+            color = cmap(int(i))
+        ax.plot(
+            stack.energy, IV_curve,
+            color=color,
+            label=legend.get(i),
+            lw=2
+        )
+    if legend:
+        ax.legend()
+    if ofile:
+        plt.savefig(ofile, dpi=150, bbox_inches="tight")
     return ax
 
 def plot_IVs2(energy, IV_curves, ax=None, cmap="seismic"):
