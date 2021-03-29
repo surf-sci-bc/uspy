@@ -173,6 +173,7 @@ class LEEMImg(Loadable):
                 for pfield in ("pressure1", "pressure2", "MCH", "PCH"):
                     if self.attrs[pfield] in self.meta:
                         return self.meta.get(self.attrs[pfield])
+                return np.nan
             return self.meta.get(self.attrs[attr], np.nan)
         except KeyError as e:
             raise AttributeError(f"No attribute named {attr}") from e

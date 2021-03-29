@@ -321,8 +321,14 @@ def load_pca_model(fname):
 def load_cluster_model(fname):
     with Path(fname).open("rb") as pfile:
         model = pickle.load(pfile)
-    labels = model.labels_
-    labels[labels < 0] = np.ma.masked
+    try:
+        clusters = model.get_clusters()
+        labels = np.zeros((X.shape[0],)) - 1
+        for i, cluster in enumerate(clusters):
+            labels[cluster] = i
+    except AttributeError:
+        labels = model.labels_
+        labels[labels < 0] = np.ma.masked
     print(f"Loaded cluster model from {fname}")
     return sort_labels(labels), model
 
