@@ -188,13 +188,13 @@ def make_video(stack, ofile, skip=None, fps=24,
     # set up ffmpeg
     ffmpeg_indict = {"-r": str(fps)}
     ffmpeg_outdict = {
-        "-vf": f"scale=iw*{scale}:-1",
+        "-vf": f"scale=ceil(iw*{scale}):-2",
         "-vcodec": "libx264",
         "-pix_fmt": "yuv420p",
         "-profile:v": "high",
     }
     writer = skvideo.io.FFmpegWriter(
-        ofile, inputdict=ffmpeg_indict, outputdict=ffmpeg_outdict
+        ofile, inputdict=ffmpeg_indict, outputdict=ffmpeg_outdict, verbosity=1
     )
 
     # loop through the images
