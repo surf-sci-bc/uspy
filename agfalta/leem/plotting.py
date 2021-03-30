@@ -243,9 +243,9 @@ def plot_mov(stack, ncols=4, virtual=True, skip=None, **kwargs):
         stack = stack[::skip]
 
     nrows = math.ceil(len(stack) / ncols)
-    fig, axes = plt.subplots(
-        ncols=ncols, nrows=nrows, figsize=(ncols * 5, nrows * 5)
-    )
+    figsize = kwargs.pop("figsize", (ncols * 5, nrows * 5))
+    dpi = kwargs.pop("dpi", 100)
+    fig, axes = plt.subplots(ncols=ncols, nrows=nrows, figsize=figsize, dpi=dpi)
 
     # zip_longest() pads the shorter list with None
     for ax, img in itertools.zip_longest(axes.flatten(), stack):
