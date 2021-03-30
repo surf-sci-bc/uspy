@@ -405,7 +405,7 @@ def extract_IVs(X, labels):
     return IV_means
 
 def plot_IVs(stack, labels, ax=None, ofile=None, mask_outer=0.2,
-             cmap="seismic", legend=None):
+             cmap="seismic", legend=None, **kwargs):
     """Plot IV curves."""
     if ax is None:
         _, ax = plt.subplots(figsize=(8, 5))
@@ -426,7 +426,8 @@ def plot_IVs(stack, labels, ax=None, ofile=None, mask_outer=0.2,
             stack.energy, IV_curve,
             color=color,
             label=legend.get(i),
-            lw=2
+            lw=kwargs.pop("lw", 2),
+            **kwargs
         )
     if legend:
         ax.legend()
