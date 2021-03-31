@@ -58,7 +58,7 @@ def progress_bar(it, suffix="", total=None, size=25, fill="▇", empty="░", si
         statement += ")"
         return statement
     for i, item in enumerate(it):
-        if i % (total / 1000) == 0:     # prevent output flooding
+        if i % (total / 1000) <= 1:     # prevent output flooding
             print("\033[K" + display(i), end="\r")
         yield item
     print("\033[K" + display(total))
