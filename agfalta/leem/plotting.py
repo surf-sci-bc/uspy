@@ -17,6 +17,7 @@ from IPython.display import display, Video
 
 from agfalta.leem.utility import stackify, imgify
 from agfalta.leem.processing import roify, get_max_variance_idx
+from agfalta.leem.driftnorm import normalize_image
 
 
 
@@ -52,7 +53,8 @@ def info(obj):
 
 
 def plot_img(img, ax=None, title=None,
-             fields=("temperature", "pressure1", "energy", "fov"),
+             fields=("temperature", "pressure", "energy", "fov"),
+             mcp=None, dark_counts=100, contrast=None,
              figsize=None, dpi=100, ticks=False, log=False,
              cutout_diameter=None, **kwargs):
     """Plots a single LEEM image with some metadata. If ax is given,
@@ -63,15 +65,26 @@ def plot_img(img, ax=None, title=None,
     - title: defaults to the filename, set to "" to disable it
     - fields: list of metadata fields to show in the image,
       set to None to disable
-    - figsize: size of image in inches (determines also resolution)
+    - mcp: filename of a channelplate background file (will be divided by)
+    - dark_counts: works only together with mcp -- subtracts dark_counts from
+      the image and from the background file before dividing them (default 100)
+    - contrast: if set to "auto" it will use the maximum available image dynamics.
+      If set to "inner", it will only use the inner 60 % of the image to set the
+      contrast. If set to a pair of values like (100, 5000) it will use those intensities
+      as lower and upper boundaries.
+    - figsize: size of image in inches
+    - dpi: image resolution
     - ticks: whether to show x and y coordinates for the pixels
-    - log: whether to show the logarithmic
+    - log: whether to show the logarithmic (useful for LEED)
     - cutout_diameter: cut away the beam tube for publication-ready images
       a value of 1 means to use the biggest circle that fits in the image,
-      lower values mean smaller cutouts. Also sets the fields font color
+      lower values mean smaller cutouts. Also sets the "fields" font color
       to black
     """
+    #todo contast
     img = imgify(img)
+    if mcp is not None:
+        img = normalize_image(img, mcp=mcp, dark_counts=dark_counts)
     if title is None and img.path != "NO_PATH":
         title = img.path
     if title and len(title) > 25:
@@ -83,10 +96,11 @@ def plot_img(img, ax=None, title=None,
         ax, figsize=figsize, dpi=dpi,
         ticks=ticks, title=title, axis_off=True
     )
+
+    data = np.nan_to_num(img.data)
     if log:
-        data = np.log(img.data)
-    else:
-        data = img.data
+        data = np.log(data)
+
     if cutout_diameter:
         h, w = data.shape
         radius = min(h, w) / 2 * cutout_diameter
@@ -94,6 +108,21 @@ def plot_img(img, ax=None, title=None,
         y, x = y[:, np.newaxis], x[np.newaxis, :]
         mask = (x - w/2)**2 + (y - h/2)**2 > radius**2
         data = np.ma.masked_where(mask, data)
+
+
+    if contrast in ("auto", "maximum"):
+        contrast = data.min(), data.max()
+    elif contrast == "inner":
+        dy, dx = map(int, 0.2 * np.array(data.shape))
+        inner = img.data[dy:-dy, dx:-dx]
+        contrast = inner.min(), inner.max()
+    print(contrast)
+    if isinstance(contrast, abc.Iterable) and len(contrast) == 2:
+        data = np.clip(data, contrast[0], None) - contrast[0]
+        data = data / (contrast[1] - contrast[0]) * 255
+        data = np.clip(data, 0, 255).astype(np.uint8)
+    elif contrast is not None:
+        raise ValueError(f"Invalid '{contrast=}'")
 
     ax.imshow(
         data,
@@ -211,7 +240,8 @@ def make_video(stack, ofile, skip=None, fps=24,
                 0, 255, norm_type=cv2.NORM_MINMAX
             )
         else:
-            data = (data - contrast[0]) / min((contrast[1] - contrast[0]), 1) * 255
+            data = np.clip(data, contrast[0], None) - contrast[0]
+            data = data / (contrast[1] - contrast[0]) * 255
             data = np.clip(data, 0, 255).astype(np.uint8)
         # write metadata
         if fields:
