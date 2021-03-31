@@ -81,7 +81,6 @@ def plot_img(img, ax=None, title=None,
       lower values mean smaller cutouts. Also sets the "fields" font color
       to black
     """
-    #todo contast
     img = imgify(img)
     if mcp is not None:
         img = normalize_image(img, mcp=mcp, dark_counts=dark_counts)
@@ -116,7 +115,6 @@ def plot_img(img, ax=None, title=None,
         dy, dx = map(int, 0.2 * np.array(data.shape))
         inner = img.data[dy:-dy, dx:-dx]
         contrast = inner.min(), inner.max()
-    print(contrast)
     if isinstance(contrast, abc.Iterable) and len(contrast) == 2:
         data = np.clip(data, contrast[0], None) - contrast[0]
         data = data / (contrast[1] - contrast[0]) * 255
@@ -194,6 +192,7 @@ def make_video(stack, ofile, skip=None, fps=24,
 
     # find the contrast values
     if contrast in ("auto", "inner"):
+        contrast_type = contrast
         print("WARNING: The video is on auto contrast.")
     elif contrast == "maximum":
         c0, c1 = 2e16, 0
@@ -201,14 +200,20 @@ def make_video(stack, ofile, skip=None, fps=24,
             c0 = min(c0, np.nanmin(img.data))
             c1 = max(c1, np.nanmax(img.data))
         contrast = sorted((c0, c1))
+        print(f"Set contrast to {contrast}")
+        contrast_type = "static"
     elif isinstance(contrast, int):
         c0 = np.nanmin(stack[contrast].data)
         c1 = np.nanmax(stack[contrast].data)
         contrast = sorted((c0, c1))
-    elif not isinstance(contrast, abc.Iterable) and not len(contrast) == 2:
+        print(f"Set contrast to {contrast}")
+        contrast_type = "static"
+    elif isinstance(contrast, abc.Iterable) and len(contrast) == 2:
+        contrast_type = "static"
+    else:
         raise ValueError(f"Invalid '{contrast=}'")
 
-    if contrast != "auto" and log:
+    if contrast_type == "static" and log:
         c0 = min(np.log(contrast[0]), 1)
         c1 = min(np.log(contrast[1]), 1)
         contrast = sorted((c0, c1))
@@ -217,36 +222,37 @@ def make_video(stack, ofile, skip=None, fps=24,
     # set up ffmpeg
     ffmpeg_indict = {"-r": str(fps)}
     ffmpeg_outdict = {
-        "-vf": f"scale=ceil(iw*{scale}):-2",
+        "-vf": f"scale=ceil(iw/2*{scale})*2:-2",
         "-vcodec": "libx264",
         "-pix_fmt": "yuv420p",
         "-profile:v": "high",
     }
     writer = skvideo.io.FFmpegWriter(
-        ofile, inputdict=ffmpeg_indict, outputdict=ffmpeg_outdict, verbosity=1
+        ofile, inputdict=ffmpeg_indict, outputdict=ffmpeg_outdict#, verbosity=1
     )
 
     # loop through the images
     height, width = stack[0].data.shape
     dy, dx = map(int, 0.2 * np.array(stack[0].data.shape))
     for img in stack:
-        data = img.data
+        data = np.nan_to_num(img.data)
         if log:
-            data = np.log(data)
+            data = np.nan_to_num(np.log(data))
         # set contrast
-        if contrast == "inner":
-            inner = img.data[dy:-dy, dx:-dx]
+        if contrast_type == "inner":
+            inner = data[dy:-dy, dx:-dx]
             contrast = inner.min(), inner.max()
-        if contrast == "auto":
-            data = np.nan_to_num(data)
-            data = cv2.normalize(
-                data, np.ones_like(data, dtype=np.uint8),
-                0, 255, norm_type=cv2.NORM_MINMAX
-            )
-        else:
-            data = np.clip(data, contrast[0], None) - contrast[0]
-            data = data / (contrast[1] - contrast[0]) * 255
-            data = np.clip(data, 0, 255).astype(np.uint8)
+        if contrast_type == "auto":
+            contrast = data.min(), data.max()
+        data = cv2.normalize(
+            np.clip(data, contrast[0], contrast[1]),
+            np.ones_like(data, dtype=np.uint8),
+            0, 255, norm_type=cv2.NORM_MINMAX
+        )
+        # old method:
+        # data = np.clip(data, contrast[0], None) - contrast[0]
+        # data = data / (contrast[1] - contrast[0]) * 255
+        # data = np.clip(data, 0, 255).astype(np.uint8)
         # write metadata
         if fields:
             data = cv2.cvtColor(data, cv2.COLOR_GRAY2RGB)
