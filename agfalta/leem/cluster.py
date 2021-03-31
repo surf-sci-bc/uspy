@@ -368,15 +368,14 @@ def plot_single_clusters(clustermap, cmap="brg"):
     n_clusters = int(clustermap.max()) + 1
     nrows = int(np.ceil(n_clusters / 4))
     fig, axes = plt.subplots(nrows, 4, figsize=(20, 5 * nrows))
-    for i in range(n_clusters):
-        idx = i // 4, i % 4
-        single_map = np.zeros_like(clustermap)
-        single_map[clustermap == i] = 1
-        plot_clustermap(single_map, ax=axes[idx], cmap=cmap)
-        axes[idx].set_title(f"Single cluster: {i}")
-    for i in range(n_clusters, axes.size):
-        idx = i // 4, i % 4
-        fig.delaxes(axes[idx])
+    for i, ax in axes.flatten():
+        if i < n_clusters:
+            single_map = np.zeros_like(clustermap)
+            single_map[clustermap == i] = 1
+            plot_clustermap(single_map, ax=ax, cmap=cmap)
+            ax.set_title(f"Single cluster: {i}")
+        else:
+            fig.delaxes(ax)
 
 def plot_raw(img, mask_outer, ax=None, ofile=None):
     h0, w0 = img.data.shape
