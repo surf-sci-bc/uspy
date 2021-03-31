@@ -193,7 +193,7 @@ def make_video(stack, ofile, skip=None, fps=24,
         fields = [fields]
 
     # find the contrast values
-    if contrast == "auto":
+    if contrast in ("auto", "inner"):
         print("WARNING: The video is on auto contrast.")
     elif contrast == "maximum":
         c0, c1 = 2e16, 0
@@ -228,11 +228,15 @@ def make_video(stack, ofile, skip=None, fps=24,
 
     # loop through the images
     height, width = stack[0].data.shape
+    dy, dx = map(int, 0.2 * np.array(stack[0].data.shape))
     for img in stack:
         data = img.data
         if log:
             data = np.log(data)
         # set contrast
+        if contrast == "inner":
+            inner = img.data[dy:-dy, dx:-dx]
+            contrast = inner.min(), inner.max()
         if contrast == "auto":
             data = np.nan_to_num(data)
             data = cv2.normalize(
