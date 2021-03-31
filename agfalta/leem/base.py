@@ -78,7 +78,8 @@ class LEEMImg(Loadable):
         - rel_time          seconds since start of stack (fallback: timestamp)
         - exposure          camera exposure in s
         - averaging         0: sliding average
-        - Objective         lens current in mA
+        - objective         lens current in mA
+        - emission          emission current (usually in µA)
     """
     attrs = {
         "width": "width",
@@ -93,7 +94,8 @@ class LEEMImg(Loadable):
         "objective": "Objective",
         "exposure": "Camera Exposure",
         "averaging": "Average Images",
-        "fov": "fov"
+        "fov": "fov",
+        "emission": "Emission Cur.",
     }
     _fallback_units = {
         "energy": "V",
@@ -516,11 +518,12 @@ class LEEMStack(Loadable):
 
 
 
-def _parse_string_until_null(fd):
+def _parse_string_until_null(fd, debug=False):
     buffer = b""
     while b"\x00" not in buffer:
         buffer += fd.read(1)
-    # print("\t" + str(buffer))
+    if debug:
+        print("\t" + str(buffer))
     try:
         return buffer[:-1].decode("cp1252")
     except UnicodeDecodeError:
@@ -595,7 +598,8 @@ def parse_header(fname):
         for key, (pos, encoding) in field_dict.items():
             meta[key] = _parse_bytes(block, pos, encoding)
             meta_units[key] = ""
-            # print(f"\t{key} -> {meta[key]}")
+            if debug:
+                print(f"\t{key} -> {meta[key]}")
 
     with Path(fname).open("rb") as f:
         parse_block(f.read(104), HEADER_ONE)                    # first fixed header
@@ -620,20 +624,23 @@ def parse_header(fname):
                 if debug:
                     print("\tknown")
             elif b in (106, 107, 108, 109, 235, 236, 237):      # varian pressures
-                key = _parse_string_until_null(f)
-                meta_units[key] = _parse_string_until_null(f)
+                key = _parse_string_until_null(f, debug)
+                meta_units[key] = _parse_string_until_null(f, debug)
                 meta[key] = _parse_bytes(f.read(4), 0, "float")
                 if debug:
                     print(f"\tknown: pressure {key} -> {meta[key]}")
             elif b in (110, 238):                               # field of view
-                fov_str = _parse_string_until_null(f)
+                fov_str = _parse_string_until_null(f, debug)
                 meta["LEED"] = "LEED" in fov_str
                 meta["FoV"] = fov_str.split("\t")[0].strip()
                 meta["FoV cal"] = _parse_bytes(f.read(4), 0, "float")
                 if debug:
                     print(f"\tfov: {fov_str}")
-            elif b not in (0, 66, 113, 176, 216, 240, 232, 233): # self-labelled stuff
-                keyunit = _parse_string_until_null(f)
+            elif b in (0, 66, 113, 176, 216, 240, 232, 233):
+                if debug:
+                    print(f"unknown byte {b}")
+            elif b: # self-labelled stuff
+                keyunit = _parse_string_until_null(f, debug)
                 # For some b, the string is empty. They should go in the tuple above.
                 if not keyunit:
                     b = f.read(1)[0]
