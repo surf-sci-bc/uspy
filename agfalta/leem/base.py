@@ -588,12 +588,11 @@ VARIABLE_HEADER = {
 UNIT_CODES = {"1": "V", "2": "mA", "3": "A", "4": "°C",
               "5": "K", "6": "mV", "7": "pA", "8": "nA", "9": "\xb5A"}
 
-def parse_header(fname):
+def parse_header(fname, debug=False):
     """Uncomment the print statements here and in _parse_string_until_null() for
     easier debugging."""
     meta = {}
     meta_units = {}
-    debug = False
     def parse_block(block, field_dict):
         for key, (pos, encoding) in field_dict.items():
             meta[key] = _parse_bytes(block, pos, encoding)
@@ -636,7 +635,7 @@ def parse_header(fname):
                 meta["FoV cal"] = _parse_bytes(f.read(4), 0, "float")
                 if debug:
                     print(f"\tfov: {fov_str}")
-            elif b in (0, 66, 113, 176, 216, 240, 232, 233):
+            elif b in (0, 1, 63, 66, 113, 128, 176, 216, 240, 232, 233):
                 if debug:
                     print(f"unknown byte {b}")
             elif b: # self-labelled stuff
