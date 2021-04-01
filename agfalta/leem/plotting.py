@@ -11,6 +11,7 @@ import math
 import numpy as np
 import cv2
 from matplotlib import pyplot as plt
+import matplotlib.colors
 import pandas as pd
 import skvideo.io
 from IPython.display import display, Video
@@ -52,34 +53,51 @@ def info(obj):
         print("Object is not valid (maybe wrong path?)")
 
 
-def plot_img(img, ax=None, title=None,
-             fields=("temperature", "pressure", "energy", "fov"),
-             mcp=None, dark_counts=100, contrast=None,
-             figsize=None, dpi=100, ticks=False, log=False,
+def plot_img(img, fields=("temperature", "pressure", "energy", "fov"), field_color=None,
+             mcp=None, dark_counts=100, contrast=None, invert=False, log=False,
+             ax=None, title=None, figsize=None, dpi=100, ticks=False,
              cutout_diameter=None, **kwargs):
-    """Plots a single LEEM image with some metadata. If ax is given,
-    the image is plotted onto that axes object. Takes either
-    a file name or a LEEMImg object. Fields given are shown in the
-    corners of the image. Keyword arguments:
-    - ax: if given, uses this matplotlib axes to plot on
-    - title: defaults to the filename, set to "" to disable it
-    - fields: list of metadata fields to show in the image,
-      set to None to disable
-    - mcp: filename of a channelplate background file (will be divided by)
-    - dark_counts: works only together with mcp -- subtracts dark_counts from
+    """Plots a single LEEM image with some metadata. Takes either a file name
+    or a LEEMImg object. Metadata fields given are shown in the corners of the
+    image.
+
+    Optional keyword arguments:
+    - fields:
+      List of metadata fields to show in the image. Set to None to disable.
+      Maximum 4 fields show up: (topleft, topright, bottomleft, bottomright)
+    - field_color:
+      Color of field labels (defaults to yellow normally, defaults to black if
+      invert or cutout_diameter is set)
+    - mcp:
+      Filename of a channelplate background file (will be divided by)
+    - dark_counts:
+      Works only together with mcp -- subtracts dark_counts from
       the image and from the background file before dividing them (default 100)
-    - contrast: if set to "auto" it will use the maximum available image dynamics.
-      If set to "inner", it will only use the inner 60 % of the image to set the
-      contrast. If set to a pair of values like (100, 5000) it will use those intensities
-      as lower and upper boundaries.
-    - figsize: size of image in inches
-    - dpi: image resolution
-    - ticks: whether to show x and y coordinates for the pixels
-    - log: whether to show the logarithmic (useful for LEED)
-    - cutout_diameter: cut away the beam tube for publication-ready images
-      a value of 1 means to use the biggest circle that fits in the image,
+    - contrast:
+      "auto": Use the maximum dynamic range of the image.
+      "inner": Same as "auto", but it will only use the inner 60 % of the image.
+      (n, m) -- two numbers: Use those values as lower/upper intensity boundary
+    - invert:
+      Invert grayscale
+    - log:
+      Whether to show the logarithmic (useful for LEED)
+    - ax:
+      If given, use this matplotlib axes to plot on. Else make a new one.
+    - title:
+      Defaults to the filename, set it to an empty string "" to disable it.
+      (only if ax is not given)
+    - figsize:
+      Size of image in inches (only if ax is not given)
+    - dpi:
+      Image resolution (only if ax is not given)
+    - ticks:
+      Whether to show x and y coordinates for the pixels (only if ax is not given)
+    - cutout_diameter:
+      Cut away the beam tube for publication-ready images:
+      A value of 1 means to use the biggest circle that fits in the image,
       lower values mean smaller cutouts. Also sets the "fields" font color
       to black
+    All other arguments will be passed to matplotlib's plot() function (e.g. linewidth)
     """
     img = imgify(img)
     if mcp is not None:
@@ -122,6 +140,9 @@ def plot_img(img, ax=None, title=None,
     elif contrast is not None:
         raise ValueError(f"Invalid '{contrast=}'")
 
+    if invert:
+        data = -data + data.max()
+
     ax.imshow(
         data,
         cmap="gray",
@@ -133,9 +154,10 @@ def plot_img(img, ax=None, title=None,
     if fields is None:
         return ax
 
-    color = "yellow"
-    if cutout_diameter:
-        color = "black"
+    if field_color is None:
+        field_color = "yellow"
+        if cutout_diameter or invert:
+            field_color = "black"
     for i, field in enumerate(fields):
         if i > 3:
             print(f"Ignoring field {field}, not enough space")
@@ -146,7 +168,7 @@ def plot_img(img, ax=None, title=None,
             x=_MPL_IMG_POS[i][2], y=_MPL_IMG_POS[i][3],
             s=img.get_field_string(field),
             va=_MPL_IMG_POS[i][0], ha=_MPL_IMG_POS[i][1],
-            transform=ax.transAxes, color=color, fontsize=14,
+            transform=ax.transAxes, color=field_color, fontsize=14,
         )
     return ax
 
@@ -157,27 +179,54 @@ def plot_image(*args, **kwargs):
 
 
 
-def make_video(stack, ofile, skip=None, fps=24,
-               overwrite=True, scale=0.5, contrast="auto",
-               fields=None, log=False, **kwargs):
+def make_video(stack, ofile, skip=None,
+               fields=None, field_color=None,
+               mcp=None, dark_counts=100, contrast="auto", invert=False, log=False,
+               fps=24, overwrite=True, scale=0.5,
+               **kwargs):
     """
     Save a movie as an mp4 file and display it.
-    * ofile sets the output file, which should have an .mp4 extension. It
-      can also be in a subfolder, for example like this:
-      ofile="subfolder/movie.mp4"
-    * fields works the same way as for plot_img
-    * contrast can either be "auto" (each image is autoscaled),
-      or "maximum" where everything is scaled according to the most extreme
-      intensity values (may be slow)
-      or an integer, in which case the min/max values are taken from that
-      image number in the stack
-      or two numbers (as list or tuple) that are the min/max contrast values
-    * fps sets the fps of the output video (i.e. speed)
-    * scale will make the video larger/smaller (default scale=0.5 will
-      produce half-sized videos)
-    * skip=n will use only every n-th frame
-    * if overwrite is set to False, make_video will be faster and only
-      display the video file that is given but not update it
+    - stack:
+      Either a LEEMStack object, a path to a folder that contains *.dat images,
+      the path to an image file that contains all images (e.g. *.tif), or a list of
+      LEEMImg objects
+    - ofile:
+      The output filename, which should have an .mp4 extension. It can also be in a
+      subfolder, for example like this: ofile="subfolder/movie.mp4"
+
+    Optional keyword arguments:
+    - skip:  (equivalent to "increment")
+      If set to an integer n, it will use only every n-th frame
+      (faster than increasing fps)
+    - fields: (see also plot_img())
+      List of metadata fields to show in the image. Set to None to disable.
+      Maximum 4 fields show up: (topleft, topright, bottomleft, bottomright)
+    - field_color: (see also plot_img())
+      Color of field labels (defaults to yellow normally, defaults to black if
+      invert or cutout_diameter is set)
+    - mcp:
+      Filename of a channelplate background file (will be divided by)
+    - dark_counts:
+      Works only together with mcp -- subtracts dark_counts from
+      the image and from the background file before dividing them (default 100)
+    - contrast:
+      "auto": Use the maximum dynamic range for EACH image (default).
+      "inner": Same as "auto", but it will only use the inner 60 % of each image.
+      "maximum": Use the maximum dynamic range of the whole stack.
+      n -- integer: Use the dynamic range of the n-th image in the stack
+      (n, m) -- two numbers: Use those values as lower/upper intensity boundary
+    - invert:
+      Invert grayscale
+    - log:
+      Whether to show the logarithmic (useful for LEED)
+    - fps:
+      An integer, the fps of the output video (i.e. speed)
+    - overwrite:
+      If it is set to False, make_video() does not recalculate the video but only
+      show the one given by "ofile" (all other parameters are ignored if ofile
+      exists). Faster if you don't need to change anything.
+    - scale:
+      Will make the video larger/smaller by changing the resolution (default 0.5)
     """
     if not overwrite and os.path.isfile(ofile):
         return Video(ofile)
@@ -234,7 +283,18 @@ def make_video(stack, ofile, skip=None, fps=24,
     # loop through the images
     height, width = stack[0].data.shape
     dy, dx = map(int, 0.2 * np.array(stack[0].data.shape))
+
+    if field_color is None:
+        field_color = "yellow"
+        if invert:
+            field_color = "black"
+    print(field_color)
+    color = tuple(int(rgb * 255) for rgb in matplotlib.colors.to_rgb(field_color))
+    print(color)
+
     for img in stack:
+        if mcp is not None:
+            img = normalize_image(img, mcp=mcp, dark_counts=dark_counts)
         data = np.nan_to_num(img.data)
         if log:
             data = np.nan_to_num(np.log(data))
@@ -249,11 +309,10 @@ def make_video(stack, ofile, skip=None, fps=24,
             np.ones_like(data, dtype=np.uint8),
             0, 255, norm_type=cv2.NORM_MINMAX
         )
-        # old method:
-        # data = np.clip(data, contrast[0], None) - contrast[0]
-        # data = data / (contrast[1] - contrast[0]) * 255
-        # data = np.clip(data, 0, 255).astype(np.uint8)
-        # write metadata
+
+        if invert:
+            data = -data + data.max()
+
         if fields:
             data = cv2.cvtColor(data, cv2.COLOR_GRAY2RGB)
             for i, field in enumerate(fields):
@@ -263,7 +322,7 @@ def make_video(stack, ofile, skip=None, fps=24,
                     data = cv2.putText(
                         data, char,
                         org=xy, fontFace=cv2.FONT_HERSHEY_SIMPLEX,
-                        fontScale=1, color=(255, 255, 0), thickness=2,
+                        fontScale=1, color=color, thickness=2,
                         lineType=cv2.LINE_AA
                     )
         writer.writeFrame(data)
@@ -273,9 +332,23 @@ def make_video(stack, ofile, skip=None, fps=24,
     return Video(ofile)
 
 
-def plot_mov(stack, ncols=4, virtual=True, skip=None, **kwargs):
-    """Uses plot_img() to plot LEEMImges on axes objects in a grid.
-    Takes either a file name, folder name or LEEMStack object."""
+def plot_mov(stack, skip=None, ncols=4, virtual=True, dpi=100, **kwargs):
+    """
+    Uses plot_img() to plot LEEMImges on axes objects in a grid.
+    - stack:
+      Either a LEEMStack object, a path to a folder that contains *.dat images,
+      the path to an image file that contains all images (e.g. *.tif), or a list of
+      LEEMImg objects
+
+    Optional keyword arguments:
+    - skip:  (equivalent to "increment")
+      If set to an integer n, it will use only every n-th frame
+      (faster than increasing fps)
+    - ncols:
+      Number of columns of the grid.
+    For more arguments, see the help text for plot_img(). All arguments in there
+    can also be given.
+    """
     stack = stackify(stack, virtual=virtual)
     if "increment" in kwargs:
         skip = kwargs.pop("increment")
@@ -284,15 +357,14 @@ def plot_mov(stack, ncols=4, virtual=True, skip=None, **kwargs):
 
     nrows = math.ceil(len(stack) / ncols)
     figsize = kwargs.pop("figsize", (ncols * 5, nrows * 5))
-    dpi = kwargs.pop("dpi", 100)
     fig, axes = plt.subplots(ncols=ncols, nrows=nrows, figsize=figsize, dpi=dpi)
 
     # zip_longest() pads the shorter list with None
     for ax, img in itertools.zip_longest(axes.flatten(), stack):
         if img is None:
             fig.delaxes(ax)
-        else:
-            plot_img(img, ax=ax, **kwargs)
+            continue
+        plot_img(img, ax=ax, **kwargs)
 
 def plot_movie(*args, **kwargs):
     """Alias for agfalta.leem.plotting.plot_mov()."""
