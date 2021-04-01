@@ -368,7 +368,8 @@ def plot_single_clusters(clustermap, cmap="brg"):
     n_clusters = int(clustermap.max()) + 1
     nrows = int(np.ceil(n_clusters / 4))
     fig, axes = plt.subplots(nrows, 4, figsize=(20, 5 * nrows))
-    for i, ax in axes.flatten():
+    print(axes.flatten())
+    for i, ax in enumerate(axes.flatten()):
         if i < n_clusters:
             single_map = np.zeros_like(clustermap)
             single_map[clustermap == i] = 1

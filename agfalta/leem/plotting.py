@@ -288,9 +288,7 @@ def make_video(stack, ofile, skip=None,
         field_color = "yellow"
         if invert:
             field_color = "black"
-    print(field_color)
     color = tuple(int(rgb * 255) for rgb in matplotlib.colors.to_rgb(field_color))
-    print(color)
 
     for img in stack:
         if mcp is not None:
