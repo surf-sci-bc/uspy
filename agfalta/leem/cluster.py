@@ -426,7 +426,6 @@ def plot_IVs(stack, labels, ax=None, ofile=None, mask_outer=0.2,
             stack.energy, IV_curve,
             color=color,
             label=legend.get(i),
-            lw=kwargs.pop("lw", 2),
             **kwargs
         )
     if legend:
