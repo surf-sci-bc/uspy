@@ -20,7 +20,7 @@ def plot_img(fname, background="planar"):
     else:
         raise ValueError(f"Unknown background type {background}")
     plt.imshow(data)
-    
+
 
 def get_strar(fname):
     for var in STMImage(fname).variables:
@@ -30,8 +30,8 @@ def get_strar(fname):
 
 def print_metadata(fname, verbose=False):
     keys = [
-        "direction", "bias", "vx", "CP", "CI",
-        "rangex", "rangey", "rangez", "dx", "dy", "dz", 
+        "direction", "bias", "speed", "CP", "CI",
+        "rangex", "rangey", "rangez", "dx", "dy", "dz",
         "offsetx", "offsety", "rotation",
         "resy", "resy",
         "time", "time_passed", "timestamp_start", "timestamp_end",
@@ -47,7 +47,7 @@ def print_metadata(fname, verbose=False):
     if verbose:
         for k, v in img.metadata.items():
             print(f"{k:>25}: {v}")
-        
+
 
 
 def print_sizes(fname):
@@ -70,4 +70,3 @@ def inspect(fname):
                 print(bstr)
         else:
             print(data)
-

@@ -2,7 +2,6 @@
 
 # pylint: disable=invalid-name
 # pylint: disable=missing-docstring
-# pylint: disable=too-many-arguments
 
 import netCDF4 as nc
 import numpy as np
@@ -33,7 +32,7 @@ class STMImage:
         "direction": "spm_scancontrol",
         "hardware_setup": "sranger_info",
         "bias": "sranger_mk2_hwi_bias",
-        "vx": "sranger_mk2_hwi_scan_speed_x",
+        "speed": "sranger_mk2_hwi_scan_speed_x",
         "CP": "sranger_mk2_hwi_usr_cp",
         "CI": "sranger_mk2_hwi_usr_ci"
     }
@@ -42,7 +41,9 @@ class STMImage:
         "resy": "dimy"
     }
     def __init__(self, fname):
-        self.ds = nc.Dataset(fname)
+        self.ds = nc.Dataset(fname)     # pylint: disable=no-member
+        self._variables = None
+        self._dimensions = None
 
     @property
     def metadata(self):
@@ -50,48 +51,43 @@ class STMImage:
 
     @property
     def dimensions(self):
-        return self.ds.dimensions.values()
-        # return dict((dim.name, dim.size) for dim in self.ds.dimensions.values())
-    
+        if self._dimensions is None:
+            self._dimensions = dict(
+                (dim.name, dim) for dim in self.ds.dimensions.values()
+            )
+        return self._dimensions
+
     @property
     def variables(self):
-        return self.ds.variables.values()
-
-    def get_variable(self, key):
-        if key not in self._attrs:
-            raise AttributeError(f"Unknown key '{key}'")
-        for var in self.variables:
-            if var.name == self._attrs[key]:
-                return var
-        raise AttributeError(f"'{self._attrs[key]}' not in variables")
+        if self._variables is None:
+            self._variables = dict(
+                (var.name, var) for var in self.ds.variables.values()
+            )
+        return self._variables
 
     def get_variable_value(self, key):
-        try:
-            var = self.get_variable(key)
-            data = var[:]
+        if key in self._dim_attrs:
+            dim = self.dimensions.get(self._dim_attrs[key])
+            if dim is None:
+                return None
+            return dim.size
+        if key in self._attrs:
+            var = self.variables.get(self._attrs[key])
+            if var is None:
+                return None
+            val = var[:]
             if var.dtype.type is np.bytes_:
-                bstr = data[~data.mask].tobytes()
-                try:
-                    return bstr.decode("utf-8").strip()
-                except UnicodeDecodeError:
-                    return bstr
-        except AttributeError:
-            if key not in self._dim_attrs:
-                raise AttributeError(f"Unknown key '{key}'")
-            for dim in self.dimensions:
-                if dim.name == self._dim_attrs[key]:
-                    data = dim.size
-                    break
-            else:
-                raise AttributeError(f"'{self._dim_attrs[key]}' not in dimensions")            
-        return data
+                bstr = val[~val.mask].tobytes()
+                val = bstr.decode("utf-8", errors="ignore").strip()
+            return val
+        raise ValueError(f"Unknown data field '{key}'")
 
     def get_field_string(self, attr):
-        try:
-            var = self.get_variable(attr)
-        except AttributeError:
-            return self.get_variable_value(attr)
+        var = self.variables.get(self._attrs.get(attr))
+        if var is None:
+            var = self.variables.get(self._dim_attrs.get(attr))
         value = self.get_variable_value(attr)
+
         try:
             unit = var.unit
         except AttributeError:
@@ -107,13 +103,13 @@ class STMImage:
             "1": ""
         }
         unit = translate_dict.get(unit, unit)
+
         return f"{value} {unit}".strip()
-        
+
     def __getattr__(self, attr):
         return self.get_variable_value(attr)
 
     @property
     def z(self):
-        z = self.get_variable("z")[:]
+        z = self.variables[self._attrs["z"]]
         return np.squeeze(z)
-
