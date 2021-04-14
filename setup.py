@@ -35,6 +35,7 @@ setup(
         "kneed",
         "lmfit",
         "ipython",
+        "netCDF4",
         "setuptools_scm",       # see agfalta/version.py
     ],
     # dependency_links=['https://github.com/annoviko/pyclustering/tarball/master'],
