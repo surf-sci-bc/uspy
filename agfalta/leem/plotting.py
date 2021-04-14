@@ -98,6 +98,7 @@ def plot_img(img, fields=("temperature", "pressure", "energy", "fov"), field_col
       lower values mean smaller cutouts. Also sets the "fields" font color
       to black
     All other arguments will be passed to matplotlib's plot() function (e.g. linewidth)
+    Returns an axes object.
     """
     img = imgify(img)
     if mcp is not None:
@@ -227,6 +228,8 @@ def make_video(stack, ofile, skip=None,
       exists). Faster if you don't need to change anything.
     - scale:
       Will make the video larger/smaller by changing the resolution (default 0.5)
+
+    Returns an iPython.display Video object
     """
     if not overwrite and os.path.isfile(ofile):
         return Video(ofile)
@@ -346,6 +349,7 @@ def plot_mov(stack, skip=None, ncols=4, virtual=True, dpi=100, **kwargs):
       Number of columns of the grid.
     For more arguments, see the help text for plot_img(). All arguments in there
     can also be given.
+    Returns an array of the axes objects.
     """
     stack = stackify(stack, virtual=virtual)
     if "increment" in kwargs:
@@ -364,6 +368,8 @@ def plot_mov(stack, skip=None, ncols=4, virtual=True, dpi=100, **kwargs):
             continue
         plot_img(img, ax=ax, **kwargs)
 
+    return axes.flatten()
+
 def plot_movie(*args, **kwargs):
     """Alias for agfalta.leem.plotting.plot_mov()."""
     print("plot_movie() is DEPRECATED, use plot_mov() instead")
@@ -371,7 +377,8 @@ def plot_movie(*args, **kwargs):
 
 
 def plot_meta(stack, fields="temperature"):
-    """Plots some metadata of the stack over time."""
+    """Plots some metadata of the stack over time. Returns an array of the
+    axes objects."""
     stack = stackify(stack)
     if isinstance(fields, str):
         fields = [fields]
@@ -395,6 +402,8 @@ def plot_meta(stack, fields="temperature"):
             axes[i].set_yscale('log')
         axes[i].set_ylabel(f"{field} in {stack[0].get_unit(field)}")
         axes[i].set_xlabel("Time in s")
+
+    return axes
 
 
 def print_meta(stack, fields=("energy", "temperature", "pressure1",
@@ -420,21 +429,27 @@ def print_meta(stack, fields=("energy", "temperature", "pressure1",
     display(df)
 
 
-def plot_intensity(stack, *args, xaxis="energy", ax=None, **kwargs):
+def plot_intensity(stack, *args, xaxis="rel_time", ax=None, **kwargs):
     """Plots the image intensity in a specified ROI over a specified
     x axis. The x axis can be any attribute of the stack.
-    Either you give the ROI object itself or the parameters for a ROI
-    The ROI is defined by its center x0, y0 and either of:
-    - type_="circle", radius=XX
-    - type_="rectangle", width=XX, height=XX
-    - type_="ellipse", xradius=XX, yradius=XX
-    You can omit type_, then it selects a circle. The radius can then
-    also be omitted, defaulting to 10.
+    Either you give:
+    - The ROI object itself (from leem.ROI())
+    - A list of ROI objects
+    - The parameters for a ROI:
+        x0=XX, y0=XX and one of these:
+        * type_="circle", radius=XX                 (default if omitted)
+        * type_="rectangle", width=XX, height=XX
+        * type_="ellipse", xradius=XX, yradius=XX
     Examples:
-        plot_intensity(stack, x0, y0, radius=3)
+        plot_intensity(stack, x0=300, y0=200, radius=3)
+        plot_intensity(stack, x0=300, y0=100, width=15, height=20)  # makes rectangle
+        roi = leem.ROI(300, 200, radius=10)
         plot_intensity(stack, roi)
-        plot_intensity(stack, x0, y0, type_="rectangle", width=5, height=4)
-    Returns a tuple of the axes object and the ROI
+        plot_intensity(stack, x0=100, y0=50, type_="ellipse", xradius=5, xradius=4)
+        roi2 = leem.ROI(200, 100, radius=5)
+        plot_intensity(stack, (roi, roi2))
+
+    Returns the axes object and the ROI list
     """
     stack = stackify(stack)
     rois = roify(*args, **kwargs)
@@ -447,7 +462,7 @@ def plot_intensity(stack, *args, xaxis="energy", ax=None, **kwargs):
             intensity[i] = roi.apply(img.data).sum() / roi.area
         ax.plot(x, intensity)
 
-    return ax, roi
+    return ax, rois
 
 def plot_iv(*args, **kwargs):
     """Alias for agfalta.leem.plotting.plot_intensity() with xaxis set
@@ -458,6 +473,7 @@ def plot_iv(*args, **kwargs):
 def plot_intensity_img(stack, *args, xaxis="rel_time", img_idx=None, **kwargs):
     """Does the same thing as agfalta.leem.plotting.plot_intensity()
     but also shows an image of the stack and the ROI on it on the right.
+    Returns 2 axes objects: The first one contains the plot, the second one the image.
     """
     stack = stackify(stack)
     rois = roify(*args, **kwargs)
@@ -467,11 +483,10 @@ def plot_intensity_img(stack, *args, xaxis="rel_time", img_idx=None, **kwargs):
     if img_idx is None:
         img_idx = get_max_variance_idx(stack)
     plot_img(stack[img_idx], ax=ax2, ticks=True)
+    plot_rois(rois, ax=ax2)
 
-    colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
-    for i, roi in enumerate(rois):
+    for roi in rois:
         plot_intensity(stack, roi, ax=ax1, xaxis=xaxis)
-        ax2.add_artist(roi.artist(colors[i]))
 
     return ax1, ax2
 
@@ -481,14 +496,20 @@ def plot_iv_img(*args, **kwargs):
     return plot_intensity_img(*args, xaxis="energy", **kwargs)
 
 
-def plot_rois(img, *args, **kwargs):
-    img = imgify(img)
+def plot_rois(*args, img=None, ax=None, **kwargs):
+    """Plot rois onto a given axes object. The ROI can either be given like in
+    plot_intensity()."""
     rois = roify(*args, **kwargs)
-    ax = plot_img(img, ticks=True)
+    if img is not None:
+        img = imgify(img)
+        ax = plot_img(img, ticks=True)
+    elif ax is None:
+        ax = _get_ax(ax)
 
     colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
     for i, roi in enumerate(rois):
         ax.add_artist(roi.artist(colors[i]))
+    return ax
 
 
 # Utility:
