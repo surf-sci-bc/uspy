@@ -54,13 +54,13 @@ class XPSSpectrum:
     def parse_txt(self, idx):
         try:
             specdict = io.parse_spectrum_file(self.path)[idx]
-        except FileNotFoundError:
-            raise ValueError(f"{self.path} does not exist or has wrong file format")
+        except FileNotFoundError as e:
+            raise ValueError(f"{self.path} does not exist or has wrong file format") from e
         try:
             self._energy = specdict.pop("energy")
             self._intensity = specdict.pop("intensity")
-        except KeyError:
-            raise ValueError(f"{self.path} cannot be parsed correctly")
+        except KeyError as e:
+            raise ValueError(f"{self.path} cannot be parsed correctly") from e
         self._meta = self._defaults.copy()
         self._meta.update(specdict)
 
@@ -69,8 +69,8 @@ class XPSSpectrum:
             raise AttributeError
         try:
             return self._meta[attr]
-        except KeyError:
-            raise AttributeError(f"No attribute named {attr}")
+        except KeyError as e:
+            raise AttributeError(f"No attribute named {attr}") from e
 
     def __setattr__(self, attr, value):
         if hasattr(self, "_meta") and attr in self._meta:
