@@ -49,6 +49,11 @@ class ROI:
         self.params = copy.deepcopy(self._defaults[self.type_])
         self.params.update(kwargs)
 
+    def __repr__(self):
+        return (f"{self.type_}("
+                + ",".join(f"{k}:{v}" for k, v in self.params.items())
+                + ")")
+
     def apply(self, img_array):
         if img_array.shape != self._img_shape or self._mask is None:
             self._mask = self.create_mask(*img_array.shape)

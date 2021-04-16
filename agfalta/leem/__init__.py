@@ -20,6 +20,7 @@ from agfalta.leem.plotting import (
     plot_img,
     plot_mov, plot_movie, plot_meta, make_video,
     print_meta,
-    plot_intensity, plot_iv, plot_intensity_img, plot_iv_img, plot_rois
+    get_intensity, plot_rois,
+    plot_intensity, plot_iv, plot_intensity_img, plot_iv_img
 )
 from agfalta.leem.processing import calculate_dose, ROI

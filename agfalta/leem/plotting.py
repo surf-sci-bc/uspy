@@ -449,20 +449,41 @@ def plot_intensity(stack, *args, xaxis="rel_time", ax=None, **kwargs):
         roi2 = leem.ROI(200, 100, radius=5)
         plot_intensity(stack, (roi, roi2))
 
-    Returns the axes object and the ROI list
+    Returns the axes object
+    """
+    ax = _get_ax(ax, xlabel=xaxis, ylabel="Intensity in a.u.")
+    data = get_intensity(stack, *args, rois, **kwargs)
+    x = data[0]
+    for intensity in data[1:]:
+        ax.plot(x, intensity)
+    return ax
+
+def get_intensity(stack, *args, xaxis="rel_time", ofile=None, **kwargs):
+    """Calculate intensity profile along a stack in a given ROI (or multiple ROIs).
+    ROIs are supplied in the same way as for plot_intensity().
+    Returns a 2D-numpy array: The first row contains the value of "xaxis",
+    every following row contains the intensity along one of the ROIs.
+    If ofile is given, the result is saved in csv format under the given file name.
     """
     stack = stackify(stack)
     rois = roify(*args, **kwargs)
-
-    ax = _get_ax(ax, xlabel=xaxis, ylabel="Intensity in a.u.")
     x = getattr(stack, xaxis)
+    cols = [x]
     for roi in rois:
-        intensity = np.zeros(len(stack))
-        for i, img in enumerate(stack):
-            intensity[i] = roi.apply(img.data).sum() / roi.area
-        ax.plot(x, intensity)
+        cols.append(np.zeros(len(stack)))
 
-    return ax, rois
+    for i, img in enumerate(stack):
+        for j, roi in enumerate(rois):
+            cols[j + 1][i] = roi.apply(img.data).sum() / roi.area
+
+    data = np.stack(cols)
+    if ofile is not None:
+        np.savetxt(
+            ofile, data.T,
+            header=f"{xaxis} | " + " | ".join(str(roi) for roi in rois)
+        )
+    return data
+
 
 def plot_iv(*args, **kwargs):
     """Alias for agfalta.leem.plotting.plot_intensity() with xaxis set
