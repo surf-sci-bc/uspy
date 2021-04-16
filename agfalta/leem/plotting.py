@@ -452,7 +452,7 @@ def plot_intensity(stack, *args, xaxis="rel_time", ax=None, **kwargs):
     Returns the axes object
     """
     ax = _get_ax(ax, xlabel=xaxis, ylabel="Intensity in a.u.")
-    data = get_intensity(stack, *args, rois, **kwargs)
+    data = get_intensity(stack, *args, **kwargs)
     x = data[0]
     for intensity in data[1:]:
         ax.plot(x, intensity)
