@@ -11,6 +11,7 @@ import numpy as np
 
 from agfalta.leem.utility import imgify, stackify
 from agfalta.utility import progress_bar
+from agfalta.leem.processing import ROI
 
 
 def normalize(img_or_stack, *args, **kwargs):
@@ -55,7 +56,7 @@ def align(stack, **kwargs):
     """
     Use these keyword arguments:
     algorithm={"ecc","sift"}
-    mask_outer=fraction   (fraction of outer image to discard, default=0.2)
+    roi: defines a ROI, which can be any shape (circle, rectangle...). Defaults to 15% rectangular cutoff
     for ecc:
         max_iter=int      (maximum iterations, default=500)
         eps=number        (threshold to reach, default=1e-10)
@@ -83,30 +84,39 @@ def apply_alignment_matrices(stack, alignment):
         )
     return stack
 
-def find_alignment_matrices(stack, algorithm="sift", **kwargs):
+def find_alignment_matrices(stack, algorithm="sift", roi=None, **kwargs):
+    if roi == None or not isinstance(roi, ROI):
+        print("No valid ROI found. Creating default ROI with 15% cutoff on each side")
+        y0, x0 = np.array(np.shape(stack[0].data), dtype=int)*0.15
+        height, width = np.array(np.shape(stack[0].data))*0.7
+        roi = ROI(x0, y0, type_="rectangle", width=width, height=height)
+
+    img_height, img_width = np.shape(stack[0].data)
+    mask = np.array(roi.create_mask(img_height, img_width), dtype=np.uint8)
+
     if algorithm == "ecc":
-        return find_alignment_matrices_ecc(stack, **kwargs)
+        return find_alignment_matrices_ecc(stack, mask=mask, **kwargs)
     elif algorithm == "sift":
-        return find_alignment_matrices_sift(stack, **kwargs)
+        return find_alignment_matrices_sift(stack, mask=mask, **kwargs)
     raise ValueError(f"Unknown algorithm '{algorithm}'")
 
 
-def find_alignment_matrices_sift(stack, trafo="full-affine", min_matches=10, mask_outer=0.2,
+def find_alignment_matrices_sift(stack, trafo="full-affine", min_matches=10, mask=None,
                                  **_kwargs):
     """Trafo can either be "full-affine", "affine"(=rigid) or "homography"."""
     # pylint: disable=too-many-locals
     sift = cv.SIFT_create()
     data8bit = []
-    # cut off outer fraction of image
-    dy, dx = np.array(mask_outer * np.array(stack[0].data.shape), dtype=np.int)
     for img in progress_bar(stack, "Finding keypoints (SIFT)..."):
         # sift needs 8-bit images:
         img8bit = cv.normalize(
-            img.data[dy:-dy, dx:-dx],
+            #img.data[dy:-dy, dx:-dx],
+            img.data * mask,  # apply mask, so the ROI has enhanced contrast
             None, 0, 255, cv.NORM_MINMAX
         ).astype("uint8")
+
         # find keypoints and descriptors:
-        kp, desc = sift.detectAndCompute(img8bit, None)
+        kp, desc = sift.detectAndCompute(img8bit, mask)
         data8bit.append((img8bit, kp, desc))
 
     alignment = [np.eye(3, 3, dtype=np.float32)]
@@ -145,15 +155,10 @@ def find_alignment_matrices_sift(stack, trafo="full-affine", min_matches=10, mas
     return alignment
 
 
-def find_alignment_matrices_ecc(stack, max_iter=500, eps=1e-10, mask_outer=0.2, **_kwargs):
+def find_alignment_matrices_ecc(stack, max_iter=500, eps=1e-10, mask=None, **_kwargs):
+
     criteria = (cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, max_iter, eps)
     warp_mode = cv.MOTION_TRANSLATION
-    mask = np.ones_like(stack[0].data, dtype=np.uint8)
-    # cut off outer fraction of image
-    cutoff_y, cutoff_x = np.array(mask_outer * np.array(mask.shape), dtype=np.int)
-    # pylint: disable=unsupported-assignment-operation
-    mask[cutoff_y:-cutoff_y, :] = 0
-    mask[:, cutoff_x:-cutoff_x] = 0
 
     alignment = [np.eye(3, 3, dtype=np.float32)]
 
