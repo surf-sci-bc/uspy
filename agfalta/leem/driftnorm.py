@@ -12,6 +12,7 @@ import numpy as np
 from agfalta.leem.utility import imgify, stackify
 from agfalta.utility import progress_bar
 from agfalta.leem.processing import ROI
+#from multiprocessing import Pool, cpu_count, Process, Manager
 
 
 def normalize(img_or_stack, *args, **kwargs):
@@ -58,8 +59,10 @@ def align(stack, **kwargs):
     algorithm={"ecc","sift"}
     roi: defines a ROI, which can be any shape (circle, rectangle...). Defaults to 15% rectangular cutoff
     for ecc:
+        trafo={"translation","rigid","affine"}   (default=translation)
         max_iter=int      (maximum iterations, default=500)
         eps=number        (threshold to reach, default=1e-10)
+        avg=int           (alignment ist averaged by matching with avg Number of previous images, default = 1)
     for sift:
         trafo={"full-affine","affine","homography"}   (default=full-affine)
         min_matches=int    (minimum matches between two images, default=10)
@@ -154,25 +157,76 @@ def find_alignment_matrices_sift(stack, trafo="full-affine", min_matches=10, mas
         alignment.append(warp_matrix)
     return alignment
 
+def do_ecc(chunk):
+    _, warp_matrix = cv.findTransformECC(*chunk)
+    warp_matrix = np.append(warp_matrix, [[0, 0, 1]], axis=0)
 
-def find_alignment_matrices_ecc(stack, max_iter=500, eps=1e-10, mask=None, **_kwargs):
+    return warp_matrix
+
+def find_alignment_matrices_ecc(stack, max_iter=500, eps=1e-10, trafo="translation", mask=None, avg=1, **_kwargs):
 
     criteria = (cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, max_iter, eps)
-    warp_mode = cv.MOTION_TRANSLATION
+    if trafo == "translation":
+        warp_mode = cv.MOTION_TRANSLATION
+    elif trafo == "euclidean" or trafo == "rigid":
+        warp_mode = cv.MOTION_EUCLIDEAN
+    elif trafo == "affine":
+        warp_mode = cv.MOTION_AFFINE
+        if avg!=1:
+            print("avg not supported for affine transformation")
+    else:
+        print("Unrecognized transformation. Using Translation.")
+        warp_mode = cv.MOTION_TRANSLATION
 
     alignment = [np.eye(3, 3, dtype=np.float32)]
 
+    #chunks = [ 1 for _ in range(len(stack)-1)]
+
+    #for i, chunk in enumerate(chunks):
+    #    warp_matrix = np.eye(2, 3, dtype=np.float32)
+    #    chunks[i] = [stack[i].data, stack[i + 1].data, warp_matrix, warp_mode, criteria, mask, 5]
+    
+    #print(f"Calculating on {cpu_count()} cores")
+
+    #manager = Manager()
+    #return_dict = manager.dict()
+
+    #processes = []
+    #for chunk in chunks:
+    #    p = Process(target=do_ecc, args=[chunk])
+    #    processes.append(p)
+    #    p.start()
+    
+    #for pro in processes:
+    #    pro.join()
+
+    #print(return_dict.values())
+
+    #with Pool(1) as p:
+    #    warp_matrix = p.map(do_ecc, chunks)
+
+    #for warp_matrix in warp_matrix:
+    #    warp_matrix = np.dot(alignment[-1], warp_matrix)
+    #    alignment.append(warp_matrix)
+
+
     for i in progress_bar(range(len(stack) - 1), "Calculating drift (ECC)"):
-        warp_matrix = np.eye(2, 3, dtype=np.float32)
-        _, warp_matrix = cv.findTransformECC(
-            stack[i].data, stack[i + 1].data,
-            warp_matrix, warp_mode, criteria,
-            mask,   # all ones, so no mask at all
-            5       # gaussian blur to apply before
-        )
-        # warp_matrix looks like this: [[1, 0, dx], [0, 1, dy]].
-        # Add another [[0, 0, 1]] to get a 3x3 transformation matrix
-        warp_matrix = np.append(warp_matrix, [[0, 0, 1]], axis=0)
-        warp_matrix = np.dot(alignment[-1], warp_matrix)
-        alignment.append(warp_matrix)
+
+        warp_matrix = [np.eye(2, 3, dtype=np.float32) for x in range(min(i+1,avg))]
+        shift =  np.zeros((3,3))
+        for j, matrix in enumerate(warp_matrix):
+            _, matrix = cv.findTransformECC(
+                stack[i-j].data, stack[i + 1].data,
+                matrix, warp_mode, criteria,
+                mask,   
+                5       # gaussian blur to apply before
+            )
+            # warp_matrix looks like this: [[1, 0, dx], [0, 1, dy]].
+            # Add another [[0, 0, 1]] to get a 3x3 transformation matrix
+            matrix = np.append(matrix, [[0, 0, 1]], axis=0)
+            shift += np.dot(alignment[-j-1], matrix)/len(warp_matrix)
+
+        alignment.append(shift)
+    
+
     return alignment
