@@ -32,7 +32,11 @@ class ROI:
         "rectangle": {"width": 50, "height": 50},
         "ellipse": {"xradius": 10, "yradius": 20}
     }
-    def __init__(self, x0, y0, type_=None, **kwargs):
+    kwargs = (
+        "x0", "y0", "type_", "color",
+        "radius", "width", "height", "xradius", "yradius"
+    )
+    def __init__(self, x0, y0, type_=None, color=None, **kwargs):
         self.position = x0, y0
         self._img_shape = None
         self.area = None
@@ -48,6 +52,7 @@ class ROI:
         assert self.type_ in self._defaults
         self.params = copy.deepcopy(self._defaults[self.type_])
         self.params.update(kwargs)
+        self.color = color
 
     def __repr__(self):
         return (f"{self.type_}("

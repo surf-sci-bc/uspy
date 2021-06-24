@@ -94,7 +94,13 @@ def combine_labels(labels, combinations):
         print(f"Combined cluster {int(i)}: {size} pixels ({100*size/labels.size} %)")
     return combined_labels
 
-def make_cmap(phases, labels):
+def make_cmap(phases, labels, default_phases=False):
+    if default_phases:
+        print("Use default phases")
+        phases = {}
+        imax = int(labels.max())
+        for i in range(imax + 1):
+            phases[i] = (str(i), plt.get_cmap()(i / imax))
     colors_list = []
     legend = {}
     color = "#fff"

@@ -17,7 +17,7 @@ import skvideo.io
 from IPython.display import display, Video
 
 from agfalta.leem.utility import stackify, imgify
-from agfalta.leem.processing import roify, get_max_variance_idx
+from agfalta.leem.processing import roify, get_max_variance_idx, ROI
 from agfalta.leem.driftnorm import normalize_image
 
 
@@ -55,7 +55,7 @@ def info(obj):
 
 def plot_img(img, fields=("temperature", "pressure", "energy", "fov"), field_color=None,
              mcp=None, dark_counts=100, contrast=None, invert=False, log=False,
-             ax=None, title=None, figsize=None, dpi=100, ticks=False,
+             ax=None, title=True, figsize=None, dpi=100, ticks=False,
              cutout_diameter=None, **kwargs):
     """Plots a single LEEM image with some metadata. Takes either a file name
     or a LEEMImg object. Metadata fields given are shown in the corners of the
@@ -103,7 +103,9 @@ def plot_img(img, fields=("temperature", "pressure", "energy", "fov"), field_col
     img = imgify(img)
     if mcp is not None:
         img = normalize_image(img, mcp=mcp, dark_counts=dark_counts)
-    if title is None and img.path != "NO_PATH":
+    if title is False or img.path == "NO_PATH":
+        title = ""
+    elif title is None or title is True:
         title = img.path
     if title and len(title) > 25:
         title = f"...{title[-25:]}"
@@ -144,9 +146,10 @@ def plot_img(img, fields=("temperature", "pressure", "energy", "fov"), field_col
     if invert:
         data = -data + data.max()
 
+    cmap = kwargs.pop("cmap", "gray")
     ax.imshow(
         data,
-        cmap="gray",
+        cmap=cmap,
         clim=(np.nanmin(data), np.nanmax(data)),
         aspect=1,
         **kwargs
@@ -451,11 +454,15 @@ def plot_intensity(stack, *args, xaxis="rel_time", ax=None, **kwargs):
 
     Returns the axes object
     """
+    rois = roify(*args, **kwargs)
     ax = _get_ax(ax, xlabel=xaxis, ylabel="Intensity in a.u.")
-    data = get_intensity(stack, *args, xaxis=xaxis, **kwargs)
+    data = get_intensity(stack, rois, xaxis=xaxis)
     x = data[0]
-    for intensity in data[1:]:
-        ax.plot(x, intensity)
+    for roi, intensity in zip(rois, data[1:]):
+        if roi.color is not None:
+            ax.plot(x, intensity, color=roi.color)
+        else:
+            ax.plot(x, intensity)
     return ax
 
 def get_intensity(stack, *args, xaxis="rel_time", ofile=None, **kwargs):
@@ -498,12 +505,14 @@ def plot_intensity_img(stack, *args, xaxis="rel_time", img_idx=None, **kwargs):
     """
     stack = stackify(stack)
     rois = roify(*args, **kwargs)
+    for kwarg in ROI.kwargs:
+        kwargs.pop(kwarg, None)
 
     _, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
 
     if img_idx is None:
         img_idx = get_max_variance_idx(stack)
-    plot_img(stack[img_idx], ax=ax2, ticks=True)
+    plot_img(stack[img_idx], ax=ax2, ticks=True, **kwargs)
     plot_rois(rois, ax=ax2)
 
     for roi in rois:
@@ -521,15 +530,21 @@ def plot_rois(*args, img=None, ax=None, **kwargs):
     """Plot rois onto a given axes object. The ROI can either be given like in
     plot_intensity()."""
     rois = roify(*args, **kwargs)
+    for kwarg in ROI.kwargs:
+        kwargs.pop(kwarg, None)
+    if ax is None:
+        ax = _get_ax(ax)
     if img is not None:
         img = imgify(img)
-        ax = plot_img(img, ticks=True)
-    elif ax is None:
-        ax = _get_ax(ax)
+        ax = plot_img(img, ticks=True, ax=ax)
 
     colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
     for i, roi in enumerate(rois):
-        ax.add_artist(roi.artist(colors[i]))
+        if roi.color is None:
+            color = colors[i]
+        else:
+            color = roi.color
+        ax.add_artist(roi.artist(color))
     return ax
 
 

@@ -57,15 +57,18 @@ def align(stack, **kwargs):
     """
     Use these keyword arguments:
     algorithm={"ecc","sift"}
-    roi: defines a ROI, which can be any shape (circle, rectangle...). Defaults to 15% rectangular cutoff
+    roi: defines a ROI, which can be any shape (circle, rectangle...).
+    Defaults to 15% rectangular cutoff
     for ecc:
         trafo={"translation","rigid","affine"}   (default=translation)
-        max_iter=int      (maximum iterations, default=500)
-        eps=number        (threshold to reach, default=1e-10)
-        avg=int           (alignment ist averaged by matching with avg Number of previous images, default = 1)
+        max_iter=int        maximum iterations, default: 500
+        eps=number          threshold to reach, default: 1e-10
+        avg=int             alignment ist averaged by matching with avg Number of previous images,
+                            default: 1
     for sift:
-        trafo={"full-affine","affine","homography"}   (default=full-affine)
-        min_matches=int    (minimum matches between two images, default=10)
+        trafo={"full-affine","affine","homography"}
+                            default: full-affine
+        min_matches=int     minimum matches between two images, default: 10
     """
     stack = stackify(stack)
     alignment = find_alignment_matrices(stack, **kwargs)
@@ -88,7 +91,7 @@ def apply_alignment_matrices(stack, alignment):
     return stack
 
 def find_alignment_matrices(stack, algorithm="sift", roi=None, **kwargs):
-    if roi == None or not isinstance(roi, ROI):
+    if roi is None or not isinstance(roi, ROI):
         print("No valid ROI found. Creating default ROI with 15% cutoff on each side")
         y0, x0 = np.array(np.shape(stack[0].data), dtype=int)*0.15
         height, width = np.array(np.shape(stack[0].data))*0.7
@@ -163,17 +166,18 @@ def do_ecc(chunk):
 
     return warp_matrix
 
-def find_alignment_matrices_ecc(stack, max_iter=500, eps=1e-10, trafo="translation", mask=None, avg=1, **_kwargs):
+def find_alignment_matrices_ecc(stack, max_iter=500, eps=1e-10, trafo="translation",
+                                mask=None, avg=1, **_kwargs):
 
     criteria = (cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, max_iter, eps)
     if trafo == "translation":
         warp_mode = cv.MOTION_TRANSLATION
-    elif trafo == "euclidean" or trafo == "rigid":
+    elif trafo in ("euclidean", "rigid"):
         warp_mode = cv.MOTION_EUCLIDEAN
     elif trafo == "affine":
         warp_mode = cv.MOTION_AFFINE
-        if avg!=1:
-            print("avg not supported for affine transformation")
+        if avg != 1:
+            raise ValueError("avg not supported for affine transformation")
     else:
         print("Unrecognized transformation. Using Translation.")
         warp_mode = cv.MOTION_TRANSLATION
@@ -185,7 +189,7 @@ def find_alignment_matrices_ecc(stack, max_iter=500, eps=1e-10, trafo="translati
     #for i, chunk in enumerate(chunks):
     #    warp_matrix = np.eye(2, 3, dtype=np.float32)
     #    chunks[i] = [stack[i].data, stack[i + 1].data, warp_matrix, warp_mode, criteria, mask, 5]
-    
+
     #print(f"Calculating on {cpu_count()} cores")
 
     #manager = Manager()
@@ -196,7 +200,7 @@ def find_alignment_matrices_ecc(stack, max_iter=500, eps=1e-10, trafo="translati
     #    p = Process(target=do_ecc, args=[chunk])
     #    processes.append(p)
     #    p.start()
-    
+
     #for pro in processes:
     #    pro.join()
 
@@ -211,22 +215,19 @@ def find_alignment_matrices_ecc(stack, max_iter=500, eps=1e-10, trafo="translati
 
 
     for i in progress_bar(range(len(stack) - 1), "Calculating drift (ECC)"):
-
-        warp_matrix = [np.eye(2, 3, dtype=np.float32) for x in range(min(i+1,avg))]
+        warp_matrices = [np.eye(2, 3, dtype=np.float32) for x in range(min(i + 1, avg))]
         shift =  np.zeros((3,3))
-        for j, matrix in enumerate(warp_matrix):
-            _, matrix = cv.findTransformECC(
-                stack[i-j].data, stack[i + 1].data,
-                matrix, warp_mode, criteria,
-                mask,   
+        for j, warp_matrix in enumerate(warp_matrices):
+            _, warp_matrix = cv.findTransformECC(
+                stack[i - j].data, stack[i + 1].data,
+                warp_matrix, warp_mode, criteria,
+                mask,
                 5       # gaussian blur to apply before
             )
             # warp_matrix looks like this: [[1, 0, dx], [0, 1, dy]].
             # Add another [[0, 0, 1]] to get a 3x3 transformation matrix
-            matrix = np.append(matrix, [[0, 0, 1]], axis=0)
-            shift += np.dot(alignment[-j-1], matrix)/len(warp_matrix)
-
+            warp_matrix = np.append(warp_matrix, [[0, 0, 1]], axis=0)
+            shift += np.dot(alignment[-1 - j], warp_matrix) / len(warp_matrices)
         alignment.append(shift)
-    
 
     return alignment
