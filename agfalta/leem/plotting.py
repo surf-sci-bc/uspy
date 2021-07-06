@@ -322,7 +322,10 @@ def make_video(stack, ofile, skip=None,
         if fields:
             data = cv2.cvtColor(data, cv2.COLOR_GRAY2RGB)
             for i, field in enumerate(fields):
-                text = img.get_field_string(field).encode("ascii", errors="ignore").decode()
+                if field is None:
+                    continue
+                text = img.get_field_string(field).replace("µ","u").encode("ascii", errors="ignore").decode()
+
                 for pos, char in enumerate(text):
                     xy = _CV2_IMG_POS(i, height, width, text, pos=pos)
                     data = cv2.putText(
@@ -550,7 +553,7 @@ def stitch_curves(stacks, rois, xaxis="energy"):
         raise TypeError(f"Expected List or Tuple for stacks. Got {type(stacks)} instead.")
 
     if not len(stacks)>=2:
-        raise ValueError(f"Expected at least 2 Stacks. Got {len(stacks)} insetead.")
+        raise ValueError(f"Expected at least 2 Stacks. Got {len(stacks)} instead.")
 
     # ROI related Errors
     for roi in rois:
