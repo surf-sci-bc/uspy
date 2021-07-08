@@ -188,7 +188,7 @@ class Profile(ROI):
 
     def apply(self, img_array):
         profile = skimage.measure.profile_line(
-            img_array, self.endpoints[0, :], self.endpoints[1, :],
+            img_array, self.endpoints[0, ::-1], self.endpoints[1, ::-1],
             linewidth=self.params["width"], mode="constant", reduce_func=self.reduce
         )
         return profile
