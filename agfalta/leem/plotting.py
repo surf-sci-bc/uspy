@@ -650,7 +650,7 @@ def plot_rois(*args, img=None, ax=None, **kwargs):
     return ax
 
 def plot_rsm(stack, profile, gamma=None, k_res=7.67e7, log=True,
-             figsize=(5, 8), dpi=150, cmap="gray"):
+             figsize=(5, 8), dpi=150, cmap="gray", ax=None):
     """Plot an RSM along a cut specified by profile.
     Arguments:
         - profile   see help(leem.processing.Profile)
@@ -664,11 +664,12 @@ def plot_rsm(stack, profile, gamma=None, k_res=7.67e7, log=True,
     ky *= 1e-10
     if log:
         z = np.log(z)
-    _, ax = plt.subplots(figsize=figsize, dpi=dpi)
+    if ax is None:
+        _, ax = plt.subplots(figsize=figsize, dpi=dpi)
+        ax.set_xlabel("kx in A^-1")
+        ax.set_ylabel("ky in A^-1")
     ax.pcolormesh(kx, ky, z, cmap=cmap)
     ax.set_aspect("equal")
-    ax.set_xlabel("kx in A^-1")
-    ax.set_ylabel("ky in A^-1")
     return ax
 
 
