@@ -19,7 +19,7 @@ import skvideo.io
 from IPython.display import display, Video
 
 from agfalta.leem.utility import stackify, imgify
-from agfalta.leem.processing import roify, get_max_variance_idx, ROI
+from agfalta.leem.processing import roify, get_max_variance_idx, ROI, RSM
 from agfalta.leem.driftnorm import normalize_image
 
 
@@ -645,14 +645,32 @@ def plot_rois(*args, img=None, ax=None, **kwargs):
         img = imgify(img)
         ax = plot_img(img, ticks=True, ax=ax)
 
-    colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
-    for i, roi in enumerate(rois):
-        if roi.color is None:
-            color = colors[i]
-        else:
-            color = roi.color
-        ax.add_artist(roi.artist(color))
+    for roi in rois:
+        ax.add_artist(roi.artist)
     return ax
+
+def plot_rsm(stack, profile, gamma=None, k_res=7.67e7, log=True,
+             figsize=(5, 8), dpi=150, cmap="gray"):
+    """Plot an RSM along a cut specified by profile.
+    Arguments:
+        - profile   see help(leem.processing.Profile)
+                    can be plotted like a ROI with plot_rois()
+        - gamma     position of the specular beam (default: profile center)
+        - k_res     reciprocal angstroms per pixel
+    """
+    rsm = RSM(stack, profile, gamma=gamma, k_res=k_res)
+    kx, ky, z = rsm()
+    kx *= 1e-10
+    ky *= 1e-10
+    if log:
+        z = np.log(z)
+    _, ax = plt.subplots(figsize=figsize, dpi=dpi)
+    ax.pcolormesh(kx, ky, z, cmap=cmap)
+    ax.set_aspect("equal")
+    ax.set_xlabel("kx in A^-1")
+    ax.set_ylabel("ky in A^-1")
+    return ax
+
 
 
 # Utility:

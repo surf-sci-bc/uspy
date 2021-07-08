@@ -1,4 +1,4 @@
-"""Calculate reciprocal space maps from stacks."""
+"""DEPRECATED"""
 # pylint: disable=invalid-name
 # pylint: disable=missing-docstring
 
@@ -65,9 +65,9 @@ class RSMCut:
         how-to-extract-an-arbitrary-line-of-values-from-a-numpy-array
         """
         if length is None:
-            length = self.length
+            length = int(self.length)
 
-        dx, dy = (self.start - self.end) / self.length
+        dx, dy = (self.start - self.end) / length
         x, y = self.get_xy(length=length)
 
         zi = np.zeros((self.width, length))
