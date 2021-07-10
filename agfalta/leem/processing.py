@@ -249,13 +249,16 @@ class Profile(ROI):
 
 
 class RSM:
-    def __init__(self, stack, profile, gamma=None, k_res=7.67e7):
+    def __init__(self, stack, profile, BZ_pix, d, gamma=None, Vi=0):
         self.stack = stackify(stack)
         self.profile = profile
         if gamma is None:
             gamma = profile.position
+
         self.gamma = np.array(gamma)
-        self.k_res = k_res
+        self.k_BZ = 2 * np.pi / d
+        self.k_res = self.k_BZ / BZ_pix
+        self.Vi = Vi
 
         self.data = None
 
@@ -289,8 +292,11 @@ class RSM:
         return kx
 
     def get_kperp(self, E, kpara):
-        energy = E * sc.e
-        k0 = np.sqrt(2 * sc.m_e * energy) / sc.hbar     # total k
+        energy = (E + self.Vi) * sc.e
+        k0 = np.sqrt(2 * sc.m_e * energy) / sc.hbar     # k0
         kpara = kpara.clip(max=k0)
-        kperp = k0 + np.sqrt(k0**2 - kpara**2)          # kpara^2 + kperp^2 = k^2
+        # see Thomas Schmidt, hering3.c, L600
+        # kpara^2 + kperp^2 = K
+        # k0^2 = (kperp - k0)^2 + kpara^2
+        kperp = k0 + np.sqrt(k0**2 - kpara**2)     # kpara^2 + kperp^2 = k0^2
         return np.nan_to_num(kperp, 0)

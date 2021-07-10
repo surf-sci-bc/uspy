@@ -652,28 +652,48 @@ def plot_rois(*args, img=None, ax=None, **kwargs):
         ax.add_artist(roi.artist)
     return ax
 
-def plot_rsm(stack, profile, gamma=None, k_res=7.67e7, log=True,
-             figsize=(5, 8), dpi=150, cmap="gray", ax=None):
+def plot_rsm(stack=None, profile=None, rsm=None, log=True,
+             figsize=(5, 8), rasterized=True, dpi=150,  ax=None,
+             cmap="gray", vmin=None, vmax=None,
+             **kwargs):
     """Plot an RSM along a cut specified by profile.
     Arguments:
+        - stack     the LEED stack
         - profile   see help(leem.processing.Profile)
                     can be plotted like a ROI with plot_rois()
         - gamma     position of the specular beam (default: profile center)
-        - k_res     reciprocal angstroms per pixel
+        - BZ_pix    Brillouin zone size in pixels
+        - d         lattice spacing associated with BZ_pix (in meters!)
+        - Vi        inner potential (default: 0)
     """
-    rsm = RSM(stack, profile, gamma=gamma, k_res=k_res)
+    if stack is None or profile is None:
+        assert isinstance(rsm, RSM)
+    elif rsm is None:
+        rsm = RSM(stack, profile, **kwargs)
+    else:
+        assert rsm.stack == stack and rsm.profile == profile
     kx, ky, z = rsm()
-    kx *= 1e-10
-    ky *= 1e-10
+    kx = kx * 1e-10
+    ky = ky * 1e-10
     if log:
         z = np.log(z)
+        if vmin is not None:
+            vmin = np.log(vmin)
+        if vmax is not None:
+            vmax = np.log(vmax)
     if ax is None:
         _, ax = plt.subplots(figsize=figsize, dpi=dpi)
         ax.set_xlabel("kx in A^-1")
         ax.set_ylabel("ky in A^-1")
-    ax.pcolormesh(kx, ky, z, cmap=cmap)
+        secax = ax.secondary_xaxis(
+            "top",
+            functions=(lambda x: x * 100 / (rsm.k_BZ * 1e-10),
+                       lambda x: x / 100 * (rsm.k_BZ * 1e-10))
+        )
+        secax.set_xlabel("BZ in %")
+    ax.pcolormesh(kx, ky, z, cmap=cmap, rasterized=rasterized, vmin=vmin, vmax=vmax)
     ax.set_aspect("equal")
-    return ax
+    return rsm, ax
 
 
 
