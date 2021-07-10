@@ -197,3 +197,54 @@ def test_stack_set_virtual(stack_fname):
     assert stack._images is None
     stack.virtual = False
     assert len(stack._images) == len(stack)
+
+### Image arithmetic
+
+def test_img_mul_int():
+    test_data = np.array([[1,2],[3,4]])
+    img1 = 2*base.LEEMImg(test_data)
+    img2= base.LEEMImg(test_data)*2
+    assert np.array_equal(img1.data,2*test_data)
+    assert np.array_equal(img2.data,2*test_data)
+
+def test_img_add_int():
+    test_data = np.array([[1,2],[3,4]])
+    img1 = base.LEEMImg(test_data)+100
+    img2 = base.LEEMImg(test_data)-100
+    assert np.array_equal(img1.data, test_data+100)
+    assert np.array_equal(img2.data, test_data-100)
+
+def test_img_div_int():
+    test_data = np.array([[1,2],[3,4]])
+    img = base.LEEMImg(test_data)/2
+    assert np.array_equal(img.data,test_data/2)
+
+def test_img_add_img():
+    test_data_1 = np.array([[1,2],[3,4]])
+    test_data_2 = np.array([[5,6],[7,8]])
+    img1 = base.LEEMImg(test_data_1)
+    img2 = base.LEEMImg(test_data_2)
+    img12 = img1+img2
+    img21 = img2+img1
+    assert np.array_equal(img12.data, test_data_1+test_data_2)
+    assert np.array_equal(img21.data, test_data_1+test_data_2)
+
+def test_img_sub_img():
+    test_data_1 = np.array([[1,2],[3,4]])
+    test_data_2 = np.array([[5,6],[7,8]])
+    img1 = base.LEEMImg(test_data_1)
+    img2 = base.LEEMImg(test_data_2)
+    img12 = img1-img2
+    img21 = img2-img1
+    assert np.array_equal(img12.data, test_data_1-test_data_2)
+    assert np.array_equal(img21.data, test_data_2-test_data_1)
+
+def test_img_div_img():
+    test_data_1 = np.array([[1,2],[3,4]])
+    test_data_2 = np.array([[5,6],[7,8]])
+    img1 = base.LEEMImg(test_data_1)
+    img2 = base.LEEMImg(test_data_2)
+    img12 = img1/img2
+    img21 = img2/img1
+    assert np.array_equal(img12.data, test_data_1/test_data_2)
+    assert np.array_equal(img21.data, test_data_2/test_data_1)

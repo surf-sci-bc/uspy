@@ -5,18 +5,18 @@ Basic classes for Elmitec LEEM ".dat"-file parsing and data visualization.
 # pylint: disable=invalid-name
 # pylint: disable=attribute-defined-outside-init
 
-import struct
-import pickle
-from datetime import datetime, timedelta, timezone
-import glob
 import copy
+import glob
+import numbers
+import pickle
+import struct
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from skimage.io import imread
 import numpy as np
+from skimage.io import imread
 
 from agfalta.utility import progress_bar
-
 
 class Loadable:
     _pickle_extension = ".unknown"
@@ -185,6 +185,49 @@ class LEEMImg(Loadable):
             self.meta[self.attrs[attr]] = value
         else:
             super().__setattr__(attr, value)
+
+    def __add__(self, other):
+        return_val = copy.deepcopy(self)
+
+        if isinstance(other, (numbers.Number, np.ndarray)):
+            return_val.data = self.data + other
+        elif isinstance(other, LEEMImg):
+            return_val.data = self.data + other.data
+        else:
+            raise TypeError(f"Unsupported Operation '+' for types {type(self)} and {type(other)}")
+        return return_val
+
+    def __radd__(self, other):
+        if other == 0:
+            return self
+        return self.__add__(other)
+
+    def __mul__(self, other):
+        return_val = copy.deepcopy(self)
+        if isinstance(other, (numbers.Number, np.ndarray)):
+            return_val.data = np.multiply(self.data, other)
+        elif isinstance(other, LEEMImg):
+            return_val.data = np.multiply(self.data, other.data)
+        else:
+            raise TypeError(f"Unsupported Operation '*' for types {type(self)} and {type(other)}")
+        return return_val
+
+    def __rmul__(self, other):
+        return self.__mul__(other)
+
+    def __truediv__(self, other):
+        return_val = copy.deepcopy(self)
+        if isinstance(other, (numbers.Number, np.ndarray)):
+            return_val.data = np.divide(self.data, other)
+        elif isinstance(other, LEEMImg):
+            return_val.data = np.divide(self.data, other.data)
+        else:
+            raise TypeError(f"Unsupported Operation '/' for types {type(self)} and {type(other)}")
+        return return_val
+
+    def __sub__(self, other):
+        return copy.deepcopy(self).__add__(-1*other)
+
 
     @property
     def meta(self):
