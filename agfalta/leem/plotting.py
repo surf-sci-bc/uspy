@@ -324,7 +324,8 @@ def make_video(stack, ofile, skip=None,
             for i, field in enumerate(fields):
                 if field is None:
                     continue
-                text = img.get_field_string(field).replace("µ","u").encode("ascii", errors="ignore").decode()
+                text = img.get_field_string(field).replace("µ","u")
+                text = text.encode("ascii", errors="ignore").decode()
 
                 for pos, char in enumerate(text):
                     xy = _CV2_IMG_POS(i, height, width, text, pos=pos)
@@ -549,22 +550,22 @@ def stitch_curves(stacks, rois, xaxis="energy"):
          arenot feasible, unless you turn back time between stack acquisition.
     """
     # Stack related Errors
-    if type(stacks) is not list and type(stacks) is not tuple:
+    if not isinstance(stacks, (list, tuple)):
         raise TypeError(f"Expected List or Tuple for stacks. Got {type(stacks)} instead.")
-
     if not len(stacks)>=2:
         raise ValueError(f"Expected at least 2 Stacks. Got {len(stacks)} instead.")
 
     # ROI related Errors
     for roi in rois:
-        if type(roi) is not list and type(roi) is not tuple:
+        if not isinstance(roi, (list, tuple)):
             raise TypeError(f"Expected List or Tuple for rois. Got {type(roi)} instead.")
 
-    if all([len(roi)==len(rois[0]) for roi in rois]) is False:
+    if all([len(roi) == len(rois[0]) for roi in rois]) is False:
         raise ValueError(f"Number of ROIs does not match. Received: {[len(roi) for roi in rois]}")
 
-    if len(rois)!=len(stacks):
-        raise ValueError(f"Number of Stacks and ROIs does not match. Expected {len(stacks)} list of ROIs, got {len(rois)} instead.")
+    if len(rois) != len(stacks):
+        raise ValueError("Number of Stacks and ROIs does not match. "
+                         f"Expected {len(stacks)} list of ROIs, got {len(rois)} instead.")
 
     data = []
     for stack, rois in zip(stacks, rois):
@@ -591,10 +592,10 @@ def stitch_curves(stacks, rois, xaxis="energy"):
             # Interpolate previous line and fit new line
 
             spline = sp.interpolate.interp1d(int_x, int_y, kind='cubic')
-            f = lambda x,a : a*spline(x)
+            f = lambda x, a : a * spline(x)
             popt, _ = sp.optimize.curve_fit(f, fit_x, fit_y)
 
-            new_y_data[ii][jj+1] *= 1/popt
+            new_y_data[ii][jj+1] *= 1 / popt
 
     # Create new data list
 

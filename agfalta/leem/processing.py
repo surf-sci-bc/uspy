@@ -5,6 +5,7 @@
 import copy
 from collections import abc
 
+import cv2
 import numpy as np
 import scipy.signal
 import scipy.constants as sc
@@ -34,8 +35,8 @@ def calculate_dose(stack, pressurefield="pressure1", approx=1):
 class ROI:
     _defaults = {
         "circle": {"radius": 10},
-        "rectangle": {"width": 50, "height": 50},
-        "ellipse": {"xradius": 10, "yradius": 20}
+        "rectangle": {"width": 50, "height": 50, "rot": 0},
+        "ellipse": {"xradius": 10, "yradius": 20, "rot": 0}
     }
     kwargs = (
         "x0", "y0", "type_", "color", "radius", "width", "height", "xradius", "yradius"
@@ -47,11 +48,13 @@ class ROI:
         self._mask = None
         if type_ is None:
             for t, props in self._defaults.items():
-                if any(k in kwargs for k in props):
+                if any(k in kwargs for k in props) and all(k in props for k in kwargs):
                     type_ = t
                     break
             else:
                 type_ = "circle"
+        if not all(k in self._defaults[type_] for k in kwargs):
+            raise ValueError(f"kwargs {kwargs} don't match a ROI type")
         self.type_ = type_
         assert self.type_ in self._defaults
         self.params = copy.deepcopy(self._defaults[self.type_])
@@ -71,20 +74,31 @@ class ROI:
         return img_array * mask
 
     def create_mask(self, img_height, img_width):
-        y, x = np.arange(0, img_height), np.arange(0, img_width)
-        y, x = y[:, np.newaxis], x[np.newaxis, :]
-        x0, y0 = self.position
+        mask = np.zeros((img_height, img_width))
+        rot = self.params.get("rot", 0)
+
         if self.type_ == "circle":
-            r = self.params["radius"]
-            mask = (x - x0)**2 + (y - y0)**2 < r**2
+            mask = cv2.circle(
+                mask, center=tuple(self.position), radius=self.params["radius"],
+                color=1, thickness=-1
+            ).astype(np.bool)
         elif self.type_ == "ellipse":
-            xr, yr = self.params["xradius"], self.params["yradius"]
-            mask = ((x - x0) / xr)**2 + ((y - y0) / yr)**2 < 1
+            mask = cv2.ellipse(
+                mask, center=tuple(self.position),
+                axes=(self.params["xradius"], self.params["yradius"]),
+                angle=self.params["rot"], startAngle=0, endAngle=360,
+                color=1, thickness=-1
+            ).astype(np.bool)
         elif self.type_ == "rectangle":
             w, h = self.params["width"], self.params["height"]
-            mask = (x >= x0) & (x < x0 + w) & (y >= y0) & (y < y0 + h)
+            rot = -self.params["rot"] * np.pi / 180
+            R = np.array([[np.cos(rot), -np.sin(rot)], [np.sin(rot), np.cos(rot)]])
+            corners = np.array([[-w / 2, -h / 2], [-w / 2, h / 2], [w / 2, h / 2], [w / 2, -h / 2]])
+            corners = np.rint(np.dot(corners, R) + self.position).astype(np.int32)
+            mask = cv2.fillConvexPoly(mask, corners, color=1).astype(np.bool)
         else:
             raise ValueError("Unknown ROI type")
+
         self.area = mask.sum()
         return mask
 
@@ -99,11 +113,17 @@ class ROI:
             art = matplotlib.patches.Ellipse(
                 self.position,
                 self.params["xradius"] * 2, self.params["yradius"] * 2,
+                angle=self.params["rot"],
                 color=self.color, alpha=self.alpha, fill=False
             )
         elif self.type_ == "rectangle":
+            w, h = self.params["width"], self.params["height"]
+            rot = -self.params["rot"] * np.pi / 180
+            R = np.array([[np.cos(rot), -np.sin(rot)], [np.sin(rot), np.cos(rot)]])
+            lower_left = np.rint(np.dot([-w / 2, -h / 2], R) + self.position)
             art = plt.Rectangle(
-                self.position, self.params["width"], self.params["height"],
+                lower_left, self.params["width"], self.params["height"],
+                angle=self.params["rot"],
                 color=self.color, alpha=self.alpha, fill=False
             )
         else:
