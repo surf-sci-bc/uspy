@@ -18,7 +18,7 @@ setup(
         "Programming Language :: Python :: 3",
         "Topic :: Scientific/Engineering :: Physics"
     ),
-    # license="GPLv3",
+    license="MIT",
     keywords="physics LEEM microscopy spectroscopy",
     setup_requires=["setuptools_scm"],
     install_requires=[
