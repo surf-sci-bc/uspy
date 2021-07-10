@@ -226,7 +226,7 @@ class LEEMImg(Loadable):
         return return_val
 
     def __sub__(self, other):
-        return copy.deepcopy(self).__add__(-1*other)
+        return self.__add__(-1*other)
 
 
     @property
@@ -516,6 +516,38 @@ class LEEMStack(Loadable):
             super().__setattr__(attr, value)
         else:
             raise ValueError(f"Value '{value}' for '{attr}' has wrong shape")
+
+    def __add__(self, other):
+        return_val = self.copy()
+        return_val.virtual = False
+        for i, img in enumerate(return_val):
+            return_val[i] = img + other
+        return return_val
+
+    def __radd__(self, other):
+        if other == 0:
+            return self
+        return self.__add__(other)
+
+    def __mul__(self, other):
+        return_val = self.copy()
+        return_val.virtual = False
+        for i, img in enumerate(return_val):
+            return_val[i] = img * other
+        return return_val
+
+    def __rmul__(self, other):
+        return self.__mul__(other)
+
+    def __truediv__(self, other):
+        return_val = self.copy()
+        return_val.virtual = False
+        for i, img in enumerate(return_val):
+            return_val[i] = img / other
+        return return_val
+
+    def __sub__(self, other):
+        return self.__add__(-1*other)
 
     @property
     def virtual(self):
