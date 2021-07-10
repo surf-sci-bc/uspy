@@ -30,15 +30,13 @@ setup(
         "scikit-video",
         "pyclustering",
         "nltk",
-        "opencv-python<4.0",
-        "opencv-contrib-python<4.0",
+        "opencv-python-headless",
         "kneed",
         "lmfit",
         "ipython",
         "netCDF4",
         "setuptools_scm",       # see agfalta/version.py
     ],
-    # dependency_links=['https://github.com/annoviko/pyclustering/tarball/master'],
     package_data={"agfalta.xps": ["rsf.db"]},
     python_requires="~=3.6",
     tests_require=["pytest"]
