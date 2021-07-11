@@ -475,8 +475,12 @@ def plot_intensity_curve(curves, ax=None):
         curves = [curves]
     ax = _get_ax(ax, xlabel=curves[0].xaxis, ylabel="Intensity in a.u.")
     for curve in curves:
-        if curve.roi is not None:
-            ax.plot(curve.x, curve.y, color=curve.roi.color)
+        try:
+            color = curve.roi.color
+        except AttributeError:
+            color = curve.roi[0].color
+        if color is not None:
+            ax.plot(curve.x, curve.y, color=color)
         else:
             ax.plot(curve.x, curve.y)
     return ax
@@ -540,110 +544,6 @@ def plot_iv_img(*args, **kwargs):
     """Alias for agfalta.leem.plotting.plot_intensity_img() with xaxis set
     to "energy"."""
     return plot_intensity_img(*args, xaxis="energy", **kwargs)
-
-def stitch_curves(stacks, rois, xaxis="energy"):
-    """
-    Acquire intensity curves sitched together from different stacks.
-    - stacks: A list of stacks, e.g. (stack1, stack2, ...).
-        Stacks have to be in the right order and need an overlapping region, that will be fitted.
-    - rois: List of list ROIs, e.g. ((roi1,roi2),(roi3,roi4), ...)
-        The Number of lists of ROIs has to match the number of stacks given. The number of ROIs in
-        each list has to be the same. The first list of ROIs is applied to the first stack, the
-        second to the second stack. The intensity curves of the ROIs are stitched together
-        depending on their position in the list: All first ROIs are stitched togehter, all second
-        ROIs and so on.
-    - xaxis: axis that is used for stitching. As the curve needs an overlap, values like "rel_time"
-         arenot feasible, unless you turn back time between stack acquisition.
-    """
-    # Stack related Errors
-    if not isinstance(stacks, (list, tuple)):
-        raise TypeError(f"Expected List or Tuple for stacks. Got {type(stacks)} instead.")
-    if not len(stacks)>=2:
-        raise ValueError(f"Expected at least 2 Stacks. Got {len(stacks)} instead.")
-
-    # ROI related Errors
-    for roi in rois:
-        if not isinstance(roi, (list, tuple)):
-            raise TypeError(f"Expected List or Tuple for rois. Got {type(roi)} instead.")
-
-    if all([len(roi) == len(rois[0]) for roi in rois]) is False:
-        raise ValueError(f"Number of ROIs does not match. Received: {[len(roi) for roi in rois]}")
-
-    if len(rois) != len(stacks):
-        raise ValueError("Number of Stacks and ROIs does not match. "
-                         f"Expected {len(stacks)} list of ROIs, got {len(rois)} instead.")
-
-    data = []
-    for stack, rois in zip(stacks, rois):
-        data.append(get_intensity(stack, xaxis=xaxis, rois=rois))
-
-    x_data = [np.array(dataset[0]) for dataset in data]
-    y_data = [[] for roi in rois]
-
-    for dataset in data:
-        for index,col in enumerate(dataset[1:]):
-            y_data[index].append(np.array(col))
-
-    new_y_data = [[line for line in curve] for curve in y_data]
-
-    for ii, curve in enumerate(y_data):
-        for jj, line in enumerate(curve[1:]):
-
-            # Overlap assuming ordered x values
-            # jj+1 because the first line remains unmodified
-            _, x1_ind, x2_ind = np.intersect1d(x_data[jj],x_data[jj+1], return_indices=True)
-            fit_y, fit_x = line[x2_ind[0]:x2_ind[-1]], x_data[jj+1][x2_ind[0]:x2_ind[-1]]
-            int_y, int_x = new_y_data[ii][jj][x1_ind[0]:x1_ind[-1]], x_data[jj][x1_ind[0]:x1_ind[-1]]
-
-            # Interpolate previous line and fit new line
-
-            # pylint: disable=unbalanced-tuple-unpacking, cell-var-from-loop
-
-            spline = sp.interpolate.interp1d(int_x, int_y, kind='cubic')
-            f = lambda x, a : a * spline(x)
-            popt, _ = sp.optimize.curve_fit(f, fit_x, fit_y)
-
-            new_y_data[ii][jj+1] *= 1 / popt
-
-    # Create new data list
-
-    #data = []
-    #data.append(x_data[0])
-
-    new_x_data = x_data[0]
-
-    for x in x_data[1:]:
-        _, _, ind = np.intersect1d(data, x, return_indices=True)
-        new_x_data = np.append(new_x_data, x[ind[-1]+1:])
-
-
-    data = np.zeros([len(new_x_data),len(rois)+1])
-    data[:,0] = new_x_data
-
-    for jj, curve in enumerate(new_y_data):
-        line = curve[0]
-
-        for ii, y in enumerate(curve[1:]):
-            _, _, ind = np.intersect1d(x_data[ii], x_data[ii+1], return_indices=True)
-            line = np.append(line, y[ind[-1]+1:])
-        data[:,jj+1] = line
-
-    return data.T
-
-def plot_stitched_intensity(stacks, rois, *args, xaxis="energy", ax=None, **kwargs):
-    """
-    Plot intensity curves sitched together from different stacks.
-    Input parameters are same as in plotting.stitch_curves().
-    """
-    ax = _get_ax(ax, xlabel=xaxis, ylabel="Intensity in a.u.")
-    data = stitch_curves(stacks, rois, *args, xaxis, **kwargs)
-    x = data[0]
-    for roi, intensity in zip(rois[0], data[1:]):
-        if roi.color is not None:
-            ax.plot(x, intensity, color=roi.color)
-        else:
-            ax.plot(x, intensity)
-    return ax
 
 def plot_rois(*args, img=None, ax=None, **kwargs):
     """Plot rois onto a given axes object. The ROI can either be given like in

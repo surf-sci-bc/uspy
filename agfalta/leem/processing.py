@@ -2,7 +2,8 @@
 # pylint: disable=missing-docstring
 # pylint: disable=invalid-name
 
-#from agfalta.leem.plotting import get_intensity
+# from agfalta.leem.plotting import get_intensity
+import agfalta.leem.driftnorm as driftnorm
 import copy
 from collections import abc
 
@@ -13,8 +14,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import scipy.constants as sc
 import scipy.signal
+import scipy as sp
 import skimage.measure
-from agfalta.leem.base import Loadable
+from agfalta.leem.base import LEEMStack, Loadable
 from agfalta.leem.utility import stackify
 from agfalta.utility import progress_bar
 
@@ -38,12 +40,21 @@ class ROI:
     _defaults = {
         "circle": {"radius": 10},
         "rectangle": {"width": 50, "height": 50, "rot": 0},
-        "ellipse": {"xradius": 10, "yradius": 20, "rot": 0}
+        "ellipse": {"xradius": 10, "yradius": 20, "rot": 0},
     }
     kwargs = (
-        "x0", "y0", "type_", "color", "radius", "width", "height", "xradius", "yradius"
+        "x0",
+        "y0",
+        "type_",
+        "color",
+        "radius",
+        "width",
+        "height",
+        "xradius",
+        "yradius",
     )
     _color_idx = 0
+
     def __init__(self, x0, y0, type_=None, color=None, artist_kw=None, **kwargs):
         # pylint: disable=too-many-arguments
         self.position = np.array([x0, y0])
@@ -75,8 +86,11 @@ class ROI:
         self.artist_kw = artist_kw
 
     def __repr__(self):
-        return (f"{self.type_}(position:{self.position},"
-                + ",".join(f"{k}:{v}" for k, v in self.params.items()) + ")")
+        return (
+            f"{self.type_}(position:{self.position},"
+            + ",".join(f"{k}:{v}" for k, v in self.params.items())
+            + ")"
+        )
 
     @property
     def color(self):
@@ -95,23 +109,30 @@ class ROI:
 
         if self.type_ == "circle":
             mask = cv2.circle(
-                mask, center=tuple(self.position), radius=self.params["radius"],
-                color=1, thickness=-1
+                mask,
+                center=tuple(self.position),
+                radius=self.params["radius"],
+                color=1,
+                thickness=-1,
             ).astype(np.bool)
         elif self.type_ == "ellipse":
             mask = cv2.ellipse(
-                mask, center=tuple(self.position),
+                mask,
+                center=tuple(self.position),
                 axes=(self.params["xradius"], self.params["yradius"]),
-                angle=self.params["rot"], startAngle=0, endAngle=360,
-                color=1, thickness=-1
+                angle=self.params["rot"],
+                startAngle=0,
+                endAngle=360,
+                color=1,
+                thickness=-1,
             ).astype(np.bool)
         elif self.type_ == "rectangle":
             w, h = self.params["width"], self.params["height"]
             rot = -self.params["rot"] * np.pi / 180
             R = np.array([[np.cos(rot), -np.sin(rot)], [np.sin(rot), np.cos(rot)]])
-            corners = np.array([
-                [-w / 2, -h / 2], [-w / 2, h / 2], [w / 2, h / 2], [w / 2, -h / 2]
-            ])
+            corners = np.array(
+                [[-w / 2, -h / 2], [-w / 2, h / 2], [w / 2, h / 2], [w / 2, -h / 2]]
+            )
             corners = np.rint(np.dot(corners, R) + self.position).astype(np.int32)
             mask = cv2.fillConvexPoly(mask, corners, color=1).astype(np.bool)
         else:
@@ -123,14 +144,14 @@ class ROI:
     @property
     def artist(self):
         if self.type_ == "circle":
-            art = plt.Circle(
-                self.position, self.params["radius"], **self.artist_kw
-            )
+            art = plt.Circle(self.position, self.params["radius"], **self.artist_kw)
         elif self.type_ == "ellipse":
             art = matplotlib.patches.Ellipse(
                 self.position,
-                self.params["xradius"] * 2, self.params["yradius"] * 2,
-                angle=self.params["rot"], **self.artist_kw
+                self.params["xradius"] * 2,
+                self.params["yradius"] * 2,
+                angle=self.params["rot"],
+                **self.artist_kw,
             )
         elif self.type_ == "rectangle":
             w, h = self.params["width"], self.params["height"]
@@ -138,13 +159,15 @@ class ROI:
             R = np.array([[np.cos(rot), -np.sin(rot)], [np.sin(rot), np.cos(rot)]])
             lower_left = np.rint(np.dot([-w / 2, -h / 2], R) + self.position)
             art = plt.Rectangle(
-                lower_left, self.params["width"], self.params["height"],
-                angle=self.params["rot"], **self.artist_kw
+                lower_left,
+                self.params["width"],
+                self.params["height"],
+                angle=self.params["rot"],
+                **self.artist_kw,
             )
         else:
             raise ValueError("Unknown ROI type")
         return art
-
 
 
 def roify(*args, **kwargs):
@@ -164,6 +187,7 @@ def roify(*args, **kwargs):
             return args[0]
     return [ROI(*args, **kwargs)]
 
+
 # def roi_intensity(img, *args, **kwargs):
 #     img = imgify(img)
 #     roi = roify(*args, **kwargs)
@@ -177,6 +201,7 @@ def roify(*args, **kwargs):
 #     for i, img in enumerate(stack):
 #         intensity[i] = np.mean(roi.apply(img.data))
 #     return intensity
+
 
 def get_max_variance_idx(stack):
     stack = stackify(stack)
@@ -210,9 +235,8 @@ class Profile(ROI):
     Methods:
         - apply(img_array)  takes a 2D numpy array and returns a 1D profile
     """
-    _defaults = {
-        "profile": {"theta": 0, "length": 100, "width": 10}
-    }
+
+    _defaults = {"profile": {"theta": 0, "length": 100, "width": 10}}
     kwargs = ("x0", "y0", "type_", "color", "width", "length", "theta")
 
     def __init__(self, *args, reduce_func="gaussian", artist_kw=None, **kwargs):
@@ -227,8 +251,12 @@ class Profile(ROI):
 
     def apply(self, img_array):
         profile = skimage.measure.profile_line(
-            img_array, self.endpoints[0, ::-1], self.endpoints[1, ::-1],
-            linewidth=self.params["width"], mode="constant", reduce_func=self.reduce
+            img_array,
+            self.endpoints[0, ::-1],
+            self.endpoints[1, ::-1],
+            linewidth=self.params["width"],
+            mode="constant",
+            reduce_func=self.reduce,
         )
         return profile
 
@@ -239,7 +267,7 @@ class Profile(ROI):
     @property
     def endpoints(self):
         theta = self.params["theta"]
-        length = self.params["length"] - 1 # profile_line will include endpoint
+        length = self.params["length"] - 1  # profile_line will include endpoint
         dyx = np.array([np.cos(theta) * length, -np.sin(theta) * length])
         return np.array([self.position - dyx * 0.4999, self.position + dyx * 0.4999])
         # dyx * 0.4999 to stay below the length (profile_line will do ceil)
@@ -260,6 +288,7 @@ class Profile(ROI):
     @property
     def reduce(self):
         return self._reduce_func
+
     @reduce.setter
     def reduce(self, func):
         width = self.params["width"]
@@ -280,8 +309,11 @@ class Profile(ROI):
     @property
     def artist(self):
         art = matplotlib.lines.Line2D(
-            self.endpoints[:, 0], self.endpoints[:, 1],
-            lw=self.params["width"], solid_capstyle="butt", **self.artist_kw
+            self.endpoints[:, 0],
+            self.endpoints[:, 1],
+            lw=self.params["width"],
+            solid_capstyle="butt",
+            **self.artist_kw,
         )
         return art
 
@@ -331,105 +363,197 @@ class RSM:
 
     def get_kperp(self, E, kpara):
         energy = (E + self.Vi) * sc.e
-        k0 = np.sqrt(2 * sc.m_e * energy) / sc.hbar     # k0
+        k0 = np.sqrt(2 * sc.m_e * energy) / sc.hbar  # k0
         kpara = kpara.clip(max=k0)
         # see Thomas Schmidt, hering3.c, L600
         # kpara^2 + kperp^2 = K
         # k0^2 = (kperp - k0)^2 + kpara^2
-        kperp = k0 + np.sqrt(k0**2 - kpara**2)     # kpara^2 + kperp^2 = k0^2
+        kperp = k0 + np.sqrt(k0 ** 2 - kpara ** 2)  # kpara^2 + kperp^2 = k0^2
         return np.nan_to_num(kperp, 0)
+
 
 class IntensityCurve(Loadable):
 
     """
-    Intensitiy curve of LEEM stack. 
-    It receives a stack, ROI and xaxis. The stack is internally copied.
+    Intensitiy curve of LEEM stack.
+    It receives a stack, ROI and xaxis.
     The Intensity of ROI is extracted along the given xaxis and presented
     as attributes afterwards
         - save()/load is inherited from Loadable and saves/loads as pickle object
-        - archive() converts the stack to 16bit, ensures compression and
-          saves as pickle
         - savecsv saves the x,y data as .csv file
     """
 
     _pickle_extension = ".lix"
 
-    def __init__(self, stack, xaxis, roi=None, copy=True):
-        try:
-            roi = roify(roi)[0]
-        except:
-            (height, width) = stack[0].shape()
-            roi = ROI(0,0,width=width, height=height)
+    def __init__(self, stacks, xaxis, rois):
 
-        self._roi = roi
-        if copy:
-            self._stack = stackify(stack).copy()
-        else:
-            self._stack = stackify(stack)
+        stacks = [stacks] if not isinstance(stacks, abc.Iterable) else stacks
+        rois = roify(rois)
+
+        if len(rois) != len(stacks):
+            raise ValueError(
+                "Number of Stacks and ROIs does not match. "
+                f"Expected {len(stacks)} list of ROIs, got {len(rois)} instead."
+            )
+
+        self._fullstack = None
+
+        self._roi = rois
+
+        self._fnames = [stack.fnames for stack in stacks]
+        try:
+            self._dark_counts = [stack.dark_counts for stack in stacks]
+            self._mcp = [stack.mcp for stack in stacks]
+        except AttributeError:
+            pass
+        try:
+            self._alignment = [stack.alignment for stack in stacks]
+        except AttributeError:
+            pass
+
         self._xaxis = xaxis
-        self._xunit = stack[0].get_unit(xaxis)
-        self._x, self._y = self._get_intensity()
-        
-    def _get_intensity(self):
-        x = getattr(self._stack, self._xaxis)
-        y = [self._roi.apply(img.data).sum() / self._roi.area for img in self._stack]
+        if len(stacks) == 1:
+            self._x, self._y = self._get_intensity(
+                self.simplify(stacks), self.simplify(rois)
+            )
+        else:
+            print(
+                f"Received {len(stacks)} Stacks. Trying to stitch the curves togeher."
+            )
+            self._x, self._y = self._stitch_curves(stacks, rois)
+
+    def _get_intensity(self, stack, roi):
+        x = getattr(stack, self._xaxis)
+        y = [roi.apply(img.data).sum() / roi.area for img in stack]
         return np.array(x), np.array(y)
+
+    def _stitch_curves(self, stacks, rois):
+        """
+        Acquire intensity curves sitched together from different stacks.
+        - stacks: A list of stacks, e.g. (stack1, stack2, ...).
+            Stacks have to be in the right order and need an overlapping region, that will be fitted.
+        - rois: List of ROIs, e.g. (roi1, roi2, ..)
+            The Number of ROIs has to match the number of stacks given. The first list of ROIs is applied
+            to the first stack, the second to the second stack. The intensity curves of the ROIs are stitched together.
+        """
+
+        x_data = []
+        y_data = []
+        for stack, rois in zip(stacks, rois):
+            x, y = self._get_intensity(stack, rois)
+            x_data.append(x)
+            y_data.append(y)
+
+        new_y_data = [curve for curve in y_data]
+
+        for jj, line in enumerate(y_data[1:]):
+
+            # Overlap assuming ordered x values
+            # jj+1 because the first line remains unmodified. y_data[1] corresponds to jj=0
+            _, x1_ind, x2_ind = np.intersect1d(
+                x_data[jj], x_data[jj + 1], return_indices=True
+            )
+            fit_y, fit_x = (
+                line[x2_ind[0] : x2_ind[-1]],
+                x_data[jj + 1][x2_ind[0] : x2_ind[-1]],
+            )
+            int_y, int_x = (
+                new_y_data[jj][x1_ind[0] : x1_ind[-1]],
+                x_data[jj][x1_ind[0] : x1_ind[-1]],
+            )
+
+            # Interpolate previous line and fit new line
+
+            # pylint: disable=unbalanced-tuple-unpacking, cell-var-from-loop
+
+            spline = sp.interpolate.interp1d(int_x, int_y, kind="cubic")
+            f = lambda x, a: a * spline(x)
+            popt, _ = sp.optimize.curve_fit(f, fit_x, fit_y)
+
+            new_y_data[jj + 1] *= 1 / popt
+
+        # Sort everything to new stitched x,y data
+
+        stitched_x_data = x_data[0]
+        stitched_y_data = new_y_data[0]
+
+        for x, y in zip(x_data[1:], new_y_data[1:]):
+            _, _, ind = np.intersect1d(stitched_x_data, x, return_indices=True)
+            stitched_x_data = np.append(stitched_x_data, x[ind[-1] + 1 :])
+            stitched_y_data = np.append(stitched_y_data, y[ind[-1] + 1 :])
+
+        return stitched_x_data, stitched_y_data
 
     @property
     def x(self):
         return self._x
+
     @property
     def y(self):
         return self._y
+
     @property
     def roi(self):
-        return self._roi
+        return self.simplify(self._roi)
+
     @property
     def xaxis(self):
         return self._xaxis
-    @property
-    def xunit(self):
-        return self._xunit
+
     @property
     def stack(self):
-        return self._stack
-    
-    def archive(self, path, overwrite=False):
-        # Find Maximum intensity
-        maximum = np.max(np.array([img.data for img in self._stack]))
+        if self._fullstack is not None:
+            return self.simplify(self._fullstack)
+        return self.simplify(self.reconstruct())
 
-        # Scale Stack to 16bit Integer
-        for img in self._stack:
-            norm = cv2.normalize(
-                img.data,
-                None,
-                np.min(img.data)/maximum*2**16,
-                np.max(img.data)/maximum*2**16,
-                cv2.NORM_MINMAX,
-                cv2.CV_16U
-            )
-            img.data = np.array(norm, dtype=np.uint16)
-        # Make sure data is compressed
-        if not path.endswith(self._compression_extension):
-            path += self._compression_extension
-        super().save(path, overwrite=overwrite)
+    def reconstruct(self):
+        stacks = [LEEMStack(fnames) for fnames in self._fnames]
+        for ii, stack in enumerate(stacks):
+            try:
+                stacks[ii] = driftnorm.normalize(
+                    stacks[ii], mcp=self._mcp[ii], dark_counts=self._dark_counts[ii]
+                )
+            except AttributeError:
+                pass
+            try:
+                stacks[ii] = driftnorm.apply_alignment_matrices(
+                    stacks[ii], self._alignment[ii]
+                )
+            except AttributeError:
+                pass
 
-    def savecsv(self, ofile):
-        data = np.vstack((self._x,self._y))
+        return stacks
+
+    def simplify(self, value):
+        if len(value) == 1:
+            return value[0]
+        return value
+
+    def full_save(self, path):
+        fullstack = self._fullstack is None
+        self._fullstack = self.stack  # Add stack to the object
+        super().save(path)  # Save the Object
+        if fullstack:
+            self._fullstack = None  # Delete stack again if it was None before
+
+    def save_csv(self, ofile):
+        data = np.vstack((self._x, self._y))
         np.savetxt(ofile, data, delimiter=",")
 
+
+"""
 class IntensityCurves():
 
-    """
-    Creates mutiple IntensityCurve Objects that all share one stack.
-    """
+    
+    # Helper Class to create multiple IntensityCurves that share one stack.
+    
 
     def __init__(self, stack, xaxis, rois):
         self._stack = stackify(stack).copy()
         try:
-            self._curves = [IntensityCurve(self._stack, xaxis, roi, copy=False) for roi in rois]
+            self._curves = [IntensityCurve(self._stack, xaxis, roi) for roi in rois]
         except:
-            self._curves = [IntensityCurve(self._stack, xaxis, rois, copy=False)]
+            self._curves = [IntensityCurve(self._stack, xaxis, rois)]
     def __getitem__(self, item):
         return self._curves[item]
 
@@ -437,3 +561,4 @@ class IntensityCurves():
     def curves(self):
         return self._curves
 
+"""
