@@ -10,7 +10,6 @@ from collections import abc
 
 import math
 import numpy as np
-import scipy as sp
 import cv2
 from matplotlib import pyplot as plt
 import matplotlib.colors
@@ -19,7 +18,7 @@ import skvideo.io
 from IPython.display import display, Video
 
 from agfalta.leem.utility import stackify, imgify
-from agfalta.leem.processing import IntensityCurve, IntensityCurves, roify, get_max_variance_idx, ROI, RSM
+from agfalta.leem.processing import IntensityCurve, roify, get_max_variance_idx, ROI, RSM
 from agfalta.leem.driftnorm import normalize_image
 
 
