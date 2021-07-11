@@ -33,6 +33,7 @@ def calculate_dose(stack, pressurefield="pressure1", approx=1):
 
 
 class ROI:
+    # pylint: disable=too-many-instance-attributes
     _defaults = {
         "circle": {"radius": 10},
         "rectangle": {"width": 50, "height": 50, "rot": 0},
@@ -41,11 +42,14 @@ class ROI:
     kwargs = (
         "x0", "y0", "type_", "color", "radius", "width", "height", "xradius", "yradius"
     )
-    def __init__(self, x0, y0, type_=None, color="k", alpha=1, **kwargs):
+    _color_idx = 0
+    def __init__(self, x0, y0, type_=None, color=None, artist_kw=None, **kwargs):
+        # pylint: disable=too-many-arguments
         self.position = np.array([x0, y0])
         self._img_shape = None
         self.area = None
         self._mask = None
+
         if type_ is None:
             for t, props in self._defaults.items():
                 if any(k in kwargs for k in props) and all(k in props for k in kwargs):
@@ -59,12 +63,23 @@ class ROI:
         assert self.type_ in self._defaults
         self.params = copy.deepcopy(self._defaults[self.type_])
         self.params.update(kwargs)
-        self.alpha = alpha
-        self.color = color
+
+        if artist_kw is None:
+            artist_kw = dict()
+        if color is None and "color" not in artist_kw:
+            color = plt.rcParams["axes.prop_cycle"].by_key()["color"][ROI._color_idx]
+            ROI._color_idx += 1
+        artist_kw["color"] = artist_kw.get("color", color)
+        artist_kw["fill"] = artist_kw.get("fill", False)
+        self.artist_kw = artist_kw
 
     def __repr__(self):
         return (f"{self.type_}(position:{self.position},"
                 + ",".join(f"{k}:{v}" for k, v in self.params.items()) + ")")
+
+    @property
+    def color(self):
+        return self.artist_kw["color"]
 
     def apply(self, img_array):
         if img_array.shape != self._img_shape or self._mask is None:
@@ -93,7 +108,9 @@ class ROI:
             w, h = self.params["width"], self.params["height"]
             rot = -self.params["rot"] * np.pi / 180
             R = np.array([[np.cos(rot), -np.sin(rot)], [np.sin(rot), np.cos(rot)]])
-            corners = np.array([[-w / 2, -h / 2], [-w / 2, h / 2], [w / 2, h / 2], [w / 2, -h / 2]])
+            corners = np.array([
+                [-w / 2, -h / 2], [-w / 2, h / 2], [w / 2, h / 2], [w / 2, -h / 2]
+            ])
             corners = np.rint(np.dot(corners, R) + self.position).astype(np.int32)
             mask = cv2.fillConvexPoly(mask, corners, color=1).astype(np.bool)
         else:
@@ -106,15 +123,13 @@ class ROI:
     def artist(self):
         if self.type_ == "circle":
             art = plt.Circle(
-                self.position, self.params["radius"],
-                color=self.color, alpha=self.alpha, fill=False
+                self.position, self.params["radius"], **self.artist_kw
             )
         elif self.type_ == "ellipse":
             art = matplotlib.patches.Ellipse(
                 self.position,
                 self.params["xradius"] * 2, self.params["yradius"] * 2,
-                angle=self.params["rot"],
-                color=self.color, alpha=self.alpha, fill=False
+                angle=self.params["rot"], **self.artist_kw
             )
         elif self.type_ == "rectangle":
             w, h = self.params["width"], self.params["height"]
@@ -123,8 +138,7 @@ class ROI:
             lower_left = np.rint(np.dot([-w / 2, -h / 2], R) + self.position)
             art = plt.Rectangle(
                 lower_left, self.params["width"], self.params["height"],
-                angle=self.params["rot"],
-                color=self.color, alpha=self.alpha, fill=False
+                angle=self.params["rot"], **self.artist_kw
             )
         else:
             raise ValueError("Unknown ROI type")
@@ -200,8 +214,12 @@ class Profile(ROI):
     }
     kwargs = ("x0", "y0", "type_", "color", "width", "length", "theta")
 
-    def __init__(self, *args, alpha=0.3, reduce_func="gaussian", **kwargs):
-        super().__init__(*args, type_="profile", alpha=alpha, **kwargs)
+    def __init__(self, *args, reduce_func="gaussian", artist_kw=None, **kwargs):
+        if artist_kw is None:
+            artist_kw = dict()
+        artist_kw["alpha"] = artist_kw.get("alpha", 0.3)
+        super().__init__(*args, type_="profile", artist_kw=artist_kw, **kwargs)
+        self.artist_kw.pop("fill")
         self.params["theta"] *= np.pi / 180
         self.params["length"] = int(self.params["length"])
         self.reduce = reduce_func
@@ -262,8 +280,7 @@ class Profile(ROI):
     def artist(self):
         art = matplotlib.lines.Line2D(
             self.endpoints[:, 0], self.endpoints[:, 1],
-            lw=self.params["width"], color=self.color, alpha=self.alpha,
-            solid_capstyle="butt"
+            lw=self.params["width"], solid_capstyle="butt", **self.artist_kw
         )
         return art
 
