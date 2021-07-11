@@ -324,9 +324,20 @@ class RSM:
 
 class IntensityCurve(Loadable):
 
+    """
+    Intensitiy curve of LEEM stack. 
+    It receives a stack, ROI and xaxis. The stack is internally copied.
+    The Intensity of ROI is extracted along the given xaxis and presented
+    as attributes afterwards
+        - save()/load is inherited from Loadable and saves/loads as pickle object
+        - archive() converts the stack to 16bit, ensures compression and
+          saves as pickle
+        - savecsv saves the x,y data as .csv file
+    """
+
     _pickle_extension = ".lix"
 
-    def __init__(self, stack, xaxis, roi=None):
+    def __init__(self, stack, xaxis, roi=None, copy=True):
         try:
             roi = roify(roi)[0]
         except:
@@ -334,7 +345,10 @@ class IntensityCurve(Loadable):
             roi = ROI(0,0,width=width, height=height)
 
         self._roi = roi
-        self._stack = stackify(stack).copy()
+        if copy:
+            self._stack = stackify(stack).copy()
+        else:
+            self._stack = stackify(stack)
         self._xaxis = xaxis
         self._xunit = stack[0].get_unit(xaxis)
         self._x, self._y = self._get_intensity()
@@ -349,10 +363,13 @@ class IntensityCurve(Loadable):
         return self._x
     @property
     def y(self):
-        return(self._y)
+        return self._y
     @property
     def roi(self):
         return self._roi
+    @property
+    def xaxis(self):
+        return self._xaxis
     @property
     def xunit(self):
         return self._xunit
@@ -383,3 +400,23 @@ class IntensityCurve(Loadable):
     def savecsv(self, ofile):
         data = np.vstack((self._x,self._y))
         np.savetxt(ofile, data, delimiter=",")
+
+class IntensityCurves():
+
+    """
+    Creates mutiple IntensityCurve Objects that all share one stack.
+    """
+
+    def __init__(self, stack, xaxis, rois):
+        self._stack = stackify(stack).copy()
+        try:
+            self._curves = [IntensityCurve(self._stack, xaxis, roi, copy=False) for roi in rois]
+        except:
+            self._curves = [IntensityCurve(self._stack, xaxis, rois, copy=False)]
+    def __getitem__(self, item):
+        return self._curves[item]
+
+    @property
+    def curves(self):
+        return self._curves
+

@@ -19,7 +19,7 @@ import skvideo.io
 from IPython.display import display, Video
 
 from agfalta.leem.utility import stackify, imgify
-from agfalta.leem.processing import roify, get_max_variance_idx, ROI, RSM
+from agfalta.leem.processing import IntensityCurve, IntensityCurves, roify, get_max_variance_idx, ROI, RSM
 from agfalta.leem.driftnorm import normalize_image
 
 
@@ -457,7 +457,6 @@ def plot_intensity(stack, *args, xaxis="rel_time", ax=None, **kwargs):
         plot_intensity(stack, x0=100, y0=50, type_="ellipse", xradius=5, xradius=4)
         roi2 = leem.ROI(200, 100, radius=5)
         plot_intensity(stack, (roi, roi2))
-
     Returns the axes object
     """
     rois = roify(*args, **kwargs)
@@ -469,6 +468,17 @@ def plot_intensity(stack, *args, xaxis="rel_time", ax=None, **kwargs):
             ax.plot(x, intensity, color=roi.color)
         else:
             ax.plot(x, intensity)
+    return ax
+
+def plot_intensity_curve(curves, ax=None):
+    if isinstance(curves, IntensityCurve):
+        curves = [curves]
+    ax = _get_ax(ax, xlabel=curves[0].xaxis, ylabel="Intensity in a.u.")
+    for curve in curves:
+        if curve.roi is not None:
+            ax.plot(curve.x, curve.y, color=curve.roi.color)
+        else:
+            ax.plot(curve.x, curve.y)
     return ax
 
 def get_intensity(stack, *args, xaxis="rel_time", ofile=None, **kwargs):
@@ -492,15 +502,11 @@ def get_intensity(stack, *args, xaxis="rel_time", ofile=None, **kwargs):
     data = np.stack(cols)
 
     if ofile is not None:
-        if os.path.splitext(ofile)[1] == '.iv':
-            print("Not implemented yet")
-        else:
-            np.savetxt(
-                ofile, data.T,
-                header=f"{xaxis} | " + " | ".join(str(roi) for roi in rois)
-            )
+        np.savetxt(
+            ofile, data.T,
+            header=f"{xaxis} | " + " | ".join(str(roi) for roi in rois)
+        )
     return data
-
 
 def plot_iv(*args, **kwargs):
     """Alias for agfalta.leem.plotting.plot_intensity() with xaxis set
@@ -591,6 +597,8 @@ def stitch_curves(stacks, rois, xaxis="energy"):
 
             # Interpolate previous line and fit new line
 
+            # pylint: disable=unbalanced-tuple-unpacking, cell-var-from-loop
+
             spline = sp.interpolate.interp1d(int_x, int_y, kind='cubic')
             f = lambda x, a : a * spline(x)
             popt, _ = sp.optimize.curve_fit(f, fit_x, fit_y)
@@ -599,8 +607,8 @@ def stitch_curves(stacks, rois, xaxis="energy"):
 
     # Create new data list
 
-    data = []
-    data.append(x_data[0])
+    #data = []
+    #data.append(x_data[0])
 
     new_x_data = x_data[0]
 
@@ -609,7 +617,7 @@ def stitch_curves(stacks, rois, xaxis="energy"):
         new_x_data = np.append(new_x_data, x[ind[-1]+1:])
 
 
-    data = np.empty([len(new_x_data),len(rois)+1])
+    data = np.zeros([len(new_x_data),len(rois)+1])
     data[:,0] = new_x_data
 
     for jj, curve in enumerate(new_y_data):
