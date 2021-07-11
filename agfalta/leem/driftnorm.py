@@ -11,7 +11,7 @@ import numpy as np
 
 from agfalta.leem.utility import imgify, stackify
 from agfalta.utility import progress_bar
-from agfalta.leem.processing import ROI
+import agfalta.leem.processing as processing
 
 
 def normalize(img_or_stack, *args, **kwargs):
@@ -91,16 +91,17 @@ def apply_alignment_matrices(stack, alignment):
             img.data.shape[::-1],
             flags=cv.INTER_LINEAR + cv.WARP_INVERSE_MAP,
         )
+
     return stack
 
 
 def find_alignment_matrices(stack, algorithm="ecc", roi=None, **kwargs):
 
-    if roi is None or not isinstance(roi, ROI):
+    if roi is None or not isinstance(roi, processing.ROI):
         print("No valid ROI found. Creating default ROI with 15% cutoff on each side")
-        y0, x0 = np.array(np.shape(stack[0].data), dtype=int) * 0.15
-        height, width = np.array(np.shape(stack[0].data)) * 0.7
-        roi = ROI(x0, y0, type_="rectangle", width=width, height=height)
+        #y0, x0 = np.array(np.shape(stack[0].data), dtype=int) * 0.15
+        height, width = np.array(np.shape(stack[0].data))
+        roi = processing.ROI(width//2, height//2, type_="rectangle", width=width*0.7, height=height*0.7)
 
     stack = stack.copy()
     img_height, img_width = np.shape(stack[0].data)
