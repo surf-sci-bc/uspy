@@ -123,7 +123,7 @@ def do_ecc_align(
         warp_mode = cv.MOTION_EUCLIDEAN
     elif trafo == "affine":
         warp_mode = cv.MOTION_AFFINE
-        #if avg != 1:
+        # if avg != 1:
         #    raise ValueError("avg not supported for affine transformation")
     else:
         print("Unrecognized transformation. Using Translation.")
@@ -163,24 +163,24 @@ def do_ecc_align(
                 warp_matrices[ii, jj, :, :] = warp_matrix
             except:
                 print(f"ECC failed to match images {ii} and {jj}.")
-                failed_aligns.append((ii,jj))
+                failed_aligns.append((ii, jj))
                 continue
 
     for ii in range(1, len(stack)):
         shift = np.zeros((3, 3), dtype=np.float32)
         fail = 0
         for jj in range(max(0, ii - avg), ii):
-            if (jj,ii) in failed_aligns:
+            if (jj, ii) in failed_aligns:
                 fail += 1
                 continue
             shift += (
                 warp_matrices[jj, ii] @ alignment[jj]
             )  # shift is calculated as average of drifts of previous avg images with current image
-        if min(ii+1,avg) == fail:
+        if min(ii + 1, avg) == fail:
             print(f"Alignment of Image {ii} ulimatly failed. Assuming linear drift.")
-            shift = 2*alignment[-1]-alignment[-2]
+            shift = 2 * alignment[-1] - alignment[-2]
         else:
-            shift = shift / (min(ii + 1, avg)-fail)
+            shift = shift / (min(ii + 1, avg) - fail)
 
         alignment.append(shift)
 

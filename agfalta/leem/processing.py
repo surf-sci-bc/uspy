@@ -2,18 +2,19 @@
 # pylint: disable=missing-docstring
 # pylint: disable=invalid-name
 
+#from agfalta.leem.plotting import get_intensity
 import copy
 from collections import abc
 
 import cv2
-import numpy as np
-import scipy.signal
-import scipy.constants as sc
-import skimage.measure
-import matplotlib.pyplot as plt
-import matplotlib.patches
 import matplotlib.lines
-
+import matplotlib.patches
+import matplotlib.pyplot as plt
+import numpy as np
+import scipy.constants as sc
+import scipy.signal
+import skimage.measure
+from agfalta.leem.base import Loadable
 from agfalta.leem.utility import stackify
 from agfalta.utility import progress_bar
 
@@ -337,3 +338,65 @@ class RSM:
         # k0^2 = (kperp - k0)^2 + kpara^2
         kperp = k0 + np.sqrt(k0**2 - kpara**2)     # kpara^2 + kperp^2 = k0^2
         return np.nan_to_num(kperp, 0)
+
+class IntensityCurve(Loadable):
+
+    _pickle_extension = ".lix"
+
+    def __init__(self, stack, xaxis, roi=None):
+        try:
+            roi = roify(roi)[0]
+        except:
+            (height, width) = stack[0].shape()
+            roi = ROI(0,0,width=width, height=height)
+
+        self._roi = roi
+        self._stack = stackify(stack).copy()
+        self._xaxis = xaxis
+        self._xunit = stack[0].get_unit(xaxis)
+        self._x, self._y = self._get_intensity()
+        
+    def _get_intensity(self):
+        x = getattr(self._stack, self._xaxis)
+        y = [self._roi.apply(img.data).sum() / self._roi.area for img in self._stack]
+        return np.array(x), np.array(y)
+
+    @property
+    def x(self):
+        return self._x
+    @property
+    def y(self):
+        return(self._y)
+    @property
+    def roi(self):
+        return self._roi
+    @property
+    def xunit(self):
+        return self._xunit
+    @property
+    def stack(self):
+        return self._stack
+    
+    def archive(self, path, overwrite=False):
+        # Find Maximum intensity
+        maximum = np.max(np.array([img.data for img in self._stack]))
+
+        # Scale Stack to 16bit Integer
+        for img in self._stack:
+            norm = cv2.normalize(
+                img.data,
+                None,
+                np.min(img.data)/maximum*2**16,
+                np.max(img.data)/maximum*2**16,
+                cv2.NORM_MINMAX,
+                cv2.CV_16U
+            )
+            img.data = np.array(norm, dtype=np.uint16)
+        # Make sure data is compressed
+        if not path.endswith(self._compression_extension):
+            path += self._compression_extension
+        super().save(path, overwrite=overwrite)
+
+    def savecsv(self, ofile):
+        data = np.vstack((self._x,self._y))
+        np.savetxt(ofile, data, delimiter=",")

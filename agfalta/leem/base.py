@@ -5,6 +5,7 @@ Basic classes for Elmitec LEEM ".dat"-file parsing and data visualization.
 # pylint: disable=invalid-name
 # pylint: disable=attribute-defined-outside-init
 
+import bz2
 import copy
 import glob
 import numbers
@@ -14,12 +15,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
+from agfalta.utility import progress_bar
 from skimage.io import imread
 
-from agfalta.utility import progress_bar
 
 class Loadable:
     _pickle_extension = ".unknown"
+    _compression_extension = ".bz2"
 
     def load_pickle(self, path, *args, **kwargs):
         instance = self.unpickle(path, *args, **kwargs)
@@ -27,7 +29,10 @@ class Loadable:
 
     def __setstate__(self, state):
         """Make sure that the path is inserted first."""
-        self.path = state.pop("path")
+        try: ## Is try/except really neccessary?
+            self.path = state.pop("path")
+        except:
+            pass
         if "fnames" in state:
             self.fnames = state.pop("fnames")
         self.__dict__.update(state)
@@ -35,6 +40,11 @@ class Loadable:
     @classmethod
     def unpickle(cls, path, *_args, **kwargs):
         # pylint: disable=protected-access
+        if path.endswith(cls._compression_extension):
+            print("Uncompressing data...")
+            instance = bz2.BZ2File(path, 'rb')
+            instance = pickle.load(instance)
+            return instance
         if path.endswith(cls._pickle_extension):
             with Path(path).open("rb") as pfile:
                 # print(f"Loading stack from '{path}'")
@@ -43,10 +53,38 @@ class Loadable:
                     instance._time_origin = kwargs["time_origin"]
                 return instance
         raise ValueError("File not compatible")
+    
+    @classmethod
+    def load(cls, path, *_args, **kwargs):
+        return cls.unpickle(path, _args, kwargs)
 
-    def save(self, path):
-        if not path.endswith(self._pickle_extension):
+    def save(self, path, overwrite=True):
+        if Path(path).exists and not overwrite:
+            raise FileExistsError(f"File {path} already exists and overwrite=False")
+
+        _pickle_compression_extension = self._pickle_extension + self._compression_extension
+        if path.endswith(self._pickle_extension):
+            pass
+        elif path.endswith(_pickle_compression_extension):
+            pass
+        elif path.endswith(self._compression_extension):
+            # If we reach here, path has form file.bz2
+            # injecting pickle extension
+            i = len(self._compression_extension)
+            path = path[:-i] + self._pickle_extension + path[-i:]
+        else:
+            # If we reach here, the file has no meaningfull ending at all
             path += self._pickle_extension
+
+        if path.endswith(self._compression_extension):
+            print("Compressing data...")
+            with bz2.BZ2File(path, 'w') as f:
+                try:
+                    pickle.dump(self, f, protocol=4)
+                except RecursionError:
+                    print("WARING: Did not save due to recursion error.")
+                    raise
+                return
         with Path(path).open("wb") as pfile:
             try:
                 pickle.dump(self, pfile, protocol=4)
@@ -226,7 +264,7 @@ class LEEMImg(Loadable):
         return return_val
 
     def __sub__(self, other):
-        return copy.deepcopy(self).__add__(-1*other)
+        return self.__add__(-1*other)
 
 
     @property
@@ -516,6 +554,38 @@ class LEEMStack(Loadable):
             super().__setattr__(attr, value)
         else:
             raise ValueError(f"Value '{value}' for '{attr}' has wrong shape")
+
+    def __add__(self, other):
+        return_val = self.copy()
+        return_val.virtual = False
+        for i, img in enumerate(return_val):
+            return_val[i] = img + other
+        return return_val
+
+    def __radd__(self, other):
+        if other == 0:
+            return self
+        return self.__add__(other)
+
+    def __mul__(self, other):
+        return_val = self.copy()
+        return_val.virtual = False
+        for i, img in enumerate(return_val):
+            return_val[i] = img * other
+        return return_val
+
+    def __rmul__(self, other):
+        return self.__mul__(other)
+
+    def __truediv__(self, other):
+        return_val = self.copy()
+        return_val.virtual = False
+        for i, img in enumerate(return_val):
+            return_val[i] = img / other
+        return return_val
+
+    def __sub__(self, other):
+        return self.__add__(-1*other)
 
     @property
     def virtual(self):
