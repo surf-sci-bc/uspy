@@ -2,8 +2,6 @@
 # pylint: disable=missing-docstring
 # pylint: disable=invalid-name
 
-# from agfalta.leem.plotting import get_intensity
-import agfalta.leem.driftnorm as driftnorm
 import copy
 from collections import abc
 
@@ -12,10 +10,13 @@ import matplotlib.lines
 import matplotlib.patches
 import matplotlib.pyplot as plt
 import numpy as np
+import scipy.interpolate
+import scipy.optimize
 import scipy.constants as sc
 import scipy.signal
-import scipy as sp
 import skimage.measure
+import agfalta.leem.driftnorm as driftnorm
+
 from agfalta.leem.base import LEEMStack, Loadable
 from agfalta.leem.utility import stackify
 from agfalta.utility import progress_bar
@@ -372,7 +373,7 @@ class RSM:
         return np.nan_to_num(kperp, 0)
 
 
-class IntensityCurve(Loadable):
+class LEEMCurve(Loadable):
 
     """
     Intensitiy curve of LEEM stack.
@@ -383,7 +384,7 @@ class IntensityCurve(Loadable):
         - savecsv saves the x,y data as .csv file
     """
 
-    _pickle_extension = ".lix"
+    _pickle_extension = ".lc"
 
     def __init__(self, stacks, xaxis, rois):
 
@@ -466,9 +467,9 @@ class IntensityCurve(Loadable):
 
             # pylint: disable=unbalanced-tuple-unpacking, cell-var-from-loop
 
-            spline = sp.interpolate.interp1d(int_x, int_y, kind="cubic")
+            spline = scipy.interpolate.interp1d(int_x, int_y, kind="cubic")
             f = lambda x, a: a * spline(x)
-            popt, _ = sp.optimize.curve_fit(f, fit_x, fit_y)
+            popt, _ = scipy.optimize.curve_fit(f, fit_x, fit_y)
 
             new_y_data[jj + 1] *= 1 / popt
 
@@ -508,7 +509,7 @@ class IntensityCurve(Loadable):
 
     def reconstruct(self):
         stacks = [LEEMStack(fnames) for fnames in self._fnames]
-        for ii, stack in enumerate(stacks):
+        for ii, _ in enumerate(stacks):
             try:
                 stacks[ii] = driftnorm.normalize(
                     stacks[ii], mcp=self._mcp[ii], dark_counts=self._dark_counts[ii]
@@ -539,26 +540,3 @@ class IntensityCurve(Loadable):
     def save_csv(self, ofile):
         data = np.vstack((self._x, self._y))
         np.savetxt(ofile, data, delimiter=",")
-
-
-"""
-class IntensityCurves():
-
-    
-    # Helper Class to create multiple IntensityCurves that share one stack.
-    
-
-    def __init__(self, stack, xaxis, rois):
-        self._stack = stackify(stack).copy()
-        try:
-            self._curves = [IntensityCurve(self._stack, xaxis, roi) for roi in rois]
-        except:
-            self._curves = [IntensityCurve(self._stack, xaxis, rois)]
-    def __getitem__(self, item):
-        return self._curves[item]
-
-    @property
-    def curves(self):
-        return self._curves
-
-"""
