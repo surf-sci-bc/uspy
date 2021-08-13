@@ -117,6 +117,13 @@ class LEEMStack(DataObjectContainer):
             return sorted(glob.glob(f"{source}*.dat"))
         return source
 
+    def _construct(self) -> None:
+        """Build the container from a list of sources."""
+        super()._construct()
+        self._time_origin = self._elements[0].timestamp
+        for element in self._elements:
+            element.time_origin = self._time_origin
+
 
 
 # Format: meta_key: (byte_position, encoding)

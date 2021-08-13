@@ -143,7 +143,7 @@ class DataObject:
         raise AttributeError(f"No attribute named {attr}")
 
     def __setattr__(self, attr: str, value: Any) -> None:
-        if attr.startswith("_"):
+        if attr.startswith("_") or hasattr(self, attr):
             super().__setattr__(attr, value)
         elif attr in self._data:
             self._data[attr] = value
@@ -289,6 +289,21 @@ class DataObjectContainer(Loadable):
                 if not self._elements[0].is_compatible(element):
                     raise ValueError("Incompatible element assignment")
         self._elements.extend(elements)
+
+    def __getattr__(self, attr: str):
+        if attr.startswith("_") or attr in self.__dict__:
+            raise AttributeError
+        return np.array([getattr(obj, attr) for obj in self])
+
+    def __setattr__(self, attr: str, value: Any) -> None:
+        if attr.startswith("_") or attr in self.__dict__:
+            print("WTF")
+            return super().__setattr__(attr, value)
+        if self.virtual:
+            raise ValueError(f"Can't set attribute '{attr}' for virtual container")
+        if isinstance(value, Iterable) and len(value) == len(self):
+            for obj, single_value in zip(self, value):
+                setattr(obj, attr, single_value)
 
     def __delitem__(self, index: Union[int,slice]) -> None:
         self._elements.__delitem__(index)
