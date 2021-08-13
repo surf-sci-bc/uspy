@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 
 from agfalta.utility import parse_bytes, parse_cp1252_until_null
-from agfalta.base import DataObjectContainer, Image
+from agfalta.base import DataObjectStack, Image
 
 
 class LEEMImg(Image):
@@ -109,7 +109,7 @@ class LEEMImg(Image):
         return datetime.fromtimestamp(self.timestamp).strftime("%Y-%m-%d %H:%M:%S")
 
 
-class LEEMStack(DataObjectContainer):
+class LEEMStack(DataObjectStack):
     _type = LEEMImg
 
     def _split_source(self, source: Union[str,Iterable]) -> list:

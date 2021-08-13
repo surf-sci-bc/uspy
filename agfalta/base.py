@@ -110,7 +110,7 @@ class DataObject:
 
     @property
     def data(self) -> dict[str, Any]:
-        """Immutable data container."""
+        """Mutable data container dictionary."""
         return self._data
 
     @property
@@ -171,14 +171,14 @@ class DataObject:
         raise NotImplementedError
 
 
-class DataObjectContainer(Loadable):
+class DataObjectStack(Loadable):
     """Contains multiple DataObjects. E.g., for an image stack."""
     _unique_attrs = ()
     _type = DataObject
 
     def __init__(self, source: Union[str,Iterable], virtual: bool = False) -> None:
         if virtual and isinstance(source, Iterable) and isinstance(source[0], DataObject):
-            print("WARNING: Container won't be virtual (data objects were directly given)")
+            print("WARNING: Stack won't be virtual (data objects were directly given)")
             virtual = False
         self._virtual = virtual
         self._elements = self._split_source(source)
@@ -191,7 +191,7 @@ class DataObjectContainer(Loadable):
         raise NotImplementedError
 
     def _construct(self) -> None:
-        """Build the container from a list of sources."""
+        """Build the stack from a list of sources."""
         self._virtual = False
         sources = self._elements
         self._elements = [self._single_construct(sources[0])]
@@ -205,7 +205,7 @@ class DataObjectContainer(Loadable):
         self._virtual = True
         sources = [element.source for element in self._elements]
         if None in sources:
-            raise ValueError("Can't virtualize container without source information.")
+            raise ValueError("Can't virtualize stack without source information.")
 
     def _single_construct(self, source: Any) -> DataObject:
         """Construct a single DataObject."""
@@ -224,7 +224,7 @@ class DataObjectContainer(Loadable):
 
     @property
     def virtual(self) -> bool:
-        """If a data container is virtual, it does only load the data on demand."""
+        """If a data stack is virtual, it does only load the data on demand."""
         return self._virtual
     @virtual.setter
     def virtual(self, value: bool) -> None:
@@ -264,7 +264,7 @@ class DataObjectContainer(Loadable):
 
         if self.virtual:
             if None in elements:
-                raise ValueError("Can't put DataObjects without source into virtual container")
+                raise ValueError("Can't put DataObjects without source into virtual stack")
         else:
             for element in elements:
                 if not self._elements[0].is_compatible(element):
@@ -272,7 +272,7 @@ class DataObjectContainer(Loadable):
         self._elements.__setitem__(index, elements)
 
     def extend(self, other: Union[DataObject,Iterable]) -> None:
-        """Add new DataObjects to the end of the container."""
+        """Add new DataObjects to the end of the stack."""
         if isinstance(other, DataObject):
             elements = [other]
         if isinstance(elements, type(self)):
@@ -283,7 +283,7 @@ class DataObjectContainer(Loadable):
 
         if self.virtual:
             if None in elements:
-                raise ValueError("Can't put DataObjects without source into virtual container")
+                raise ValueError("Can't put DataObjects without source into virtual stack")
         else:
             for element in elements:
                 if not self._elements[0].is_compatible(element):
@@ -300,7 +300,7 @@ class DataObjectContainer(Loadable):
             print("WTF")
             return super().__setattr__(attr, value)
         if self.virtual:
-            raise ValueError(f"Can't set attribute '{attr}' for virtual container")
+            raise ValueError(f"Can't set attribute '{attr}' for virtual stack")
         if isinstance(value, Iterable) and len(value) == len(self):
             for obj, single_value in zip(self, value):
                 setattr(obj, attr, single_value)
@@ -311,7 +311,7 @@ class DataObjectContainer(Loadable):
     def __len__(self) -> int:
         return len(self._elements)
 
-    def __iadd__(self, other: Union[DataObjectContainer,DataObject,Number]) -> DataObjectContainer:
+    def __iadd__(self, other: Union[DataObjectStack,DataObject,Number]) -> DataObjectStack:
         if isinstance(other, type(self)):
             self.extend(other)
         else:
@@ -320,14 +320,14 @@ class DataObjectContainer(Loadable):
             for element in self._elements:
                 element += other
         return self
-    def __add__(self, other: Union[DataObjectContainer,DataObject,Number]) -> DataObjectContainer:
+    def __add__(self, other: Union[DataObjectStack,DataObject,Number]) -> DataObjectStack:
         result = self.copy(virtual=False)
         result += other
         return result
-    def __radd__(self, other: Union[DataObjectContainer,DataObject,Number]) -> DataObjectContainer:
+    def __radd__(self, other: Union[DataObjectStack,DataObject,Number]) -> DataObjectStack:
         return self.__add__(other)
 
-    def __isub__(self, other: Union[DataObject,DataObject,Number]) -> DataObjectContainer:
+    def __isub__(self, other: Union[DataObject,DataObject,Number]) -> DataObjectStack:
         if self.virtual:
             raise ValueError("Can't do '-' on virtual stacks.")
         if isinstance(other, type(self)):
@@ -336,31 +336,31 @@ class DataObjectContainer(Loadable):
             for element in self._elements:
                 element -= other
         return self
-    def __sub__(self, other: Union[DataObjectContainer,DataObject,Number]) -> DataObjectContainer:
+    def __sub__(self, other: Union[DataObjectStack,DataObject,Number]) -> DataObjectStack:
         result = self.copy(virtual=False)
         result -= other
         return result
 
-    def __imul__(self, other: Union[DataObject,Number]) -> DataObjectContainer:
+    def __imul__(self, other: Union[DataObject,Number]) -> DataObjectStack:
         if self.virtual:
             raise ValueError("Can't do '*' on virtual stacks.")
         for element in self._elements:
             element *= other
         return self
-    def __mul__(self, other: Union[DataObject,Number]) -> DataObjectContainer:
+    def __mul__(self, other: Union[DataObject,Number]) -> DataObjectStack:
         result = self.copy(virtual=False)
         result *= other
         return result
-    def __rmul__(self, other: Union[DataObject,Number]) -> DataObjectContainer:
+    def __rmul__(self, other: Union[DataObject,Number]) -> DataObjectStack:
         return self.__mul__(other)
 
-    def __idiv__(self, other: Union[DataObject,Number]) -> DataObjectContainer:
+    def __idiv__(self, other: Union[DataObject,Number]) -> DataObjectStack:
         if self.virtual:
             raise ValueError("Can't do '/' on virtual stacks.")
         for element in self._elements:
             element /= other
         return self
-    def __div__(self, other: Union[DataObject,Number]) -> DataObjectContainer:
+    def __div__(self, other: Union[DataObject,Number]) -> DataObjectStack:
         result = self.copy(virtual=False)
         result /= other
         return result
