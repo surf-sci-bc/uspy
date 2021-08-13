@@ -114,7 +114,6 @@ class LEEMStack(DataObjectContainer):
 
     def _split_source(self, source: Union[str,Iterable]) -> list:
         if isinstance(source, str):
-            print(source)
             return sorted(glob.glob(f"{source}*.dat"))
         return source
 

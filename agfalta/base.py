@@ -245,11 +245,12 @@ class DataObjectContainer(Loadable):
 
     def __getitem__(self, index: Union[int,slice]) -> Union[DataObject,Iterable]:
         elements = self._elements.__getitem__(index)
+        if isinstance(elements, str):
+            return self._single_construct(elements)
         if isinstance(elements, Iterable):
             return type(self)(elements, virtual=False)
-        if isinstance(elements, DataObject):
-            return elements
-        return self._single_construct(elements)
+        # if isinstance(elements, DataObject):
+        return elements
 
     def __setitem__(self, index: Union[int,slice], other: Union[DataObject,Iterable]) -> None:
         # check compatibility -- implement in dataobject? (like img size)
