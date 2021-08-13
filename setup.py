@@ -23,6 +23,7 @@ setup(
     setup_requires=["setuptools_scm"],
     install_requires=[
         "numpy",
+        "deepdiff",
         "matplotlib",
         "pandas",
         "scikit-learn",
