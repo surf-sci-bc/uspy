@@ -297,7 +297,6 @@ class DataObjectStack(Loadable):
 
     def __setattr__(self, attr: str, value: Any) -> None:
         if attr.startswith("_") or attr in self.__dict__:
-            print("WTF")
             return super().__setattr__(attr, value)
         if self.virtual:
             raise ValueError(f"Can't set attribute '{attr}' for virtual stack")

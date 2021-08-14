@@ -69,9 +69,10 @@ class LEEMImg(Image):
 
     @property
     def fov(self) -> Union[Number,str]:
-        fov_ = self._meta.get("FoV", np.nan)
-        if fov_ == "LEED":
+        fov_ = self._meta.get("fov", np.nan)
+        if fov_ < 0:
             self._units["fov"] = ""
+            return "LEED"
         else:
             self._units["fov"] = "µm"
         return fov_
@@ -86,10 +87,10 @@ class LEEMImg(Image):
 
     @property
     def resolution(self) -> Number:
-        fov_ = self._meta.get("FoV", np.nan)
-        if fov_ == "LEED":
+        fov_ = self._meta.get("fov", np.nan)
+        if fov_ < 0:
             fov_ = np.nan
-        return fov_ / self._meta.get("FoV cal", np.nan)
+        return fov_ / self._meta.get("fov_cal", np.nan)
 
     @property
     def time_origin(self) -> Number:
@@ -216,9 +217,11 @@ def parse_dat(fname: str, debug: bool = False) -> dict[str, Any]: # pylint: disa
                     print(f"\tknown: pressure {key} -> {data[key]}")
             elif bit in (110, 238):                             # field of view
                 fov_str = parse_cp1252_until_null(uk_file, debug)
-                data["LEED"] = "LEED" in fov_str
-                data["FoV"] = fov_str.split("\t")[0].strip()
-                data["FoV cal"] = parse_bytes(uk_file.read(4), 0, "float")
+                if "LEED" in fov_str:
+                    data["fov"] = -1
+                else:
+                    data["fov"] = int(fov_str.split("\t")[0].replace("µm", "").strip())
+                data["fov_cal"] = parse_bytes(uk_file.read(4), 0, "float")
                 if debug:
                     print(f"\tfov: {fov_str}")
             elif bit in (0, 1, 63, 66, 113, 128, 176, 216, 240, 232, 233):

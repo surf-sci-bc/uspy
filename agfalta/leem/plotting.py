@@ -18,7 +18,7 @@ import skvideo.io
 from IPython.display import display, Video
 
 from agfalta.leem.utility import stackify, imgify
-from agfalta.leem.processing import IntensityCurve, roify, get_max_variance_idx, ROI, RSM
+from agfalta.leem.processing import roify, get_max_variance_idx, ROI, RSM
 from agfalta.leem.driftnorm import normalize_image
 
 
@@ -104,10 +104,10 @@ def plot_img(img, fields=("temperature", "pressure", "energy", "fov"), field_col
     img = imgify(img)
     if mcp is not None:
         img = normalize_image(img, mcp=mcp, dark_counts=dark_counts)
-    if title is False or img.path == "NO_PATH":
+    if title is False or not isinstance(img.source, str):
         title = ""
     elif title is None or title is True:
-        title = img.path
+        title = img.source
     if title and len(title) > 25:
         title = f"...{title[-25:]}"
     if isinstance(fields, str):
@@ -118,7 +118,7 @@ def plot_img(img, fields=("temperature", "pressure", "energy", "fov"), field_col
         ticks=ticks, title=title, axis_off=True
     )
 
-    data = np.nan_to_num(img.data)
+    data = np.nan_to_num(img.image)
     if log:
         data = np.log(data)
 
@@ -135,7 +135,7 @@ def plot_img(img, fields=("temperature", "pressure", "energy", "fov"), field_col
         contrast = data.min(), data.max()
     elif contrast == "inner":
         dy, dx = map(int, 0.2 * np.array(data.shape))
-        inner = img.data[dy:-dy, dx:-dx]
+        inner = img.image[dy:-dy, dx:-dx]
         contrast = inner.min(), inner.max()
     if isinstance(contrast, abc.Iterable) and len(contrast) == 2:
         data = np.clip(data, contrast[0], None) - contrast[0]
@@ -253,14 +253,14 @@ def make_video(stack, ofile, skip=None,
     elif contrast == "maximum":
         c0, c1 = 2e16, 0
         for img in stack:
-            c0 = min(c0, np.nanmin(img.data))
-            c1 = max(c1, np.nanmax(img.data))
+            c0 = min(c0, np.nanmin(img.image))
+            c1 = max(c1, np.nanmax(img.image))
         contrast = sorted((c0, c1))
         print(f"Set contrast to {contrast}")
         contrast_type = "static"
     elif isinstance(contrast, int):
-        c0 = np.nanmin(stack[contrast].data)
-        c1 = np.nanmax(stack[contrast].data)
+        c0 = np.nanmin(stack[contrast].image)
+        c1 = np.nanmax(stack[contrast].image)
         contrast = sorted((c0, c1))
         print(f"Set contrast to {contrast}")
         contrast_type = "static"
@@ -288,8 +288,8 @@ def make_video(stack, ofile, skip=None,
     )
 
     # loop through the images
-    height, width = stack[0].data.shape
-    dy, dx = map(int, 0.2 * np.array(stack[0].data.shape))
+    height, width = stack[0].image.shape
+    dy, dx = map(int, 0.2 * np.array(stack[0].image.shape))
 
     if field_color is None:
         field_color = "yellow"
@@ -300,7 +300,7 @@ def make_video(stack, ofile, skip=None,
     for img in stack:
         if mcp is not None:
             img = normalize_image(img, mcp=mcp, dark_counts=dark_counts)
-        data = np.nan_to_num(img.data)
+        data = np.nan_to_num(img.image)
         if log:
             data = np.nan_to_num(np.log(data))
         # set contrast
@@ -470,8 +470,8 @@ def plot_intensity(stack, *args, xaxis="rel_time", ax=None, **kwargs):
     return ax
 
 def plot_intensity_curve(curves, ax=None):
-    if isinstance(curves, IntensityCurve):
-        curves = [curves]
+    # if isinstance(curves, IntensityCurve):
+    #     curves = [curves]
     ax = _get_ax(ax, xlabel=curves[0].xaxis, ylabel="Intensity in a.u.")
     for curve in curves:
         try:
@@ -500,7 +500,7 @@ def get_intensity(stack, *args, xaxis="rel_time", ofile=None, **kwargs):
 
     for i, img in enumerate(stack):
         for j, roi in enumerate(rois):
-            cols[j + 1][i] = roi.apply(img.data).sum() / roi.area
+            cols[j + 1][i] = roi.apply(img.image).sum() / roi.area
 
     data = np.stack(cols)
 
