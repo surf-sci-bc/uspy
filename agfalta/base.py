@@ -12,7 +12,7 @@ from pathlib import Path
 
 from deepdiff import DeepDiff
 import numpy as np
-
+import matplotlib as mpl
 
 
 class Loadable:
@@ -465,8 +465,62 @@ class Image(DataObject):
 class ROI(Loadable):
     """An image region represented as a boolean 2D array."""
     shapes = ("ellipse", "rectangle", "polygon", "complex")
+    _param_keys = ("radius", "width", "height", "rotation")
 
-    def __init__(self, x0: int, y0: int, shape: Optional[str] = None,
+    def __init__(self, x0: int, y0: int,
+                 shape: Optional[str] = None,
                  points: Optional[Iterable[Iterable]] = None,
+                 source: Optional[np.ndarray] = None,
                  style: Optional[dict] = None, **params):
-        pass
+        self.position = np.array([x0, y0])
+        self.params = params
+        self.style = style
+
+        self.shape = shape
+        self.points = points
+        self.source = source
+        try:
+            if self.points is not None:
+                assert self.shape is None and self.source is None
+                self._make_polygon()
+            elif source is not None:
+                assert self.points is None and self.shape is None
+                self._make_complex()
+            else:
+                assert self.points is None and self.source is None
+                if self.shape is None:
+                    self.shape = "circle"
+                self._make_shape()
+        except AssertionError as exc:
+            raise ValueError("Only one of 'shape', 'points' or 'source' "
+                             "arguments are allowed.") from exc
+
+    def _make_polygon(self) -> None:
+        """Create a polygon mask."""
+
+    def _make_shape(self) -> None:
+        """Create a rectangular or elliptic mask."""
+
+    def _make_complex(self) -> None:
+        """Create a mask directly from an array."""
+
+    @property
+    def mask(self) -> np.ndarray:
+        """Returns smallest possible numpy array that encompasses the ROI."""
+
+    @property
+    def area(self) -> int:
+        """Total area in pixels."""
+        return self.mask.sum()
+
+    def __mul__(self, other: Union[Image,np.ndarray]) -> np.ndarray:
+        """Apply the ROI by doing: result = roi * img"""
+
+    @property
+    def artist(self) -> mpl.artist.Artist:
+        """ROI Representation in matplotlib."""
+
+    @property
+    def color(self) -> str:
+        """Color used in any representations."""
+        return self.style["color"]

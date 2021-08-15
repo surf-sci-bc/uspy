@@ -49,7 +49,7 @@ class LEEMImg(Image):
         super().__init__(*args, **kwargs)
         self._time_origin = time_origin
 
-    def parse(self, source: str) -> dict[str, Any]: # pylint: disable=unsubscriptable-object
+    def parse(self, source: str) -> dict[str, Any]:
         if isinstance(source, Image):
             self._source = None
             return dict(source.meta, **source.data)
@@ -177,7 +177,7 @@ UNIT_CODES = {"1": "V", "2": "mA", "3": "A", "4": "°C",
               "5": "K", "6": "mV", "7": "pA", "8": "nA", "9": "\xb5A"}
 
 
-def parse_dat(fname: str, debug: bool = False) -> dict[str, Any]: # pylint: disable=unsubscriptable-object
+def parse_dat(fname: str, debug: bool = False) -> dict[str, Any]:
     """Parse a UKSOFT2001 file."""
     data = {}
     def parse_block(block, field_dict):
