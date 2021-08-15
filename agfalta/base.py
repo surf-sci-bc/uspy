@@ -168,7 +168,7 @@ class DataObject:
 
     def is_compatible(self, other: DataObject) -> bool:
         """Check if another DataObject has data of the same dimensions."""
-        raise NotImplementedError
+        return isinstance(other, type(self))
 
 
 class DataObjectStack(Loadable):
@@ -456,6 +456,8 @@ class Image(DataObject):
         return result
 
     def is_compatible(self, other: DataObject) -> bool:
+        if not super().is_compatible(other):
+            return False
         try:
             return self.image.shape == other.image.shape
         except AttributeError:
