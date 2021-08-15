@@ -1,6 +1,5 @@
 from __future__ import annotations
 import numbers
-from deepdiff.model import InaccessibleRelationship
 
 import numpy as np
 import pytest
@@ -196,3 +195,11 @@ def test_stack_extend(virtual):
 
     for ii, jj in zip(stack.elements, objs):
         assert ii is jj
+
+@pytest.mark.parametrize("virtual", [False, True])
+def test_stack_getitem(virtual):
+    sources = np.linspace(0, 100, 11)
+    stack = MinimalObjectStack(sources, virtual=virtual)
+
+    assert isinstance(stack[:3], MinimalObjectStack)
+    assert isinstance(stack[0], MinimalObject)
