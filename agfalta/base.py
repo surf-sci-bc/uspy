@@ -177,18 +177,24 @@ class DataObjectStack(Loadable):
     _type = DataObject
 
     def __init__(self, source: Union[str,Iterable], virtual: bool = False) -> None:
-        if virtual and isinstance(source, Iterable) and isinstance(source[0], DataObject):
-            print("WARNING: Stack won't be virtual (data objects were directly given)")
-            virtual = False
         self._virtual = virtual
-        self._elements = self._split_source(source)
-        if not self.virtual:
-            self._construct()
+        if isinstance(source, Iterable) and isinstance(source[0], DataObject):
+            if virtual:
+                print("WARNING: Stack won't be virtual (data objects were directly given)")
+                self._virtual = False
+            # if stack is created from objects, all objects have to be the 
+            if not all([isinstance(source, self._type) for source in source]):
+                raise TypeError(f"Not all initialization objects are of type {self._type}")
+            self._elements = source
+        else:
+            self._elements = self._split_source(source)
+            if not self.virtual:
+                self._construct()
 
     def _split_source(self, source: Union[str, Iterable]) -> list:
         """Split the source parameter of the constructor into source arguments
         that can be passed to single DataObjects."""
-        raise NotImplementedError
+        return source
 
     def _construct(self) -> None:
         """Build the stack from a list of sources."""
@@ -206,6 +212,7 @@ class DataObjectStack(Loadable):
         sources = [element.source for element in self._elements]
         if None in sources:
             raise ValueError("Can't virtualize stack without source information.")
+        self._elements = sources
 
     def _single_construct(self, source: Any) -> DataObject:
         """Construct a single DataObject."""
@@ -244,11 +251,23 @@ class DataObjectStack(Loadable):
         return other
 
     def __getitem__(self, index: Union[int,slice]) -> Union[DataObject,Iterable]:
-        elements = self._elements.__getitem__(index)
-        if isinstance(elements, str):
-            return self._single_construct(elements)
-        if isinstance(elements, Iterable):
-            return type(self)(elements, virtual=False)
+        
+        elements = self._elements[index]
+
+        #if [isinstance(element, type(self)) for element in elements].all():
+        #    return elements
+        #else: 
+        #    return type(self)(elements, virtual = self.virtual) if len(elements)>1 else self._single_construct(elements)
+
+        if self.virtual: # if virtual elements contains just sources not DataObjects
+            if isinstance(index, int):
+                return self._single_construct(elements)
+            return type(self)(elements, virtual = True)
+
+        #if isinstance(elements, str):
+        #    return self._single_construct(elements)
+        #if isinstance(elements, Iterable):
+        #    return type(self)(elements, virtual=False)
         # if isinstance(elements, DataObject):
         return elements
 
@@ -275,7 +294,7 @@ class DataObjectStack(Loadable):
         """Add new DataObjects to the end of the stack."""
         if isinstance(other, DataObject):
             elements = [other]
-        if isinstance(elements, type(self)):
+        if isinstance(other, type(self)):
             if not self.virtual:
                 elements = other[:]
             elif other.virtual:
@@ -298,11 +317,21 @@ class DataObjectStack(Loadable):
     def __setattr__(self, attr: str, value: Any) -> None:
         if attr.startswith("_") or attr in self.__dict__:
             return super().__setattr__(attr, value)
-        if self.virtual:
-            raise ValueError(f"Can't set attribute '{attr}' for virtual stack")
+        #if self.virtual:
+        #    raise ValueError(f"Can't set attribute '{attr}' for virtual stack")
         if isinstance(value, Iterable) and len(value) == len(self):
-            for obj, single_value in zip(self, value):
-                setattr(obj, attr, single_value)
+            if not self.virtual:
+                for obj, single_value in zip(self, value):
+                    setattr(obj, attr, single_value)
+            else:
+                raise ValueError(f"Can't set attribute '{attr}' for virtual stack")
+        else:
+            if isinstance(value, Iterable) and len(value) != len(self):
+                print(
+                    f"Attribute {attr} with length {len(value)} cannot be assigned elementwise to "\
+                    f"stack with length {len(self)}. It will be assigned to the stack itself."
+                )
+            return super().__setattr__(attr, value)
 
     def __delitem__(self, index: Union[int,slice]) -> None:
         self._elements.__delitem__(index)
