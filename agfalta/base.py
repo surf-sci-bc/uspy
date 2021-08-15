@@ -304,18 +304,15 @@ class DataObjectStack(Loadable):
     def __setattr__(self, attr: str, value: Any) -> None:
         if attr.startswith("_") or attr in self.__dict__:
             return super().__setattr__(attr, value)
-        #if self.virtual:
-        #    raise ValueError(f"Can't set attribute '{attr}' for virtual stack")
         if isinstance(value, Iterable) and len(value) == len(self):
-            if not self.virtual:
-                for obj, single_value in zip(self, value):
-                    setattr(obj, attr, single_value)
-            else:
+            if self.virtual:
                 raise ValueError(f"Can't set attribute '{attr}' for virtual stack")
+            for obj, single_value in zip(self, value):
+                setattr(obj, attr, single_value)
         else:
             if isinstance(value, Iterable) and len(value) != len(self):
                 print(
-                    f"Attribute {attr} with length {len(value)} cannot be assigned elementwise to "\
+                    f"Attribute {attr} with length {len(value)} cannot be assigned elementwise to "
                     f"stack with length {len(self)}. It will be assigned to the stack itself."
                 )
             return super().__setattr__(attr, value)
