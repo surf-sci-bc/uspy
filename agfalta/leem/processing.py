@@ -432,10 +432,13 @@ class RSM:
 #         """
 #         Acquire intensity curves sitched together from different stacks.
 #         - stacks: A list of stacks, e.g. (stack1, stack2, ...).
-#             Stacks have to be in the right order and need an overlapping region, that will be fitted.
+#             Stacks have to be in the right order and need an overlapping region,
+#             that will be fitted.
 #         - rois: List of ROIs, e.g. (roi1, roi2, ..)
-#             The Number of ROIs has to match the number of stacks given. The first list of ROIs is applied
-#             to the first stack, the second to the second stack. The intensity curves of the ROIs are stitched together.
+#             The Number of ROIs has to match the number of stacks
+#             given. The first list of ROIs is applied
+#             to the first stack, the second to the second stack. The
+#             intensity curves of the ROIs are stitched together.
 #         """
 
 #         x_data = []

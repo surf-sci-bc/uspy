@@ -182,7 +182,7 @@ class DataObjectStack(Loadable):
             if virtual:
                 print("WARNING: Stack won't be virtual (data objects were directly given)")
                 self._virtual = False
-            # if stack is created from objects, all objects have to be the 
+            # if stack is created from objects, all objects have to be the
             if not all([isinstance(source, self._type) for source in source]):
                 raise TypeError(f"Not all initialization objects are of type {self._type}")
             self._elements = source
@@ -251,25 +251,12 @@ class DataObjectStack(Loadable):
         return other
 
     def __getitem__(self, index: Union[int,slice]) -> Union[DataObject,Iterable]:
-        
         elements = self._elements[index]
-
-        #if [isinstance(element, type(self)) for element in elements].all():
-        #    return elements
-        #else: 
-        #    return type(self)(elements, virtual = self.virtual) if len(elements)>1 else self._single_construct(elements)
-
-        if self.virtual: # if virtual elements contains just sources not DataObjects
-            if isinstance(index, int):
+        if isinstance(index, int):
+            if self.virtual: # if virtual elements contains just sources not DataObjects
                 return self._single_construct(elements)
-            return type(self)(elements, virtual = True)
-
-        #if isinstance(elements, str):
-        #    return self._single_construct(elements)
-        #if isinstance(elements, Iterable):
-        #    return type(self)(elements, virtual=False)
-        # if isinstance(elements, DataObject):
-        return elements
+            return elements
+        return type(self)(elements, virtual=self.virtual)
 
     def __setitem__(self, index: Union[int,slice], other: Union[DataObject,Iterable]) -> None:
         # check compatibility -- implement in dataobject? (like img size)
@@ -476,3 +463,13 @@ class Image(DataObject):
             return self.image.shape == other.image.shape
         except AttributeError:
             return False
+
+
+class ROI(Loadable):
+    """An image region represented as a boolean 2D array."""
+    shapes = ("ellipse", "rectangle", "polygon", "complex")
+
+    def __init__(self, x0: int, y0: int, shape: Optional[str] = None,
+                 points: Optional[Iterable[Iterable]] = None,
+                 style: Optional[dict] = None, **params):
+        pass
