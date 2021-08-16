@@ -4,7 +4,7 @@ Basic classes for Elmitec LEEM ".dat"-file parsing and data visualization.
 # pylint: disable=missing-docstring
 
 from __future__ import annotations
-from typing import Any, Union
+from typing import Any, Union, Optional
 from collections.abc import Iterable
 from numbers import Number
 from datetime import datetime
@@ -15,6 +15,18 @@ import numpy as np
 
 from agfalta.utility import parse_bytes, parse_cp1252_until_null
 from agfalta.base import DataObjectStack, Image
+
+
+class TimeOrigin:
+    def __init__(self, value: Optional[Union[Number,TimeOrigin]] = None):
+        if isinstance(value, TimeOrigin):
+            value = value.value
+        elif value is None:
+            value = np.nan
+        self.value = float(value)
+
+    def __index__(self):
+        return self.value
 
 
 class LEEMImg(Image):
@@ -45,7 +57,10 @@ class LEEMImg(Image):
         "y_position": "µm",
     }
 
-    def __init__(self, *args, time_origin: list = [np.nan], **kwargs) -> None:
+    def __init__(self, *args, time_origin: Union[TimeOrigin,Number] = None,
+                 **kwargs) -> None:
+        if not isinstance(time_origin, TimeOrigin):
+            time_origin = TimeOrigin(time_origin)
         super().__init__(*args, **kwargs)
         self._time_origin = time_origin   # is a list so it can be mutable
 
@@ -94,14 +109,14 @@ class LEEMImg(Image):
 
     @property
     def time_origin(self) -> Number:
-        return self._time_origin[0]
+        return self._time_origin.value
     @time_origin.setter
     def time_origin(self, value: Number) -> None:
-        self._time_origin[0] = value
+        self._time_origin.value = value
 
     @property
     def rel_time(self) -> Number:
-        return self.timestamp - self._time_origin
+        return self.timestamp - self._time_origin.value
 
     @property
     def isotime(self) -> str:
@@ -113,12 +128,15 @@ class LEEMImg(Image):
 class LEEMStack(DataObjectStack):
     _type = LEEMImg
 
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self, *args,
+                 time_origin: Optional[Union[TimeOrigin,Number]] = None,
+                 **kwargs) -> None:
         # initialize with np.nan for the first calls to self._single_construct
-        self._time_origin = [np.nan]
+        self._time_origin = TimeOrigin(time_origin)
         super().__init__(*args, **kwargs)
         # now we can access the 0th element and set the value
-        self._time_origin = self[0].timestamp
+        if time_origin is None:
+            self._time_origin.value = self[0].timestamp
 
     def _split_source(self, source: Union[str,Iterable]) -> list:
         if isinstance(source, str):
@@ -131,10 +149,18 @@ class LEEMStack(DataObjectStack):
 
     @property
     def time_origin(self) -> Number:
-        return self._time_origin[0]
+        return self._time_origin.value
     @time_origin.setter
     def time_origin(self, value: Number) -> None:
-        self._time_origin[0] = value
+        self._time_origin.value = value
+
+    def __getitem__(self, index: Union[int,slice]) -> Union[LEEMImg,LEEMStack]:
+        elements = self._elements[index]
+        if isinstance(index, int):
+            if self.virtual: # if virtual elements contains just sources not DataObjects
+                return self._single_construct(elements)
+            return elements
+        return type(self)(elements, virtual=self.virtual, time_origin=self._time_origin)
 
 
 
