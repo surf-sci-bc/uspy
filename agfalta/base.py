@@ -186,12 +186,10 @@ class DataObjectStack(Loadable):
                 print("WARNING: Stack won't be virtual (data objects were directly given)")
                 self._virtual = False
             # if stack is created from objects, all objects have to be the
-
             for obj in source[1:]:
                 if not source[0].is_compatible(obj):
                     raise TypeError(f"Not all initialization objects are of type {self._type}")
-            #if not all([source.is_compatible for source in source]):
-            #    raise TypeError(f"Not all initialization objects are of type {self._type}")
+
             self._elements = source
         else:
             self._elements = self._split_source(source)
@@ -269,22 +267,20 @@ class DataObjectStack(Loadable):
 
     def __setitem__(self, index: Union[int,slice], other: Union[DataObject,Iterable]) -> None:
         # check compatibility -- implement in dataobject? (like img size)
-        if isinstance(other, DataObject):
-            elements = [other]
-        elif isinstance(other, type(self)):
-            if not self.virtual:
-                elements = other[:]
-            elif other.virtual:
-                elements = other.sources
-
-        if self.virtual:
-            if None in elements:
-                raise ValueError("Can't put DataObjects without source into virtual stack")
-        else:
-            for element in elements:
-                if not self._elements[0].is_compatible(element):
+        if isinstance(index, int) and isinstance(other, DataObject):
+            if self.virtual:
+                if other.source is None:
+                    raise ValueError("Can't put DataObjects without source into virtual stack")
+                insert = other.source
+            else:
+                insert = other
+                if not self._elements[0].is_compatible(other):
                     raise ValueError("Incompatible element assignment")
-        self._elements.__setitem__(index, elements)
+
+        elif isinstance(index, slice):
+            raise ValueError("Slices are not supported for item assignment.")
+
+        self._elements.__setitem__(index, insert)
 
     def extend(self, other: Union[DataObject,Iterable]) -> None:
         """Add new DataObjects to the end of the stack."""
@@ -351,14 +347,10 @@ class DataObjectStack(Loadable):
     def __isub__(self, other: Union[DataObject,DataObject,Number]) -> DataObjectStack:
         if self.virtual:
             raise ValueError("Can't do '-' on virtual stacks.")
-        #if isinstance(other, type(self)):
-            #self._elements -= other.elements
-        #else:
-        #try:
+
         for element in self._elements:
             element -= other
-        #except:
-        #    raise TypeError(f"Unsupported operand type - for {type(self)} and {type(other)}")
+
         return self
     def __sub__(self, other: Union[DataObjectStack,DataObject,Number]) -> DataObjectStack:
         result = self.copy(virtual=False)
@@ -403,9 +395,7 @@ class Image(DataObject):
         super().__init__(*args, **kwargs)
 
     def parse(self, source: str) -> dict[str, Any]:
-        return {
-            "image": np.float32(imread(source))
-        }
+        return {"image": np.float32(imread(source))}
 
     @property
     def mask(self) -> np.ndarray:

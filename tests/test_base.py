@@ -1,7 +1,7 @@
 """Tests the agfalta.base module."""
 
 from __future__ import annotations
-from typing import Any
+from typing import Any, Optional
 import numbers
 
 import numpy as np
@@ -43,6 +43,15 @@ class MinimalObject(DataObject):
         ):
             return True
         return False
+
+    ### Property to set Source to None when needed
+    @property
+    def source(self) -> Optional[Any]:
+        return super().source
+
+    @source.setter
+    def source(self, val):
+        self._source = val
 
 
 ### Test DataObjectStack
@@ -227,6 +236,26 @@ def test_stack_getitem(virtual):
 
     assert isinstance(stack[:3], MinimalObjectStack)
     assert isinstance(stack[0], MinimalObject)
+
+
+@pytest.mark.parametrize("virtual", [False, True])
+def test_stack_setitem(virtual):
+    sources = np.linspace(0, 100, 11)
+    add_obj = MinimalObject(-10)
+    stack = MinimalObjectStack(sources, virtual=virtual)
+
+    stack[-1] = add_obj
+    if virtual:
+        assert stack[-1].source == add_obj.source
+        with pytest.raises(ValueError):
+            add_obj.source = None
+            assert add_obj.source is None
+            stack[-1] = add_obj
+    else:
+        assert stack[-1] is add_obj
+
+    with pytest.raises(NotImplementedError):
+        stack[:] = add_obj
 
 
 ### Image Class Tests
