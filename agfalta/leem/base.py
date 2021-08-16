@@ -137,7 +137,10 @@ class LEEMStack(DataObjectStack):
 
     def _split_source(self, source: Union[str,Iterable]) -> list:
         if isinstance(source, str):
-            return sorted(glob.glob(f"{source}*.dat"))
+            fnames = sorted(glob.glob(f"{source}*.dat"))
+            if not fnames:
+                fnames = sorted(glob.glob(f"{source}/*.dat"))
+            return fnames
         return source
 
     def _single_construct(self, source: Any) -> LEEMImg:

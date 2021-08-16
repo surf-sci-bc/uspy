@@ -13,6 +13,7 @@ from skimage.io import imread
 
 
 from deepdiff import DeepDiff
+import cv2
 import numpy as np
 import matplotlib as mpl
 
@@ -185,7 +186,7 @@ class DataObjectStack(Loadable):
                 print("WARNING: Stack won't be virtual (data objects were directly given)")
                 self._virtual = False
             # if stack is created from objects, all objects have to be the
-            
+
             for obj in source[1:]:
                 if not source[0].is_compatible(obj):
                     raise TypeError(f"Not all initialization objects are of type {self._type}")
@@ -206,6 +207,8 @@ class DataObjectStack(Loadable):
         """Build the stack from a list of sources."""
         self._virtual = False
         sources = self._elements
+        if not sources:
+            raise ValueError("Empty source for DataObjectStack (wrong file path?)")
         self._elements = [self._single_construct(sources[0])]
         for source in sources[1:]:
             element = self._single_construct(source)
@@ -256,7 +259,7 @@ class DataObjectStack(Loadable):
             other.virtual = virtual
         return other
 
-    def __getitem__(self, index: Union[int,slice]) -> Union[DataObject,Iterable]:
+    def __getitem__(self, index: Union[int,slice]) -> Union[DataObject,DataObjectStack]:
         elements = self._elements[index]
         if isinstance(index, int):
             if self.virtual: # if virtual elements contains just sources not DataObjects
@@ -402,7 +405,7 @@ class Image(DataObject):
     def parse(self, source: str) -> dict[str, Any]:
         return {
             "image": np.float32(imread(source))
-        } 
+        }
 
     @property
     def mask(self) -> np.ndarray:
@@ -481,12 +484,12 @@ class Image(DataObject):
 
 class ROI(Loadable):
     """An image region represented as a boolean 2D array."""
-    shapes = ("ellipse", "rectangle", "polygon", "complex")
+    _shapes = ("circle", "ellipse", "square", "rectangle", "polygon", "custom")
     _param_keys = ("radius", "width", "height", "rotation")
 
     def __init__(self, x0: int, y0: int,
                  shape: Optional[str] = None,
-                 points: Optional[Iterable[Iterable]] = None,
+                 corners: Optional[Iterable[Iterable]] = None,
                  array: Optional[np.ndarray] = None,
                  style: Optional[dict] = None, **params):
         self.position = np.array([x0, y0])
@@ -494,34 +497,68 @@ class ROI(Loadable):
         self.style = style
 
         self.shape = shape
-        self.points = points
+        self.corners = corners
         self.array = array
         try:
-            if self.points is not None:
+            if self.corners is not None:
                 assert self.shape is None and self.array is None
+                self.corners = np.array(self.corners)
+                assert self.corners.shape[1] == 2
                 self.shape = "polygon"
                 self._make_polygon()
-            elif array is not None:
-                assert self.points is None and self.shape is None
-                self.shape = "complex"
-                self._make_complex()
+            elif self.array is not None:
+                assert self.corners is None and self.shape is None
+                assert isinstance(self.array, np.ndarray) and len(self.array.shape) == 2
+                self.shape = "custom"
             else:
-                assert self.points is None and self.array is None
+                assert self.corners is None and self.array is None
                 if self.shape is None:
                     self.shape = "circle"
+                assert self.shape in self._shapes
                 self._make_shape()
+            assert isinstance(self.array, np.ndarray) and len(self.array.shape) == 2
         except AssertionError as exc:
-            raise ValueError("Only one of 'shape', 'points' or 'array' "
-                             "arguments are allowed.") from exc
+            raise ValueError(f"Either more than one of {shape=}|{corners=}|{array=} "
+                              "were given or their type is not compatible") from exc
 
     def _make_polygon(self) -> None:
         """Create a polygon mask."""
+        self.corners -= self.corners.min(axis=0)
+        self.array = np.zeros(self.corners.max(axis=0)[::-1] + 1)
+        self.array = cv2.fillConvexPoly(self.array, self.corners, color=1).astype(np.bool)
 
     def _make_shape(self) -> None:
-        """Create a rectangular or elliptic mask."""
+        """Create a rectangular or elliptic mask. Arguments belonging to the shapes:
+            - circle: radius
+            - ellipse: width, height, rotation
+            - square: width, rotation
+            - rectangle: width, height, rotation
+        where radius, width and height are in pixels; rotation is in degrees (anti-clockwise).
+        """
+        if "radius" in self.params:
+            if "width" in self.params:
+                raise ValueError("Both radius and width were given for a shape-ROI")
+            self.params["width"] = self.params.pop("radius") * 2
+        self.params["height"] = self.params.get("height", self.params["width"])
+        self.params["rotation"] = self.params.get("rotation", 0)
 
-    def _make_complex(self) -> None:
-        """Create a mask directly from an array."""
+        width, height = self.params["width"], self.params["height"]
+        rotation = -self.params["rotation"]
+
+        if self.shape in ("circle", "ellipse"):
+            self.corners = cv2.ellipse2Poly(
+                center=(0, 0), axes=(width // 2, height // 2),
+                angle=int(rotation), arcStart=0, arcEnd=360, delta=1
+            )
+        elif self.shape in ("square", "rectangle"):
+            rot_c, rot_s = np.cos(-rotation * np.pi / 180), np.sin(-rotation * np.pi / 180)
+            rot_matrix = np.array([[rot_c, -rot_s], [rot_s, rot_c]])
+            corners = np.array([[0, 0], [width, 0], [width, height], [0, height]])
+            corners = np.rint(np.dot(corners, rot_matrix)).astype(np.int32)
+            self.corners = corners - corners.min(axis=0)
+        else:
+            raise ValueError(f"Unknown shape {self.shape}")
+        self._make_polygon()
 
     @property
     def mask(self) -> np.ndarray:
