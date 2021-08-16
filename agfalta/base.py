@@ -472,7 +472,7 @@ class ROI(Loadable):
     def __init__(self, x0: int, y0: int,
                  shape: Optional[str] = None,
                  points: Optional[Iterable[Iterable]] = None,
-                 source: Optional[np.ndarray] = None,
+                 array: Optional[np.ndarray] = None,
                  style: Optional[dict] = None, **params):
         self.position = np.array([x0, y0])
         self.params = params
@@ -480,21 +480,23 @@ class ROI(Loadable):
 
         self.shape = shape
         self.points = points
-        self.source = source
+        self.array = array
         try:
             if self.points is not None:
-                assert self.shape is None and self.source is None
+                assert self.shape is None and self.array is None
+                self.shape = "polygon"
                 self._make_polygon()
-            elif source is not None:
+            elif array is not None:
                 assert self.points is None and self.shape is None
+                self.shape = "complex"
                 self._make_complex()
             else:
-                assert self.points is None and self.source is None
+                assert self.points is None and self.array is None
                 if self.shape is None:
                     self.shape = "circle"
                 self._make_shape()
         except AssertionError as exc:
-            raise ValueError("Only one of 'shape', 'points' or 'source' "
+            raise ValueError("Only one of 'shape', 'points' or 'array' "
                              "arguments are allowed.") from exc
 
     def _make_polygon(self) -> None:
