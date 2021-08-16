@@ -571,13 +571,15 @@ class ROI(Loadable):
         low_corner = (self.position - self.corners.mean(axis=0)).astype(int)
         high_corner = (pad_size - mask_size - low_corner).astype(int)
 
+        result = np.zeros(pad_size)
         # crop the mask, if need be (i.e., if corners have negative components):
         crop_low = np.clip(-low_corner, 0, None)
         crop_high = mask_size - np.clip(-high_corner, 0, None)
+        if any(crop_low > mask_size) or any(crop_high < 0):
+            return result
         mask = self.mask[crop_low[0]:crop_high[0], crop_low[1]:crop_high[1]]
 
         # pad the mask until it matches the pad_size:
-        result = np.zeros(pad_size)
         pad_low = np.clip(low_corner, 0, None)
         pad_high = pad_size - np.clip(high_corner, 0, None)
         result[pad_low[0]:pad_high[0], pad_low[1]:pad_high[1]] = mask
