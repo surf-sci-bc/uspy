@@ -45,9 +45,9 @@ class LEEMImg(Image):
         "y_position": "µm",
     }
 
-    def __init__(self, *args, time_origin: int = np.nan, **kwargs) -> None:
+    def __init__(self, *args, time_origin: list = [np.nan], **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self._time_origin = time_origin
+        self._time_origin = time_origin   # is a list so it can be mutable
 
     def parse(self, source: str) -> dict[str, Any]:
         if isinstance(source, Image):
@@ -94,10 +94,10 @@ class LEEMImg(Image):
 
     @property
     def time_origin(self) -> Number:
-        return self._time_origin
+        return self._time_origin[0]
     @time_origin.setter
     def time_origin(self, value: Number) -> None:
-        self._time_origin = value
+        self._time_origin[0] = value
 
     @property
     def rel_time(self) -> Number:
@@ -113,17 +113,28 @@ class LEEMImg(Image):
 class LEEMStack(DataObjectStack):
     _type = LEEMImg
 
+    def __init__(self, *args, **kwargs) -> None:
+        # initialize with np.nan for the first calls to self._single_construct
+        self._time_origin = [np.nan]
+        super().__init__(*args, **kwargs)
+        # now we can access the 0th element and set the value
+        self._time_origin = self[0].timestamp
+
     def _split_source(self, source: Union[str,Iterable]) -> list:
         if isinstance(source, str):
             return sorted(glob.glob(f"{source}*.dat"))
         return source
 
-    def _construct(self) -> None:
-        """Build the container from a list of sources."""
-        super()._construct()
-        self._time_origin = self._elements[0].timestamp
-        for element in self._elements:
-            element.time_origin = self._time_origin
+    def _single_construct(self, source: Any) -> LEEMImg:
+        """Construct a single DataObject."""
+        return LEEMImg(source, time_origin=self._time_origin)
+
+    @property
+    def time_origin(self) -> Number:
+        return self._time_origin[0]
+    @time_origin.setter
+    def time_origin(self, value: Number) -> None:
+        self._time_origin[0] = value
 
 
 
