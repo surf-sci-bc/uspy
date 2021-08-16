@@ -25,9 +25,6 @@ class TimeOrigin:
             value = np.nan
         self.value = float(value)
 
-    def __index__(self):
-        return self.value
-
 
 class LEEMImg(Image):
     """
