@@ -9,6 +9,8 @@ from numbers import Number
 import copy
 import pickle
 from pathlib import Path
+from skimage.io import imread
+
 
 from deepdiff import DeepDiff
 import numpy as np
@@ -183,8 +185,12 @@ class DataObjectStack(Loadable):
                 print("WARNING: Stack won't be virtual (data objects were directly given)")
                 self._virtual = False
             # if stack is created from objects, all objects have to be the
-            if not all([isinstance(source, self._type) for source in source]):
-                raise TypeError(f"Not all initialization objects are of type {self._type}")
+            
+            for obj in source[1:]:
+                if not source[0].is_compatible(obj):
+                    raise TypeError(f"Not all initialization objects are of type {self._type}")
+            #if not all([source.is_compatible for source in source]):
+            #    raise TypeError(f"Not all initialization objects are of type {self._type}")
             self._elements = source
         else:
             self._elements = self._split_source(source)
@@ -342,11 +348,14 @@ class DataObjectStack(Loadable):
     def __isub__(self, other: Union[DataObject,DataObject,Number]) -> DataObjectStack:
         if self.virtual:
             raise ValueError("Can't do '-' on virtual stacks.")
-        if isinstance(other, type(self)):
-            self._elements -= other.elements
-        else:
-            for element in self._elements:
-                element -= other
+        #if isinstance(other, type(self)):
+            #self._elements -= other.elements
+        #else:
+        #try:
+        for element in self._elements:
+            element -= other
+        #except:
+        #    raise TypeError(f"Unsupported operand type - for {type(self)} and {type(other)}")
         return self
     def __sub__(self, other: Union[DataObjectStack,DataObject,Number]) -> DataObjectStack:
         result = self.copy(virtual=False)
@@ -366,13 +375,14 @@ class DataObjectStack(Loadable):
     def __rmul__(self, other: Union[DataObject,Number]) -> DataObjectStack:
         return self.__mul__(other)
 
-    def __idiv__(self, other: Union[DataObject,Number]) -> DataObjectStack:
+    def __itruediv__(self, other: Union[DataObject,Number]) -> DataObjectStack:
         if self.virtual:
             raise ValueError("Can't do '/' on virtual stacks.")
         for element in self._elements:
             element /= other
         return self
-    def __div__(self, other: Union[DataObject,Number]) -> DataObjectStack:
+
+    def __truediv__(self, other: Union[DataObject,Number]) -> DataObjectStack:
         result = self.copy(virtual=False)
         result /= other
         return result
@@ -388,6 +398,11 @@ class Image(DataObject):
     def __init__(self, *args, **kwargs) -> None:
         self._mask = None
         super().__init__(*args, **kwargs)
+
+    def parse(self, source: str) -> dict[str, Any]:
+        return {
+            "image": np.float32(imread(source))
+        } 
 
     @property
     def mask(self) -> np.ndarray:

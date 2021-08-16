@@ -3,7 +3,7 @@ import numbers
 
 import numpy as np
 import pytest
-from agfalta.base import DataObject, DataObjectStack
+from agfalta.base import DataObject, DataObjectStack, Image
 from deepdiff.diff import DeepDiff
 
 """Tests the agfalta.base module."""
@@ -11,9 +11,13 @@ from deepdiff.diff import DeepDiff
 # pylint: disable=missing-docstring
 # pylint: disable=redefined-outer-name
 # pylint: disable=protected-access
+# pylint: disable=attribute-defined-outside-init
 
 ### Test DataObject
 
+from .conftest import (
+    TESTDATA_DIR
+)
 
 class MinimalObject(DataObject):
     """A Class used for Tests. Source is converted to a numpy array"""
@@ -31,6 +35,7 @@ class MinimalObject(DataObject):
 
     def is_compatible(self, other: DataObject) -> bool:
         if isinstance(self.matrix, np.ndarray):
+            print(self.matrix.shape, other.matrix.shape)
             return self.matrix.shape == other.matrix.shape
         if isinstance(self.matrix, numbers.Number) and isinstance(
             other.matrix, numbers.Number
@@ -38,12 +43,15 @@ class MinimalObject(DataObject):
             return True
         return False
 
-
 ### Test DataObjectStack
 
 class MinimalObjectStack(DataObjectStack):
     _type = MinimalObject
 
+### ImageStack
+
+class ImageStack(DataObjectStack):
+    _type = Image
 
 @pytest.mark.parametrize("source", [np.array([[1, 2], [3, 4]])])
 def test_dataobject_generation(source):
@@ -79,7 +87,7 @@ def test_dataobj_setattr(source, val):
 
 
 @pytest.mark.parametrize(
-    ("source", "other_source"), [(np.array([[1, 2], [3, 4]]), np.ones(2))]
+    ("source", "other_source"), [(np.array([[1, 2], [3, 4]]), np.eye(2))]
 )
 def test_datobject_comparision(source, other_source):
     obj = MinimalObject(source)
@@ -135,6 +143,14 @@ def test_stack_generation_from_objects(virtual):
     assert len(stack) == len(sources)
     for index, element in enumerate(stack):
         assert element is objs[index]  # Elements should be the same not equal
+
+@pytest.mark.parametrize("virtual", [False, True])
+def test_stack_generation_with_not_compatible_objs(virtual):
+    sources = [np.eye(2), np.eye(3)]
+
+    objs = [MinimalObject(source) for source in sources]
+    with pytest.raises(TypeError):
+        MinimalObjectStack(objs, virtual=virtual)
 
 
 def test_stack_virtual():
@@ -203,3 +219,115 @@ def test_stack_getitem(virtual):
 
     assert isinstance(stack[:3], MinimalObjectStack)
     assert isinstance(stack[0], MinimalObject)
+
+### Image Class Tests
+
+@pytest.mark.parametrize("fileending", [".png",".tif"])
+def test_image_generation_from_common_filetypes(fileending):
+    img = Image(TESTDATA_DIR+f"test_gray_16bit{fileending}")
+    # pylint: disable = no-member
+    assert (img.image == np.eye(10, dtype = np.float32)*38550).all()
+
+# Integer Calculation Tests
+
+@pytest.fixture
+def testimgpng():
+    return Image(TESTDATA_DIR+"test_gray_16bit.png")
+
+def test_image_add_integer(testimgpng):
+    img2 = testimgpng + 100
+    assert (img2.image == np.eye(10)*38550+100).all()
+    assert img2 is not testimgpng
+
+def test_image_sub_integer(testimgpng):
+    img2 = testimgpng - 100
+    assert (img2.image == np.eye(10)*38550-100).all()
+    assert img2 is not testimgpng
+
+def test_image_mul_integer(testimgpng):
+    img2 = testimgpng * 0.5
+    assert (img2.image == np.eye(10)*38550*0.5).all()
+    assert img2 is not testimgpng
+
+def test_image_div_integer(testimgpng):
+    img2 = testimgpng / 2
+    assert (img2.image == np.eye(10)*38550/2).all()
+    assert img2 is not testimgpng
+
+def test_image_iadd_integer(testimgpng):
+    img = testimgpng
+    testimgpng += 100
+    assert (testimgpng.image == np.eye(10)*38550+100).all()
+    assert img is testimgpng
+
+def test_image_imul_integer(testimgpng):
+    img = testimgpng
+    testimgpng *= 0.5
+    assert (testimgpng.image == np.eye(10)*38550*0.5).all()
+    assert img is testimgpng
+
+# Image Calculation Tests
+
+def test_image_add_image(testimgpng):
+    img2 = testimgpng + testimgpng/2
+    assert (img2.image == np.eye(10)*38550*1.5).all()
+    assert img2 is not testimgpng
+
+def test_image_sub_integee(testimgpng):
+    img2 = testimgpng - testimgpng/2
+    assert (img2.image == np.eye(10)*38550*0.5).all()
+    assert img2 is not testimgpng
+
+@pytest.mark.filterwarnings("ignore::RuntimeWarning")
+def test_image_div_image(testimgpng):
+    img2 = testimgpng/testimgpng
+    # 0/0 gives NaN so we have to get rid of it before testing
+    assert (np.nan_to_num(img2.image) == np.eye(10)).all()
+    assert img2 is not testimgpng
+
+### Stack Arithmetic Tests
+
+def test_stack_addsub_stack():
+    sources = list(range(0,10))
+    sources_add = list(range(9,12))
+
+    stack = MinimalObjectStack(sources)
+    stack_add = MinimalObjectStack(sources_add)
+
+    comb_stack = stack + stack_add
+    comb_sources = sources + sources_add
+
+    for obj, source in zip(comb_stack, comb_sources):
+        assert obj == MinimalObject(source)
+
+    with pytest.raises(TypeError):
+        comb_stack = stack - stack_add
+
+# Further Tests have to be done with a Stack of a Class that implements calc itself
+
+@pytest.mark.parametrize("x", [Image(TESTDATA_DIR+"test_gray_16bit.png"), 10, 10.0])
+@pytest.mark.parametrize("virtual", [False, pytest.param(True, marks=pytest.mark.xfail(raises=ValueError))])
+@pytest.mark.filterwarnings("ignore::RuntimeWarning")
+def test_stack_addsub_imgNumber(x,virtual,testimgpng):
+    sources = [testimgpng*i for i in range (1,3)]
+
+    stack = ImageStack(sources, virtual=virtual)
+    stack_calc = stack + x
+
+    for index, img in enumerate(stack_calc):
+        assert img == sources[index] + x
+
+    stack_calc = stack - x
+
+    for index, img in enumerate(stack_calc):
+        assert img == sources[index] - x
+
+    stack_calc = stack / x
+    for index, img in enumerate(stack_calc):
+        assert img == sources[index] / x
+    
+    if isinstance(x, numbers.Number):
+        stack_calc = stack * x
+        for index, img in enumerate(stack_calc):
+            assert img == sources[index] * x
+
