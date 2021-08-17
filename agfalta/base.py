@@ -520,18 +520,6 @@ class ImageStack(DataObjectStack):
 
         return [images[i, :, :] for i in range(images.shape[0])]
 
-        try: # check if something like multiimage .tif
-            images = np.float32(imread(source))
-        except:
-            # if the object given already is a numpy array:
-            images = source
-        try:   
-            if len(images.shape) != 3:
-                raise ValueError(f"{source} is not a stack")
-            return [images[i, :, :] for i in range(images.shape[0])]
-        except:
-            return super()._split_source(source)
-
 
 
 class ROI(Loadable):
