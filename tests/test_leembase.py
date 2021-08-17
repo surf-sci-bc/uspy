@@ -35,7 +35,8 @@ def test_img_constructor_array(img):
     assert img2.image.shape == img.image.shape
 
 
-@pytest.mark.skip(reason="Takes long and seems unproblematic")
+#@pytest.mark.skip(reason="Takes long and seems unproblematic")
+@pytest.mark.slow
 def test_img_copying(img):
     img2 = img.copy()
     assert img2 == img
@@ -59,6 +60,7 @@ def test_stack_constructor(stack_fname, virtual):
     assert stack[0].image.shape == stack[-1].image.shape
 
 
+@pytest.mark.slow
 def test_stack_constructor_globbing(stack_folder):
     stack1 = base.LEEMStack(stack_folder, virtual=True)
     stack2 = base.LEEMStack(stack_folder + "/*.dat", virtual=True)
