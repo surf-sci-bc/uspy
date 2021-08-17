@@ -190,7 +190,7 @@ class DataObjectStack(Loadable):
                 if not source[0].is_compatible(obj):
                     raise TypeError(f"Not all initialization objects are of type {self._type}")
 
-            self._elements = source
+            self._elements = self._split_source(source)
         else:
             self._elements = self._split_source(source)
             if not self.virtual:
@@ -205,7 +205,7 @@ class DataObjectStack(Loadable):
         """Build the stack from a list of sources."""
         self._virtual = False
         sources = self._elements
-        if not sources:
+        if len(sources) == 0: # sources might be an arbitrary iterable, so length is tested
             raise ValueError("Empty source for DataObjectStack (wrong file path?)")
         self._elements = [self._single_construct(sources[0])]
         for source in sources[1:]:
@@ -267,21 +267,56 @@ class DataObjectStack(Loadable):
 
     def __setitem__(self, index: Union[int,slice], other: Union[DataObject,Iterable]) -> None:
         # check compatibility -- implement in dataobject? (like img size)
-        if isinstance(index, int) and isinstance(other, DataObject):
-            if self.virtual:
+        if not isinstance(other, (self._type, type(self))):
+            raise ValueError(f"Unsupported type {type(other)} for {type(self)}")
+        if isinstance(index, int) and isinstance(other, type(self)):
+            raise ValueError(f"Cant set single Elements to {type(self)}")
+
+        if self.virtual:
+            if isinstance(other, self._type):
                 if other.source is None:
                     raise ValueError("Can't put DataObjects without source into virtual stack")
                 insert = other.source
             else:
-                insert = other
-                if not self._elements[0].is_compatible(other):
-                    raise ValueError("Incompatible element assignment")
+                if None in other.sources:
+                    raise ValueError("Can't put DataObjects without source into virtual stack")
+                insert = other.sources
 
-        elif isinstance(index, slice):
-            raise ValueError("Slices are not supported for item assignment.")
+        else:
+            insert = other
+            if isinstance(other, type(self)):
+                check = other[0]
+            else:
+                check = other
+            
+            if not self[0].is_compatible(check):
+                raise ValueError("Incompatible element assignment")
 
         self._elements.__setitem__(index, insert)
 
+        """
+        if isinstance(index, int):
+            if isinstance(other, DataObject):
+                if self.virtual:
+                    if other.source is None:
+                        raise ValueError("Can't put DataObjects without source into virtual stack")
+                    insert = other.source
+                else:
+                    insert = other
+                    if not self._elements[0].is_compatible(other):
+                        raise ValueError("Incompatible element assignment")
+            else:
+                raise TypeError(f"Cannot assign {type(other)} to {self} at index")
+
+        elif isinstance(index, slice) and isinstance(other, self._type):
+            if self.virtual:
+                insert = other.source
+            else:
+                insert = other
+            #raise ValueError("Slices are not supported for item assignment.")
+
+        self._elements.__setitem__(index, insert)
+        """
     def extend(self, other: Union[DataObject,Iterable]) -> None:
         """Add new DataObjects to the end of the stack."""
         if isinstance(other, DataObject):
@@ -290,7 +325,7 @@ class DataObjectStack(Loadable):
             if not self.virtual:
                 elements = other[:]
             elif other.virtual:
-                elements = other.sources
+                elements = other.sources # sources
 
         if self.virtual:
             if None in elements:
