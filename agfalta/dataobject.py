@@ -197,6 +197,9 @@ class DataObjectStack(Loadable):
     def _split_source(self, source: Union[str, Iterable]) -> list:
         """Split the source parameter of the constructor into source arguments
         that can be passed to single DataObjects."""
+        return_val = source
+        if not isinstance(return_val, list):
+            raise ValueError(f"Cannot create Objects from {type(self)}")
         return source
 
     def _construct(self) -> None:

@@ -10,6 +10,7 @@ import pytest
 import numpy as np
 
 from agfalta.leem.base import LEEMImg, LEEMStack
+from agfalta.dataobject import Image
 
 
 ######### Utility
@@ -35,7 +36,6 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if "slow" in item.keywords:
             item.add_marker(skip_slow)
-
 
 ######### Fixtures
 
@@ -64,6 +64,35 @@ IMG_FNAMES_COMPATIBLE = [
 DC_IMG_FNAME = TESTDATA_DIR + "dark_counts_bremen.dat"
 MCP_IMG_FNAME = TESTDATA_DIR + "channelplate.dat"
 
+ARRAY_2D = [
+    np.array([[1,2],[3,4]]),
+    np.ones((2,2)),
+    np.eye(2)
+]
+
+ARRAY_1D = [
+    np.linspace(0,100,11),
+    np.zeros(3),
+    np.array([-1.0,-2.0,-3.0,-4.0,-5.0])
+]
+
+TESTIMAGE = np.eye(10)*38550
+TESTIMAGE_NAME = "test_gray_16bit"
+TESTIMAGE_ENDING = [".png", ".tif"]
+
+# Create Testimages
+
+@pytest.fixture(scope="module", params=ARRAY_1D)
+def list1darrays(request):
+    return request.param.tolist()
+
+@pytest.fixture()
+def list2darrays(request):
+    return ARRAY_2D
+
+@pytest.fixture()
+def testimgpng():
+    return Image(TESTDATA_DIR+TESTIMAGE_NAME+".png")#, request.param[1]
 
 @pytest.fixture(scope="module", params=IMG_FNAMES)
 def img_fname(request):

@@ -71,3 +71,19 @@ def test_stack_constructor_globbing(stack_folder):
         assert stack1[i] == stack3[i]
     stack3 = base.LEEMStack(IMG_FNAMES_COMPATIBLE[0])
     assert len(stack3) == 1
+
+def test_stack_constructor_nonsense():
+    with pytest.raises(ValueError):
+        _ = base.LEEMStack("nonsense")
+    with pytest.raises(FileNotFoundError):
+        _ = base.LEEMStack(["nonsense.dat"])
+
+def test_img_attr_types(img):
+    if ".dat" in img.source:
+        assert img.energy > -6
+        assert img.rel_time > 0
+    else:
+        assert np.isnan(img.energy)
+        assert np.isnan(img.rel_time)
+    assert np.isnan(img.temperature) or img.temperature > -280
+    assert isinstance(img.timestamp, (int, float))

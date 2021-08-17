@@ -6,7 +6,7 @@ import numbers
 
 import numpy as np
 import pytest
-from agfalta.base import DataObject, DataObjectStack, Image
+from agfalta.dataobject import DataObject, DataObjectStack, Image
 from deepdiff.diff import DeepDiff
 
 # pylint: disable=invalid-name
@@ -17,7 +17,18 @@ from deepdiff.diff import DeepDiff
 
 ### Test DataObject
 
-from .conftest import TESTDATA_DIR
+from .conftest import (
+    TESTDATA_DIR,
+    TESTIMAGE,
+    TESTIMAGE_ENDING,
+    TESTIMAGE_NAME,
+    ARRAY_1D,
+    ARRAY_2D
+)
+
+
+def array2d():
+    np.random.rand(2, 2)
 
 
 class MinimalObject(DataObject):
@@ -68,7 +79,7 @@ class ImageStack(DataObjectStack):
     _type = Image
 
 
-@pytest.mark.parametrize("source", [np.array([[1, 2], [3, 4]])])
+@pytest.mark.parametrize("source", ARRAY_2D + ARRAY_1D)
 def test_dataobject_generation(source):
     ### DataObjects cannot be created itself
     with pytest.raises(NotImplementedError):
@@ -93,7 +104,7 @@ def test_dataobject_generation(source):
 
 
 @pytest.mark.parametrize("val", [1, "bogus"])
-@pytest.mark.parametrize("source", [np.array([[1, 2], [3, 4]])])
+@pytest.mark.parametrize("source", ARRAY_2D)
 def test_dataobj_setattr(source, val):
     obj = MinimalObject(source)
     with pytest.raises(AttributeError):
@@ -102,9 +113,7 @@ def test_dataobj_setattr(source, val):
     assert obj.attr == val
 
 
-@pytest.mark.parametrize(
-    ("source", "other_source"), [(np.array([[1, 2], [3, 4]]), np.eye(2))]
-)
+@pytest.mark.parametrize(("source", "other_source"), [(ARRAY_2D[0], ARRAY_2D[1])])
 def test_datobject_comparision(source, other_source):
     obj = MinimalObject(source)
     same_obj = MinimalObject(source)
@@ -116,7 +125,7 @@ def test_datobject_comparision(source, other_source):
     assert same_obj != other_obj
 
 
-@pytest.mark.parametrize("source", [np.array([[1, 2], [3, 4]])])
+@pytest.mark.parametrize("source", ARRAY_2D)
 def test_dataobject_data_mutability(source):
     obj = MinimalObject(source)
 
@@ -134,8 +143,8 @@ def test_dataobject_data_mutability(source):
 
 
 @pytest.mark.parametrize("virtual", [False, True])
-def test_stack_generation_from_sources(virtual):
-    sources = np.linspace(0, 100, 10)
+def test_stack_generation_from_sources(list2darrays, virtual):
+    sources = list2darrays
 
     stack = MinimalObjectStack(sources, virtual=virtual)
     assert len(stack) == len(sources)
@@ -149,8 +158,8 @@ def test_stack_generation_from_sources(virtual):
 
 
 @pytest.mark.parametrize("virtual", [False, True])
-def test_stack_generation_from_objects(virtual):
-    sources = np.linspace(0, 100, 11)
+def test_stack_generation_from_objects(list1darrays, virtual):
+    sources = list1darrays
 
     objs = [MinimalObject(source) for source in sources]
 
@@ -170,8 +179,8 @@ def test_stack_generation_with_not_compatible_objs(virtual):
         MinimalObjectStack(objs, virtual=virtual)
 
 
-def test_stack_virtual():
-    sources = np.linspace(0, 100, 11)
+def test_stack_virtual(list1darrays):
+    sources = list1darrays
     virt_stack = MinimalObjectStack(sources, virtual=True)
     real_stack = MinimalObjectStack(sources, virtual=False)
 
@@ -191,8 +200,8 @@ def test_stack_virtual():
 
 
 @pytest.mark.parametrize("virtual", [False, True])
-def test_stack_setattr(virtual):
-    sources = np.linspace(0, 100, 11)
+def test_stack_setattr(list1darrays, virtual):
+    sources = list1darrays
     stack = MinimalObjectStack(sources, virtual=virtual)
 
     # setting of per element attributes
@@ -210,15 +219,23 @@ def test_stack_setattr(virtual):
         stack.bogus = "Bogus"
         stack.array = [1, 2]
         stack.number = 1
+        """
+        TODO:
+        When a string is assigned to a stack and len(string) == len(stack)
+        the chars are assigned to the elements not the stack. I am not sure if
+        this is useful behaivor. It should be considered how Attributes are assigned
+        to stacks and are passed to elements. 
+        """
         assert stack.bogus is "Bogus"
         assert stack.array == [1, 2]
         assert stack.number == 1
 
 
 @pytest.mark.parametrize("virtual", [False])
-def test_stack_extend(virtual):
-    sources = np.linspace(0, 100, 11)
-    sources_ext = np.linspace(100, 200, 11)
+@pytest.mark.parametrize(("source", "source_ext"), [(ARRAY_1D[0], ARRAY_1D[1])])
+def test_stack_extend(source, source_ext, virtual):
+    sources = source.tolist()
+    sources_ext = source_ext.tolist()
     stack = MinimalObjectStack(sources, virtual=virtual)
     stack_ext = MinimalObjectStack(sources_ext, virtual=virtual)
     objs = [element for element in stack]
@@ -231,8 +248,8 @@ def test_stack_extend(virtual):
 
 
 @pytest.mark.parametrize("virtual", [False, True])
-def test_stack_getitem(virtual):
-    sources = np.linspace(0, 100, 11)
+def test_stack_getitem(list1darrays, virtual):
+    sources = list1darrays
     stack = MinimalObjectStack(sources, virtual=virtual)
 
     assert isinstance(stack[:3], MinimalObjectStack)
@@ -240,9 +257,10 @@ def test_stack_getitem(virtual):
 
 
 @pytest.mark.parametrize("virtual", [False, True])
-def test_stack_setitem(virtual):
-    sources = np.linspace(0, 100, 11).tolist()
-    sources_add = np.linspace(-3, -1, 3).tolist()
+@pytest.mark.parametrize(("source", "source_add"), [(ARRAY_1D[0], ARRAY_1D[1])])
+def test_stack_setitem(source, source_add, virtual):
+    sources = source.tolist()
+    sources_add = source_add.tolist()
     add_obj = MinimalObject(-10)
     add_stack = MinimalObjectStack(sources_add, virtual=virtual)
     load_stack = MinimalObjectStack(sources, virtual=virtual)
@@ -296,53 +314,50 @@ def test_stack_setitem(virtual):
 ### Image Class Tests
 
 
-@pytest.mark.parametrize("fileending", [".png", ".tif"])
+@pytest.mark.parametrize("fileending", TESTIMAGE_ENDING)
 def test_image_generation_from_common_filetypes(fileending):
-    img = Image(TESTDATA_DIR + f"test_gray_16bit{fileending}")
+    img = Image(TESTDATA_DIR + TESTIMAGE_NAME + fileending)
     # pylint: disable = no-member
-    assert (img.image == np.eye(10, dtype=np.float32) * 38550).all()
-    assert (img.width, img.height) == (10,10)
+    assert (img.image == TESTIMAGE).all()
+    assert (img.width, img.height) == TESTIMAGE.shape
 
-def test_image_generation_from_numpy_array():
-    array = np.eye(3)
+
+@pytest.mark.parametrize("source", ARRAY_2D)
+def test_image_generation_from_numpy_array(source):
+    array = source
     img = Image(array)
     assert (img.image == array).all()
-    assert img.width == 3
-    assert img.height == 3
+    assert img.width, img.height == source.shape
     assert img.source is None
 
+
 # Integer Calculation Tests
-
-
-@pytest.fixture
-def testimgpng():
-    return Image(TESTDATA_DIR + "test_gray_16bit.png")
 
 
 @pytest.mark.parametrize("x", [10, 2.0, -5.0])
 def test_image_add_integer(x, testimgpng):
     img2 = testimgpng + x
-    assert (img2.image == np.eye(10) * 38550 + x).all()
+    assert (img2.image == TESTIMAGE + x).all()
     assert img2 is not testimgpng
 
     img2 = x + testimgpng
-    assert (img2.image == np.eye(10) * 38550 + x).all()
+    assert (img2.image == TESTIMAGE + x).all()
     assert img2 is not testimgpng
 
     img2 = testimgpng - x
-    assert (img2.image == np.eye(10) * 38550 - x).all()
+    assert (img2.image == TESTIMAGE - x).all()
     assert img2 is not testimgpng
 
     img2 = testimgpng * x
-    assert (img2.image == np.eye(10) * 38550 * x).all()
+    assert (img2.image == TESTIMAGE * x).all()
     assert img2 is not testimgpng
 
     img2 = x * testimgpng
-    assert (img2.image == np.eye(10) * 38550 * x).all()
+    assert (img2.image == TESTIMAGE * x).all()
     assert img2 is not testimgpng
 
     img2 = testimgpng / x
-    assert (img2.image == np.eye(10) * 38550 / x).all()
+    assert (img2.image == TESTIMAGE / x).all()
     assert img2 is not testimgpng
 
     with pytest.raises(TypeError):
@@ -352,14 +367,14 @@ def test_image_add_integer(x, testimgpng):
 def test_image_iadd_integer(testimgpng):
     img = testimgpng
     testimgpng += 100
-    assert (testimgpng.image == np.eye(10) * 38550 + 100).all()
+    assert (testimgpng.image == TESTIMAGE + 100).all()
     assert img is testimgpng
 
 
 def test_image_imul_integer(testimgpng):
     img = testimgpng
     testimgpng *= 0.5
-    assert (testimgpng.image == np.eye(10) * 38550 * 0.5).all()
+    assert (testimgpng.image == TESTIMAGE * 0.5).all()
     assert img is testimgpng
 
 
@@ -368,13 +383,13 @@ def test_image_imul_integer(testimgpng):
 
 def test_image_add_image(testimgpng):
     img2 = testimgpng + testimgpng / 2
-    assert (img2.image == np.eye(10) * 38550 * 1.5).all()
+    assert (img2.image == TESTIMAGE * 1.5).all()
     assert img2 is not testimgpng
 
 
 def test_image_sub_integer(testimgpng):
     img2 = testimgpng - testimgpng / 2
-    assert (img2.image == np.eye(10) * 38550 * 0.5).all()
+    assert (img2.image == TESTIMAGE * 0.5).all()
     assert img2 is not testimgpng
 
 
@@ -409,7 +424,7 @@ def test_stack_addsub_stack():
 # Further Tests have to be done with a Stack of a Class that implements calc itself
 
 
-@pytest.mark.parametrize("x", [Image(TESTDATA_DIR + "test_gray_16bit.png"), 10, 10.0])
+@pytest.mark.parametrize("x", [Image(TESTDATA_DIR + TESTIMAGE_NAME + ".png"), 10, 10.0])
 @pytest.mark.parametrize(
     "virtual", [False, pytest.param(True, marks=pytest.mark.xfail(raises=ValueError))]
 )
@@ -446,5 +461,5 @@ def test_stack_img_meansum(testimgpng, virtual):
     stack = ImageStack(sources, virtual=virtual)
 
     # pylint: disable = no-member
-    assert (np.mean(stack).image == np.eye(10) * 38550 * 2).all()
-    assert (np.sum(stack).image == np.eye(10) * 38550 * 6).all()
+    assert (np.mean(stack).image == TESTIMAGE * 2).all()
+    assert (np.sum(stack).image == TESTIMAGE * 6).all()
