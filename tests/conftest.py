@@ -59,6 +59,10 @@ def img(img_fname):
 def stack_fname(request):
     return request.param
 
+@pytest.fixture(scope="module", params=STACK_FNAMES[0:2])
+def stack_folder(request):
+    return request.param
+
 @pytest.fixture(scope="module")
 def stack(stack_fname):
     return LEEMStack(stack_fname)

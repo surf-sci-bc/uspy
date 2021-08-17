@@ -1,7 +1,7 @@
 """Tests the agfalta.base module."""
 
 from __future__ import annotations
-from typing import Any, Optional, Type
+from typing import Any, Optional
 import numbers
 
 import numpy as np
@@ -273,18 +273,18 @@ def test_stack_setitem(virtual):
         stack[:] = add_obj
 
     # set list to list
-    
+
     stack = load_stack.copy()
     stack[0:1] = add_stack
-    assert len(stack) == len(sources)+len(sources_add)-1
-    for index, obj in enumerate(stack[:len(add_stack)]):
+    assert len(stack) == len(sources) + len(sources_add) - 1
+    for index, obj in enumerate(stack[: len(add_stack)]):
         assert obj == add_stack[index]
-    for index, obj in enumerate(stack[len(add_stack):]):
-        assert obj == load_stack[index+1]
+    for index, obj in enumerate(stack[len(add_stack) :]):
+        assert obj == load_stack[index + 1]
 
     stack = load_stack.copy()
     stack[:] = add_stack
-    for obj1,obj2 in zip(stack, add_stack):
+    for obj1, obj2 in zip(stack, add_stack):
         assert obj1 == obj2
 
     # set element to integer
@@ -301,7 +301,15 @@ def test_image_generation_from_common_filetypes(fileending):
     img = Image(TESTDATA_DIR + f"test_gray_16bit{fileending}")
     # pylint: disable = no-member
     assert (img.image == np.eye(10, dtype=np.float32) * 38550).all()
+    assert (img.width, img.height) == (10,10)
 
+def test_image_generation_from_numpy_array():
+    array = np.eye(3)
+    img = Image(array)
+    assert (img.image == array).all()
+    assert img.width == 3
+    assert img.height == 3
+    assert img.source is None
 
 # Integer Calculation Tests
 
@@ -324,11 +332,7 @@ def test_image_add_integer(x, testimgpng):
     img2 = testimgpng - x
     assert (img2.image == np.eye(10) * 38550 - x).all()
     assert img2 is not testimgpng
-    """
-    img2 = x - testimgpng
-    assert (img2.image == np.eye(10) * 38550 - x).all()
-    assert img2 is not testimgpng
-    """
+
     img2 = testimgpng * x
     assert (img2.image == np.eye(10) * 38550 * x).all()
     assert img2 is not testimgpng
@@ -368,7 +372,7 @@ def test_image_add_image(testimgpng):
     assert img2 is not testimgpng
 
 
-def test_image_sub_integee(testimgpng):
+def test_image_sub_integer(testimgpng):
     img2 = testimgpng - testimgpng / 2
     assert (img2.image == np.eye(10) * 38550 * 0.5).all()
     assert img2 is not testimgpng
