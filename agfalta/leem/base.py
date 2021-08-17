@@ -235,7 +235,6 @@ def parse_dat(fname: str, debug: bool = False) -> dict[str, Any]:
     def parse_block(block, field_dict):
         for key, (pos, encoding) in field_dict.items():
             data[key] = parse_bytes(block, pos, encoding)
-            data[f"{key}_unit"] = ""
             if debug:
                 print(f"\t{key} -> {data[key]}")
 
@@ -308,7 +307,6 @@ def parse_dat(fname: str, debug: bool = False) -> dict[str, Any]:
             data["averaging"] = 0
     except KeyError:
         pass
-
     data["energy_unit"] = "eV"
 
     return data
