@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 
 from agfalta.utility import parse_bytes, parse_cp1252_until_null
-from agfalta.base import DataObjectStack, Image, ImageStack
+from agfalta.dataobject import Image, ImageStack
 
 
 class TimeOrigin:
