@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 
 from agfalta.utility import parse_bytes, parse_cp1252_until_null
-from agfalta.base import DataObjectStack, Image
+from agfalta.base import DataObjectStack, Image, ImageStack
 
 
 class TimeOrigin:
@@ -65,8 +65,17 @@ class LEEMImg(Image):
         if isinstance(source, Image):
             self._source = None
             return dict(source.meta, **source.data)
-        self._source = source
-        return parse_dat(source)
+        try:
+            if source.endswith(".dat"):
+                self._source = source
+                return parse_dat(source)
+            else:
+                raise AttributeError
+        except AttributeError:
+            try:
+                return super().parse(source)
+            except:
+                raise FileNotFoundError(f"{source} does not exist or can't read.") from None
 
     @property
     def pressure(self) -> Number:
@@ -122,7 +131,7 @@ class LEEMImg(Image):
         return datetime.fromtimestamp(self.timestamp).strftime("%Y-%m-%d %H:%M:%S")
 
 
-class LEEMStack(DataObjectStack):
+class LEEMStack(ImageStack):
     _type = LEEMImg
 
     def __init__(self, *args,
@@ -137,9 +146,15 @@ class LEEMStack(DataObjectStack):
 
     def _split_source(self, source: Union[str,Iterable]) -> list:
         if isinstance(source, str):
-            fnames = sorted(glob.glob(f"{source}*.dat"))
-            if not fnames:
+            fnames = []
+            if source.endswith(".dat"): # .../path/*.dat
+                fnames = sorted(glob.glob(f"{source}"))
+            if not fnames: # .../path/
+                fnames = sorted(glob.glob(f"{source}*.dat"))
+            if not fnames: # .../path
                 fnames = sorted(glob.glob(f"{source}/*.dat"))
+            if not fnames: # if nothing works it might just be a list of filenames
+                return super()._split_source(source)
             return fnames
         return source
 
@@ -286,10 +301,13 @@ def parse_dat(fname: str, debug: bool = False) -> dict[str, Any]:
     for new, old in ATTR_NAMES.items():
         data[new] = data.pop(old, np.nan)
         data[f"{new}_unit"] = data.pop(f"{old}_unit", "")
-    if data["averaging"] == 0:
-        data["averaging"] = 1
-    elif data["averaging"] == 255:
-        data["averaging"] = 0
+    try:
+        if data["averaging"] == 0:
+            data["averaging"] = 1
+        elif data["averaging"] == 255:
+            data["averaging"] = 0
+    except KeyError:
+        pass
 
     data["energy_unit"] = "eV"
 

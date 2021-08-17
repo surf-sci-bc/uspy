@@ -191,7 +191,7 @@ class DataObjectStack(Loadable):
                 if not source[0].is_compatible(obj):
                     raise TypeError(f"Not all initialization objects are of type {self._type}")
 
-            self._elements = source
+            self._elements = self._split_source(source)
         else:
             self._elements = self._split_source(source)
             if not self.virtual:
@@ -206,7 +206,7 @@ class DataObjectStack(Loadable):
         """Build the stack from a list of sources."""
         self._virtual = False
         sources = self._elements
-        if not sources:
+        if len(sources) == 0: # sources might be an arbitrary iterable, so length is tested
             raise ValueError("Empty source for DataObjectStack (wrong file path?)")
         self._elements = [self._single_construct(sources[0])]
         for source in sources[1:]:
@@ -268,18 +268,30 @@ class DataObjectStack(Loadable):
 
     def __setitem__(self, index: Union[int,slice], other: Union[DataObject,Iterable]) -> None:
         # check compatibility -- implement in dataobject? (like img size)
-        if isinstance(index, int) and isinstance(other, DataObject):
-            if self.virtual:
+        if not isinstance(other, (self._type, type(self))):
+            raise ValueError(f"Unsupported type {type(other)} for {type(self)}")
+        if isinstance(index, int) and isinstance(other, type(self)):
+            raise ValueError(f"Cant set single Elements to {type(self)}")
+
+        if self.virtual:
+            if isinstance(other, self._type):
                 if other.source is None:
                     raise ValueError("Can't put DataObjects without source into virtual stack")
                 insert = other.source
             else:
-                insert = other
-                if not self._elements[0].is_compatible(other):
-                    raise ValueError("Incompatible element assignment")
+                if None in other.sources:
+                    raise ValueError("Can't put DataObjects without source into virtual stack")
+                insert = other.sources
 
-        elif isinstance(index, slice):
-            raise ValueError("Slices are not supported for item assignment.")
+        else:
+            insert = other
+            if isinstance(other, type(self)):
+                check = other[0]
+            else:
+                check = other
+            
+            if not self[0].is_compatible(check):
+                raise ValueError("Incompatible element assignment")
 
         self._elements.__setitem__(index, insert)
 
@@ -390,13 +402,31 @@ class Image(DataObject):
     """
     # pylint: disable=no-member
     _data_keys = ("image",)
+    _meta_keys = ("width", "height")
 
     def __init__(self, *args, **kwargs) -> None:
         self._mask = None
         super().__init__(*args, **kwargs)
 
-    def parse(self, source: str) -> dict[str, Any]:
-        return {"image": np.float32(imread(source))}
+    def parse(self, source: Union(str, np.ndarray)) -> dict[str, Any]:
+        #self._source = source
+        #return {"image": np.float32(imread(source))}
+        try:
+            image = np.float32(imread(source))
+            self._source = source
+        except IOError:
+            # if the object given already is a numpy array:
+            image = source
+            self._source = None
+        if len(image.shape) != 2:
+            raise ValueError(f"{source} is not a single image")
+
+        return_val = {
+            "image": image,
+            "width": image.shape[0],
+            "height": image.shape[1] 
+        }
+        return return_val
 
     @property
     def mask(self) -> np.ndarray:
@@ -471,6 +501,26 @@ class Image(DataObject):
             return self.image.shape == other.image.shape
         except AttributeError:
             return False
+
+class ImageStack(DataObjectStack):
+    _type = Image
+
+    def _split_source(self, source: Union[str, Iterable]) -> list:
+
+        if isinstance(source, np.ndarray):
+            # if the object given already is a numpy array:
+            images = source
+        else:
+            try: # check if something like multiimage .tif
+                images = np.float32(imread(source))
+            except: # if not check if list of images
+                return super()._split_source(source)
+
+        if len(images.shape) != 3:
+            raise ValueError(f"{source} is not a stack")
+
+        return [images[i, :, :] for i in range(images.shape[0])]
+
 
 
 class MaskLike(Loadable, metaclass=ABCMeta):

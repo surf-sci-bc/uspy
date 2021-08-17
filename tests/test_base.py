@@ -84,6 +84,7 @@ def test_dataobject_generation(source):
     assert (obj.matrix == source).all()
     assert obj.string is "TestMeta"
     assert obj.some_meta is "nothing"
+    assert (obj.source == source).all()
 
     assert not DeepDiff(
         obj.meta, {"string": "TestMeta", "some_meta": "nothing"}, ignore_order=True
@@ -240,10 +241,14 @@ def test_stack_getitem(virtual):
 
 @pytest.mark.parametrize("virtual", [False, True])
 def test_stack_setitem(virtual):
-    sources = np.linspace(0, 100, 11)
+    sources = np.linspace(0, 100, 11).tolist()
+    sources_add = np.linspace(-3, -1, 3).tolist()
     add_obj = MinimalObject(-10)
-    stack = MinimalObjectStack(sources, virtual=virtual)
+    add_stack = MinimalObjectStack(sources_add, virtual=virtual)
+    load_stack = MinimalObjectStack(sources, virtual=virtual)
 
+    # set one element to element
+    stack = load_stack.copy()
     stack[-1] = add_obj
     if virtual:
         assert stack[-1].source == add_obj.source
@@ -254,8 +259,38 @@ def test_stack_setitem(virtual):
     else:
         assert stack[-1] is add_obj
 
-    with pytest.raises(NotImplementedError):
+    add_obj.source = -10
+
+    # set one element to list
+    stack = load_stack.copy()
+    with pytest.raises(ValueError):
+        stack[0] = add_stack
+
+    # set list to element
+    stack = load_stack.copy()
+    print(add_obj.source)
+    with pytest.raises(TypeError):
         stack[:] = add_obj
+
+    # set list to list
+
+    stack = load_stack.copy()
+    stack[0:1] = add_stack
+    assert len(stack) == len(sources) + len(sources_add) - 1
+    for index, obj in enumerate(stack[: len(add_stack)]):
+        assert obj == add_stack[index]
+    for index, obj in enumerate(stack[len(add_stack) :]):
+        assert obj == load_stack[index + 1]
+
+    stack = load_stack.copy()
+    stack[:] = add_stack
+    for obj1, obj2 in zip(stack, add_stack):
+        assert obj1 == obj2
+
+    # set element to integer
+
+    with pytest.raises(ValueError):
+        stack[0] = 1
 
 
 ### Image Class Tests
@@ -266,7 +301,15 @@ def test_image_generation_from_common_filetypes(fileending):
     img = Image(TESTDATA_DIR + f"test_gray_16bit{fileending}")
     # pylint: disable = no-member
     assert (img.image == np.eye(10, dtype=np.float32) * 38550).all()
+    assert (img.width, img.height) == (10,10)
 
+def test_image_generation_from_numpy_array():
+    array = np.eye(3)
+    img = Image(array)
+    assert (img.image == array).all()
+    assert img.width == 3
+    assert img.height == 3
+    assert img.source is None
 
 # Integer Calculation Tests
 
@@ -289,11 +332,7 @@ def test_image_add_integer(x, testimgpng):
     img2 = testimgpng - x
     assert (img2.image == np.eye(10) * 38550 - x).all()
     assert img2 is not testimgpng
-    """
-    img2 = x - testimgpng
-    assert (img2.image == np.eye(10) * 38550 - x).all()
-    assert img2 is not testimgpng
-    """
+
     img2 = testimgpng * x
     assert (img2.image == np.eye(10) * 38550 * x).all()
     assert img2 is not testimgpng
@@ -333,7 +372,7 @@ def test_image_add_image(testimgpng):
     assert img2 is not testimgpng
 
 
-def test_image_sub_integee(testimgpng):
+def test_image_sub_integer(testimgpng):
     img2 = testimgpng - testimgpng / 2
     assert (img2.image == np.eye(10) * 38550 * 0.5).all()
     assert img2 is not testimgpng
