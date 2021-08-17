@@ -5,6 +5,7 @@ Basic data containers.
 from __future__ import annotations
 from typing import Any, Union, Optional
 from collections.abc import Iterable
+from abc import ABCMeta, abstractmethod
 from numbers import Number
 import copy
 import pickle
@@ -472,7 +473,35 @@ class Image(DataObject):
             return False
 
 
-class ROI(Loadable):
+class MaskLike(Loadable, metaclass=ABCMeta):
+    """Abstract class for ROIs, Profiles, ..."""
+    @abstractmethod
+    def apply(self, obj: DataObject, return_array: bool = False) -> Union[DataObject,np.ndarray]:
+        """Apply the MaskLike to a Dataobject and either return the masked
+        DataObject or the raw masked data."""
+
+    @property
+    @abstractmethod
+    def mask(self) -> np.ndarray:
+        """Return a bool-like array representation."""
+
+    @property
+    @abstractmethod
+    def style(self) -> dict[str, Any]:
+        """Return a style dictionary."""
+
+    @property
+    def color(self) -> str:
+        """Color used in any representations."""
+        return self.style.get("color", "k")
+
+    @property
+    @abstractmethod
+    def artist(self) -> mpl.artist.Artist:
+        """ROI Representation in matplotlib."""
+
+
+class ROI(MaskLike):
     """An image region represented as a boolean 2D array."""
     # take care: OpenCV-points are given as (x, y),
     # but numpy 2d image arrays are in (y, x)-coordinates
@@ -486,7 +515,7 @@ class ROI(Loadable):
                  style: Optional[dict] = None, **params):
         self.position = np.array([y0, x0])
         self.params = params
-        self.style = style
+        self._style = style
 
         self.shape = shape
         self.corners = corners
@@ -554,13 +583,27 @@ class ROI(Loadable):
         self._make_polygon()
 
     @property
+    def style(self) -> dict[str, Any]:
+        """Return a style dictionary."""
+        return self._style
+
+    @property
     def mask(self) -> np.ndarray:
-        """Returns smallest possible numpy array that encompasses the ROI."""
+        """Return a bool array."""
         return self.array.astype(np.bool)
+
+    def apply(self, obj: Image, return_array: bool = False) -> Union[Image,np.ndarray]:
+        """Apply the MaskLike to a Dataobject and either return the masked
+        DataObject or the raw masked data."""
+        full_mask = self.pad_to(obj.image.shape).astype(np.bool)
+        if return_array:
+            return full_mask * obj.image
+        result = obj.copy()
+        # mask the result
 
     @property
     def area(self) -> int:
-        """Total area in pixels."""
+        """Total area in pixels. Is only valid when the mask is not cut off at the sides!"""
         return self.mask.sum()
 
     def pad_to(self, width: int, height: int):
@@ -586,14 +629,6 @@ class ROI(Loadable):
         result[pad_low[0]:pad_high[0], pad_low[1]:pad_high[1]] = mask
         return result
 
-    def __mul__(self, other: Union[Image,np.ndarray]) -> np.ndarray:
-        """Apply the ROI by doing: result = roi * img"""
-
     @property
     def artist(self) -> mpl.artist.Artist:
         """ROI Representation in matplotlib."""
-
-    @property
-    def color(self) -> str:
-        """Color used in any representations."""
-        return self.style["color"]
