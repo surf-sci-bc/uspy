@@ -474,7 +474,8 @@ class Image(DataObject):
 
 class ROI(Loadable):
     """An image region represented as a boolean 2D array."""
-    # take care: points are given as (x, y), but 2d-arrays are usually in (y, x)-coordinates
+    # take care: OpenCV-points are given as (x, y),
+    # but numpy 2d image arrays are in (y, x)-coordinates
     _shapes = ("circle", "ellipse", "square", "rectangle", "polygon", "custom")
     _param_keys = ("radius", "width", "height", "rotation")
 
@@ -483,7 +484,7 @@ class ROI(Loadable):
                  corners: Optional[Iterable[Iterable]] = None,
                  array: Optional[np.ndarray] = None,
                  style: Optional[dict] = None, **params):
-        self.position = np.array([x0, y0])
+        self.position = np.array([y0, x0])
         self.params = params
         self.style = style
 
