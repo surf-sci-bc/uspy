@@ -31,21 +31,20 @@ class Loadable:
         lightweight data saving.
         """
         def __init__(self, obj: Loadable) -> None:
-            self.reduce(obj)
+            self._obj = obj
+            self._type = type(obj)
 
-        def reduce(self, obj: Loadable) -> None:
-            """Make the ThinObject a light version of the full Loadable
-            that can easily be serialized. E.g.: Retain only filenames instead
-            of the raw data."""
-            state = obj.__dict__
-            self.__dict__.update(state)
+        def __getstate__(self) -> dict:
+            state = self._obj._reduce()
+            state["_type"] = self._type
+            state.update(self._obj._reduce())
+            return state
 
-        def reconstruct(self) -> Loadable:
-            """Rebuild the full Loadable from the ThinObject."""
-            obj = Loadable()
-            state = self.__dict__
-            obj.__dict__.update(state)
-            return obj
+        def __setstate__(self, state: dict) -> None:
+            obj = state["_type"]._reconstruct(state)
+            # cast ThinObject into the Object that it was originally
+            self.__class__ = obj.__class__
+            self.__dict__ = obj.__dict__
 
     def dump(self, fname: str, thin: bool = False) -> None:
         """Dumps the object into a JSON/pickle file."""
@@ -71,7 +70,7 @@ class Loadable:
         if _fname.endswith(".bz2"):
             _fname = _fname.removesuffix(".bz2")
             compress = True
-        if _fname.endswith((".thin"+self._pickle_extension, ".thin")):
+        if _fname.endswith((".thin" + self._pickle_extension, ".thin")):
             thin = True
         if not _fname.endswith(self._pickle_extension):
             _fname+=self._pickle_extension
@@ -87,6 +86,13 @@ class Loadable:
         
         self.dump(fname, thin)
 
+    def _reduce(self) -> dict:
+        raise NotImplementedError
+    
+    @classmethod
+    def _reconstruct(cls, state) -> Loadable:
+        raise NotImplementedError
+
     @classmethod
     def load(cls, fname: str) -> Loadable:
         """Returns an object retrieved from a JSON/pickle file."""
@@ -99,8 +105,8 @@ class Loadable:
             with Path(fname).open("rb") as pfile:
                 obj = pickle.load(pfile)
 
-        if isinstance(obj, Loadable.ThinObject):
-            obj = obj.reconstruct()
+        #if isinstance(obj, Loadable.ThinObject):
+        #    obj = obj.reconstruct()
         return obj
 
 
@@ -544,6 +550,14 @@ class Image(DataObject):
             return self.image.shape == other.image.shape
         except AttributeError:
             return False
+
+    def _reduce(self) -> dict:
+        return {"source": self._source}
+
+    @classmethod
+    def _reconstruct(cls, state: dict) -> Image:
+        return Image(state["source"])
+
 
 class ImageStack(DataObjectStack):
     """DataObjectStack for Images which provides a default parsing mechanism for
