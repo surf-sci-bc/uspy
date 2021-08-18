@@ -3,6 +3,8 @@ Basic data containers.
 """
 # pylint: disable=abstract-method
 from __future__ import annotations
+import bz2
+from multiprocessing import Value
 from typing import Any, Union, Optional
 from collections.abc import Iterable
 from numbers import Number
@@ -10,7 +12,7 @@ import copy
 import pickle
 from pathlib import Path
 import tifffile 
-import PIL
+from PIL import Image as PILImage
 
 
 from deepdiff import DeepDiff
@@ -22,6 +24,7 @@ class Loadable:
     Base class for loadable objects. Contains methods for serializing
     and deserializing.
     """
+    _pickle_extension = ".pickle"
     class ThinObject:
         """
         Inner class which is a thin version of the full Loadable. Meant for
@@ -46,28 +49,62 @@ class Loadable:
 
     def dump(self, fname: str, thin: bool = False) -> None:
         """Dumps the object into a JSON/pickle file."""
+        with Path(fname).open("wb") as pfile:
+            pfile.write(self.dumps(thin))
+
+    def dumps(self, thin: bool = False) -> None:
+        """Dumps the object with pickle and returns it as a bytestring"""
         if thin:
             obj = Loadable.ThinObject(self)
         else:
             obj = self
-        with Path(fname).open("wb") as pfile:
-            try:
-                pickle.dump(obj, pfile, protocol=4)
-            except RecursionError:
-                print("Did not save due to recursion error.")
-                raise
+        try:
+            return pickle.dumps(obj, protocol=4)
+        except RecursionError:
+            print("Did not pickle due to recursion error.")
+            raise
+
+    def save(self, fname: str) -> None:
+
+        _fname = fname
+        compress = thin = False
+        if _fname.endswith(".bz2"):
+            _fname = _fname.removesuffix(".bz2")
+            compress = True
+        if _fname.endswith((".thin"+self._pickle_extension, ".thin")):
+            thin = True
+        if not _fname.endswith(self._pickle_extension):
+            _fname+=self._pickle_extension
+            if compress:
+                _fname += ".bz2"
+            fname = _fname
+
+        if compress:
+            print("Compressing data...")
+            with bz2.BZ2File(fname, 'w') as bzfile:
+                bzfile.write(self.dumps(thin))
+            return
+        
+        self.dump(fname, thin)
 
     @classmethod
     def load(cls, fname: str) -> Loadable:
         """Returns an object retrieved from a JSON/pickle file."""
-        with Path(fname).open("wb") as pfile:
-            obj = pickle.load(pfile)
+
+        if fname.endswith(".bz2"):
+            print("Uncompressing data...")
+            file = bz2.BZ2File(fname, 'rb')
+            obj = pickle.load(file)
+        else:
+            with Path(fname).open("rb") as pfile:
+                obj = pickle.load(pfile)
+
         if isinstance(obj, Loadable.ThinObject):
             obj = obj.reconstruct()
         return obj
 
 
-class DataObject:
+class DataObject(Loadable):
     """
     Base class for data objects like images, lines, points, ...
     """
@@ -421,7 +458,7 @@ class Image(DataObject):
             image = tifffile.imread(source)
             self._source = source
         else:
-            image = np.float32(PIL.Image.open(source))
+            image = np.float32(PILImage.open(source))
             self._source = source
 
         if image.ndim != 2:
