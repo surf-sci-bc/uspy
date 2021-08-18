@@ -9,7 +9,8 @@ from numbers import Number
 import copy
 import pickle
 from pathlib import Path
-import skimage.io
+import tifffile 
+import PIL
 
 
 from deepdiff import DeepDiff
@@ -411,14 +412,19 @@ class Image(DataObject):
     def parse(self, source: Union(str, np.ndarray)) -> dict[str, Any]:
         #self._source = source
         #return {"image": np.float32(imread(source))}
-        try:
-            image = np.float32(skimage.io.imread(source))
-            self._source = source
-        except IOError:
+
+        if isinstance(source, np.ndarray):
             # if the object given already is a numpy array:
             image = source
             self._source = None
-        if len(image.shape) != 2:
+        elif source.lower().endswith(('.tiff', '.tif')):
+            image = tifffile.imread(source)
+            self._source = source
+        else:
+            image = np.float32(PIL.Image.open(source))
+            self._source = source
+
+        if image.ndim != 2:
             raise ValueError(f"{source} is not a single image")
 
         return_val = {
@@ -514,7 +520,7 @@ class ImageStack(DataObjectStack):
             images = source
         else:
             try: # check if something like multiimage .tif
-                images = np.float32(skimage.io.imread(source))
+                images = tifffile.imread(source)
             except (FileNotFoundError, ValueError): # if not check if list of images
                 return super()._split_source(source)
 
