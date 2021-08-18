@@ -488,3 +488,13 @@ def test_image_save_thin(testimgpng):
     img = Image.load(TESTDATA_DIR + "test_image.thin.pickle")
     os.remove(TESTDATA_DIR + "test_image.thin.pickle")
     assert (img.image == TESTIMAGE).all()
+
+@pytest.mark.parametrize(
+    "fileext", [".thin", pytest.param(".pickle", marks=pytest.mark.xfail(raises=AttributeError))]
+)
+def test_thin_obj_is_newly_generated(fileext, testimgpng):
+    testimgpng.save(TESTDATA_DIR + "test_image"+fileext)
+    Image.test = 1
+    img = Image.load(TESTDATA_DIR + "test_image"+fileext)
+    os.remove(TESTDATA_DIR + "test_image"+fileext)
+    assert img.test == 1
