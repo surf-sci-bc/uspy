@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 from agfalta.dataobject import DataObject, DataObjectStack, Image
 from deepdiff.diff import DeepDiff
+import os
 
 # pylint: disable=invalid-name
 # pylint: disable=missing-docstring
@@ -23,7 +24,7 @@ from .conftest import (
     TESTIMAGE_ENDING,
     TESTIMAGE_NAME,
     ARRAY_1D,
-    ARRAY_2D
+    ARRAY_2D,
 )
 
 
@@ -463,3 +464,27 @@ def test_stack_img_meansum(testimgpng, virtual):
     # pylint: disable = no-member
     assert (np.mean(stack).image == TESTIMAGE * 2).all()
     assert (np.sum(stack).image == TESTIMAGE * 6).all()
+
+
+### Test data saving and loading
+
+
+def test_image_pickling(testimgpng):
+    testimgpng.save(TESTDATA_DIR + "test_image")
+    img = Image.load(TESTDATA_DIR + "test_image.pickle")
+    os.remove(TESTDATA_DIR + "test_image.pickle")
+    assert (img.image == TESTIMAGE).all()
+
+
+def test_image_compression(testimgpng):
+    testimgpng.save(TESTDATA_DIR + "test_image.bz2")
+    img = Image.load(TESTDATA_DIR + "test_image.pickle.bz2")
+    os.remove(TESTDATA_DIR + "test_image.pickle.bz2")
+    assert (img.image == TESTIMAGE).all()
+
+
+def test_image_save_thin(testimgpng):
+    testimgpng.save(TESTDATA_DIR + "test_image.thin")
+    img = Image.load(TESTDATA_DIR + "test_image.thin.pickle")
+    os.remove(TESTDATA_DIR + "test_image.thin.pickle")
+    assert (img.image == TESTIMAGE).all()
