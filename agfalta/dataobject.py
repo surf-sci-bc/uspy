@@ -616,3 +616,53 @@ class ImageStack(DataObjectStack):
             tifffile.imwrite(fname, array)
         else:
             super().save(fname)
+
+class Line(DataObject):
+    """
+    Base class for all 1D data.
+    """
+    # pylint: disable=no-member
+    _data_keys = ("x", "y")
+    _meta_keys = ("npoints","xdim","ydim","xunit","yunit")
+    _meta_defaults = {
+        "ydim": "y",
+        "xdim": "x",
+        "xunit": "a.u.",
+        "yunit": "a.u."
+    }
+
+    #def __init__(self, *args, **kwargs) -> None:
+    #    super().__init__(*args, **kwargs)
+
+    def parse(self, source: Union(str, np.ndarray)) -> dict[str, Any]:
+
+        if isinstance(source, np.ndarray):
+            if source.ndim == 2:
+                if source.shape[0] == 2:
+                    x = source[0,:]
+                    y = source[1,:]
+                else:
+                    x = source[:,0]
+                    y = source[:,1]
+            else:
+                raise ValueError("Not a Line")
+
+        else:
+            data = np.genfromtxt(source)
+
+            if data.shape[1] != 2:
+                raise ValueError("Not a Line")
+
+            x = data[:, 0]
+            y = data[:, 1]
+
+        assert len(x) == len(y)
+
+        return {"x": x, "y": y, "npoints": len(x)}
+
+    def save(self, fname: str) -> None:
+        if fname.lower().endswith(".csv"):
+            c = np.stack([self.x,self.y],axis=1)
+            np.savetxt(fname, c)
+        else:
+            super().save(fname)
