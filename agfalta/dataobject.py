@@ -12,6 +12,7 @@ import pickle
 from pathlib import Path
 import tifffile
 import imageio
+import pandas as pd
 
 
 from deepdiff import DeepDiff
@@ -622,7 +623,7 @@ class Line(DataObject):
     Base class for all 1D data.
     """
     # pylint: disable=no-member
-    _data_keys = ("x", "y")
+    _data_keys = ("table",)
     _meta_keys = ("npoints","xdim","ydim","xunit","yunit")
     _meta_defaults = {
         "ydim": "y",
@@ -639,30 +640,49 @@ class Line(DataObject):
         if isinstance(source, np.ndarray):
             if source.ndim == 2:
                 if source.shape[0] == 2:
-                    x = source[0,:]
-                    y = source[1,:]
-                else:
-                    x = source[:,0]
-                    y = source[:,1]
+                    #x = source[0,:]
+                    #y = source[1,:]
+                    #df = pd.DataFrame(source.T)
+                    source = source.T
+                #else:
+                    #x = source[:,0]
+                    #y = source[:,1]
+                df = pd.DataFrame(source, columns=[self._meta_defaults["xdim"], self._meta_defaults["ydim"]])
             else:
                 raise ValueError("Not a Line")
 
-        else:
-            data = np.genfromtxt(source)
+        elif isinstance(source, str):
+            #data = np.genfromtxt(source)
+            df = pd.read_csv(source)
 
-            if data.shape[1] != 2:
+            if len(df.columns) != 2:
                 raise ValueError("Not a Line")
 
-            x = data[:, 0]
-            y = data[:, 1]
+            #if "0" in df and "1" in df:
+        
+            df = df.rename(columns={"0":self._meta_defaults["xdim"], "1":self._meta_defaults["ydim"]})
 
-        assert len(x) == len(y)
 
-        return {"x": x, "y": y, "npoints": len(x)}
+            #x = data[:, 0]
+            #y = data[:, 1]
 
+        #assert len(x) == len(y)
+
+        return {"table": df, "npoints": len(df)}
+    
+    @property
+    def x(self) -> np.ndarray:
+        return self.table.iloc[:,0].to_numpy()
+    
+    @property
+    def y(self) -> np.ndarray:
+        return self.table.iloc[:,1].to_numpy()
+    
     def save(self, fname: str) -> None:
         if fname.lower().endswith(".csv"):
-            c = np.stack([self.x,self.y],axis=1)
-            np.savetxt(fname, c)
+            #c = np.stack([self.x,self.y],axis=1)
+            #np.savetxt(fname, c)
+            self.table.to_csv(fname, index=False, header=True)
+
         else:
             super().save(fname)
