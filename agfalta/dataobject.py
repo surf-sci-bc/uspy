@@ -25,26 +25,6 @@ class Loadable:
     and deserializing.
     """
     _pickle_extension = ".pickle"
-    class ThinObject:
-        """
-        Inner class which is a thin version of the full Loadable. Meant for
-        lightweight data saving.
-        """
-        def __init__(self, obj: Loadable) -> None:
-            self._obj = obj
-            self._type = type(obj)
-
-        def __getstate__(self) -> dict:
-            state = self._obj._reduce()
-            state["_type"] = self._type
-            state.update(self._obj._reduce())
-            return state
-
-        def __setstate__(self, state: dict) -> None:
-            obj = state["_type"]._reconstruct(state)
-            # cast ThinObject into the Object that it was originally
-            self.__class__ = obj.__class__
-            self.__dict__ = obj.__dict__
 
     def dump(self, fname: str, thin: bool = False) -> None:
         """Dumps the object into a JSON/pickle file."""
@@ -54,7 +34,7 @@ class Loadable:
     def dumps(self, thin: bool = False) -> None:
         """Dumps the object with pickle and returns it as a bytestring"""
         if thin:
-            obj = Loadable.ThinObject(self)
+            obj = ThinObject(self)
         else:
             obj = self
         try:
@@ -109,6 +89,40 @@ class Loadable:
         #    obj = obj.reconstruct()
         return obj
 
+class ThinObject:
+    """
+    Inner class which is a thin version of the full Loadable. Meant for
+    lightweight data saving.
+    """
+    def __init__(self, obj: Loadable) -> None:
+        self._obj = obj
+        self._type = type(obj)
+
+    def __getstate__(self) -> dict:
+        state = self._obj._reduce()
+        for _, val in state.items():
+            # Check if something in state can be casted to Thinobject
+            #if isinstance(val, Loadable):
+            try:
+                val = ThinObject(val)
+            # Is Loadable but has not _reduce function or is not Loadable
+            except (NotImplementedError, AttributeError):
+                # See if it is a list of something that can be made thin
+                try:
+                    for item in val:
+                        item = ThinObject(item)
+                except (TypeError, AttributeError, NotImplementedError):
+                    pass # do val stays val...
+
+            state["_type"] = self._type
+            #state.update(self._obj._reduce())
+            return state
+
+    def __setstate__(self, state: dict) -> None:
+        obj = state["_type"]._reconstruct(state)
+        # cast ThinObject into the Object that it was originally
+        self.__class__ = obj.__class__
+        self.__dict__ = obj.__dict__
 
 class DataObject(Loadable):
     """
