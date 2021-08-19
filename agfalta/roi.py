@@ -220,6 +220,10 @@ class ROI(StyledObject):
         return result
 
 
+class Profile:
+    """Extract profiles from images."""
+
+
 
 class ROIold:
     """An image region represented as a boolean 2D array."""

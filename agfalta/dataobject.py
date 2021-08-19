@@ -4,7 +4,7 @@ Basic data containers.
 # pylint: disable=abstract-method
 from __future__ import annotations
 import bz2
-from typing import Any, Type, Union, Optional
+from typing import Any, Union, Optional
 from collections.abc import Iterable
 from numbers import Number
 import copy
@@ -45,7 +45,7 @@ class Loadable:
             raise
 
     def save(self, fname: str) -> None:
-
+        """Save the DataObject to a file depending on the filename extension."""
         _fname = fname
         compress = thin = False
         if _fname.endswith(".bz2"):
@@ -64,12 +64,12 @@ class Loadable:
             with bz2.BZ2File(fname, 'w') as bzfile:
                 bzfile.write(self.dumps(thin))
             return
-        
+
         self.dump(fname, thin)
 
     def _reduce(self) -> dict:
         raise NotImplementedError
-    
+
     @classmethod
     def _reconstruct(cls, state) -> Loadable:
         raise NotImplementedError
@@ -624,12 +624,14 @@ class Line(DataObject):
     """
     # pylint: disable=no-member
     _data_keys = ("table",)
-    _meta_keys = ("npoints","xdim","ydim","xunit","yunit")
+    # _meta_keys = ("npoints","xdim","ydim","xunit","yunit")
     _meta_defaults = {
         "ydim": "y",
         "xdim": "x",
-        "xunit": "a.u.",
-        "yunit": "a.u."
+    }
+    _unit_defaults = {
+        "x": "a.u.",
+        "y": "a.u."
     }
 
     #def __init__(self, *args, **kwargs) -> None:
@@ -647,7 +649,10 @@ class Line(DataObject):
                 #else:
                     #x = source[:,0]
                     #y = source[:,1]
-                df = pd.DataFrame(source, columns=[self._meta_defaults["xdim"], self._meta_defaults["ydim"]])
+                df = pd.DataFrame(
+                    source,
+                    columns=[self._meta_defaults["xdim"], self._meta_defaults["ydim"]]
+                )
             else:
                 raise ValueError("Not a Line")
 
@@ -659,8 +664,10 @@ class Line(DataObject):
                 raise ValueError("Not a Line")
 
             #if "0" in df and "1" in df:
-        
-            df = df.rename(columns={"0":self._meta_defaults["xdim"], "1":self._meta_defaults["ydim"]})
+
+            df = df.rename(
+                columns={"0":self._meta_defaults["xdim"], "1":self._meta_defaults["ydim"]}
+            )
 
 
             #x = data[:, 0]
@@ -669,15 +676,22 @@ class Line(DataObject):
         #assert len(x) == len(y)
 
         return {"table": df, "npoints": len(df)}
-    
+
     @property
     def x(self) -> np.ndarray:
+        """Raw x vector."""
         return self.table.iloc[:,0].to_numpy()
-    
+
     @property
     def y(self) -> np.ndarray:
+        """Raw y vector."""
         return self.table.iloc[:,1].to_numpy()
-    
+
+    @property
+    def length(self) -> int:
+        """Length of the x and y data."""
+        return len(self.x)
+
     def save(self, fname: str) -> None:
         if fname.lower().endswith(".csv"):
             #c = np.stack([self.x,self.y],axis=1)
