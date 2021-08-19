@@ -215,6 +215,13 @@ class DataObject(Loadable):
         """Check if another DataObject has data of the same dimensions."""
         return isinstance(other, type(self))
 
+    def _reduce(self) -> dict:
+        return {"source": self._source}
+
+    @classmethod
+    def _reconstruct(cls, state: dict) -> DataObject:
+        return cls(state["source"])
+
 
 class DataObjectStack(Loadable):
     """Contains multiple DataObjects. E.g., for an image stack."""
@@ -439,6 +446,14 @@ class DataObjectStack(Loadable):
         result /= other
         return result
 
+    def _reduce(self) -> dict:
+        return {"sources": self.sources,
+                "virtual": self.virtual}
+
+    @classmethod
+    def _reconstruct(cls, state: dict) -> DataObjectStack:
+        return cls(state["sources"], state["virtual"])
+
 
 class Image(DataObject):
     """
@@ -550,14 +565,6 @@ class Image(DataObject):
             return self.image.shape == other.image.shape
         except AttributeError:
             return False
-
-    def _reduce(self) -> dict:
-        return {"source": self._source}
-
-    @classmethod
-    def _reconstruct(cls, state: dict) -> Image:
-        return Image(state["source"])
-
 
 class ImageStack(DataObjectStack):
     """DataObjectStack for Images which provides a default parsing mechanism for
