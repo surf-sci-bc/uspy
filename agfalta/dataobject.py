@@ -11,8 +11,8 @@ from numbers import Number
 import copy
 import pickle
 from pathlib import Path
-import tifffile 
-from PIL import Image as PILImage
+import tifffile
+import imageio
 
 
 from deepdiff import DeepDiff
@@ -493,7 +493,7 @@ class Image(DataObject):
             image = tifffile.imread(source)
             self._source = source
         else:
-            image = np.float32(PILImage.open(source))
+            image = np.float32(imageio.imread(source))
             self._source = source
 
         if image.ndim != 2:
@@ -513,6 +513,15 @@ class Image(DataObject):
     @mask.setter
     def mask(self, value: np.ndarray) -> None:
         pass
+
+    def save(self, fname: str, **kwargs) -> None:
+        if fname.lower().endswith((".tiff",".tif")):
+            tifffile.imwrite(fname, self.image, **kwargs)
+        else:
+            try:
+                imageio.imwrite(fname, np.uint16(self.image))
+            except ValueError:
+                super().save(fname)
 
     def __iadd__(self, other: Union[Image,Number,np.ndarray]) -> Image:
         if isinstance(other, Image):
@@ -600,3 +609,10 @@ class ImageStack(DataObjectStack):
             raise ValueError(f"{source} is not a stack")
 
         return [images[i, :, :] for i in range(images.shape[0])]
+
+    def save(self, fname: str) -> None:
+        if fname.lower().endswith((".tiff",".tif")):
+            array = np.stack([image.image for image in self])
+            tifffile.imwrite(fname, array)
+        else:
+            super().save(fname)
