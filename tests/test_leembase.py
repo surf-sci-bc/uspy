@@ -35,7 +35,7 @@ def test_img_constructor_array(img):
     assert img2.image.shape == img.image.shape
 
 
-#@pytest.mark.skip(reason="Takes long and seems unproblematic")
+# @pytest.mark.skip(reason="Takes long and seems unproblematic")
 @pytest.mark.slow
 def test_img_copying(img):
     img2 = img.copy()
@@ -72,16 +72,18 @@ def test_stack_constructor_globbing(stack_folder):
     stack3 = base.LEEMStack(IMG_FNAMES_COMPATIBLE[0])
     assert len(stack3) == 1
 
+
 def test_stack_constructor_nonsense():
     with pytest.raises(ValueError):
         _ = base.LEEMStack("nonsense")
     with pytest.raises(FileNotFoundError):
         _ = base.LEEMStack(["nonsense.dat"])
 
+
 def test_img_attr_types(img):
     if ".dat" in img.source:
         assert img.energy > -6
-        assert img.rel_time > 0
+        # assert img.rel_time > 0
     else:
         assert np.isnan(img.energy)
         assert np.isnan(img.rel_time)

@@ -4,8 +4,7 @@ Basic data containers.
 # pylint: disable=abstract-method
 from __future__ import annotations
 import bz2
-from multiprocessing import Value
-from typing import Any, Union, Optional
+from typing import Any, Type, Union, Optional
 from collections.abc import Iterable
 from numbers import Number
 import copy
@@ -17,6 +16,7 @@ import imageio
 
 from deepdiff import DeepDiff
 import numpy as np
+from tifffile.tifffile import TiffFileError
 
 
 class Loadable:
@@ -600,9 +600,9 @@ class ImageStack(DataObjectStack):
             # if the object given already is a numpy array:
             images = source
         else:
-            try: # check if something like multiimage .tif
+            try:
                 images = tifffile.imread(source)
-            except (FileNotFoundError, ValueError): # if not check if list of images
+            except (FileNotFoundError, TypeError, TiffFileError): # if not check if list of images
                 return super()._split_source(source)
 
         if len(images.shape) != 3:

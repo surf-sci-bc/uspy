@@ -6,7 +6,7 @@ import numbers
 
 import numpy as np
 import pytest
-from agfalta.dataobject import DataObject, DataObjectStack, Image
+from agfalta.dataobject import DataObject, DataObjectStack, Image, ImageStack
 from deepdiff.diff import DeepDiff
 import os
 
@@ -71,13 +71,6 @@ class MinimalObject(DataObject):
 
 class MinimalObjectStack(DataObjectStack):
     _type = MinimalObject
-
-
-### ImageStack
-
-
-class ImageStack(DataObjectStack):
-    _type = Image
 
 
 @pytest.mark.parametrize("source", ARRAY_2D + ARRAY_1D)
@@ -489,12 +482,46 @@ def test_image_save_thin(testimgpng):
     os.remove(TESTDATA_DIR + "test_image.thin.pickle")
     assert (img.image == TESTIMAGE).all()
 
+
 @pytest.mark.parametrize(
-    "fileext", [".thin", pytest.param(".pickle", marks=pytest.mark.xfail(raises=AttributeError))]
+    "fileext",
+    [
+        ".thin.pickle",
+        pytest.param(".pickle", marks=pytest.mark.xfail(raises=AttributeError)),
+    ],
 )
 def test_thin_obj_is_newly_generated(fileext, testimgpng):
-    testimgpng.save(TESTDATA_DIR + "test_image"+fileext)
+    testimgpng.save(TESTDATA_DIR + "test_image" + fileext)
     Image.test = 1
-    img = Image.load(TESTDATA_DIR + "test_image"+fileext)
-    os.remove(TESTDATA_DIR + "test_image"+fileext)
+    img = Image.load(TESTDATA_DIR + "test_image" + fileext)
+    os.remove(TESTDATA_DIR + "test_image" + fileext)
     assert img.test == 1
+
+
+def test_imagestack_save_thin(testimgpng):
+    stack = ImageStack([testimgpng, testimgpng])
+    stack.save(TESTDATA_DIR + "test_image.thin.pickle")
+    load_stack = Image.load(TESTDATA_DIR + "test_image.thin.pickle")
+    os.remove(TESTDATA_DIR + "test_image.thin.pickle")
+    assert len(stack) == len(load_stack)
+    assert all(
+        [(img1.image == img2.image).all for img1, img2 in zip(stack, load_stack)]
+    )
+
+
+@pytest.mark.parametrize("fileext", [".png", ".tiff"])
+def test_image_save(testimgpng, fileext):
+    testimgpng.save(TESTDATA_DIR + "test_image" + fileext)
+    img = Image(TESTDATA_DIR + "test_image" + fileext)
+    os.remove(TESTDATA_DIR + "test_image" + fileext)
+    assert (img.image == testimgpng.image).all()
+
+
+def test_stack_save():
+    # array = [np.random.rand(10,10) for i in np.linspace(0,10,10)]
+    array = [np.eye(10) * i for i in np.linspace(0, 65000, 10)]
+    stack = ImageStack(array)
+    stack.save(TESTDATA_DIR + "test_image.tiff")
+    load_stack = ImageStack(TESTDATA_DIR + "test_image.tiff")
+    os.remove(TESTDATA_DIR + "test_image.tiff")
+    assert all([(img1.image == img2).all() for img1, img2 in zip(load_stack, array)])
