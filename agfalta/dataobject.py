@@ -646,23 +646,18 @@ class Line(DataObject):
 
 
     def parse(self, source: Union(str, np.ndarray)) -> dict[str, Any]:
-
         if isinstance(source, np.ndarray):
             if source.ndim == 2:
                 if source.shape[0] == 2:
                     source = source.T
-
                 df = pd.DataFrame(source)
-                   
             else:
                 raise ValueError("Not a Line")
-
         elif isinstance(source, str):
             df = pd.read_csv(source)
 
             if len(df.columns) != 2:
                 raise ValueError("Not a Line")
-
         x = df.to_numpy()[:,0]
         y = df.to_numpy()[:,1]
 
@@ -672,12 +667,12 @@ class Line(DataObject):
             xdim = self._meta_defaults["xdim"]
             ydim  = self._meta_defaults["ydim"]
         else:
-            try: 
+            try:
                 xdim, x_unit = xdim.split(" in ")
                 ydim, y_unit = ydim.split(" in ")
             except ValueError:
                 pass
-    
+
         return {
             "x": x,
             "y": y,
@@ -691,12 +686,12 @@ class Line(DataObject):
     def length(self) -> int:
         """Length of the x and y data."""
         return len(self.x)
-    
+
     @property
     def dataframe(self) -> pd.DataFrame:
         """Length of the x and y data."""
         return pd.DataFrame(
-            data=np.stack([self.x, self.y], axis=1), 
+            data=np.stack([self.x, self.y], axis=1),
             columns=[f"{self.xdim} in {self._units['x']}", f"{self.ydim} in {self._units['y']}"]
             )
 

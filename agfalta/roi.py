@@ -3,6 +3,7 @@ Classes for defining shapes and regions on images.
 """
 # pylint: disable=abstract-method
 from __future__ import annotations
+from numbers import Number
 from typing import Any, Union, Optional
 from collections.abc import Iterable
 
@@ -77,8 +78,6 @@ class SimpleContour(Contour):
                  shape: Optional[str] = "circle", center: tuple = (0, 0),
                  style: dict[str, Any] = None, **kwargs):
         self.params = kwargs
-        if self._ref_point.shape != (2,):
-            raise ValueError(f"Position is not 2-dimensional: '{center}'")
         corners = self.shape2corners(shape)
         super().__init__(corners=corners, shape=shape, center=center, style=style)
 
@@ -144,10 +143,19 @@ class SimpleContour(Contour):
 
 class Mask(StyledObject):
     """Filled contour."""
-    def __init__(self, contour: Contour, style: dict[str, Any] = None) -> None:
+    def __init__(self, contour_or_array: Union[Contour,Iterable],
+                 style: dict[str, Any] = None) -> None:
+        if isinstance(contour_or_array, Iterable):
+            self.contour = None
+            self.array = np.array(contour_or_array)
+            if len(self.array.shape) != 2:
+                raise ValueError("Array is not two-dimensional.")
+        else:
+            self.contour = contour_or_array
+            self.array = self._make_polygon(self.contour)
+            if style is None:
+                style = self.contour.style
         super().__init__(style=style)
-        self.contour = contour
-        self.array = self._make_polygon(contour)
 
     @staticmethod
     def _make_polygon(contour: Contour) -> np.ndarray:
@@ -177,10 +185,50 @@ class ROI(StyledObject):
     """An image region represented as a boolean 2D array."""
     # take care: OpenCV-points are given as (x, y),
     # but numpy 2d image arrays are in (y, x)-coordinates
-    def __init__(self, x0: int, y0: int, mask: Mask, style: dict[str, Any]) -> None:
+    def __init__(self, x0: int, y0: int, mask: Mask, style: dict[str, Any] = None) -> None:
+        if style is None:
+            style = mask.style
         super().__init__(style=style)
         self.position = np.array([x0, y0])
         self.mask = mask
+
+    @classmethod
+    def circle(cls, x0: int, y0: int,
+               radius: Number, rotation: Number = 0, **kwargs) -> ROI:
+        """Construct a circular ROI."""
+        contour = SimpleContour(shape="circle", radius=radius, rotation=rotation)
+        mask = Mask(contour)
+        return cls(x0, y0, mask=mask, **kwargs)
+
+    @classmethod
+    def ellipse(cls, x0: int, y0: int,
+                width: int, height: int, rotation: Number = 0, **kwargs) -> ROI:
+        """Construct an elliptic ROI."""
+        contour = SimpleContour(shape="ellipse", width=width, height=height, rotation=rotation)
+        mask = Mask(contour)
+        return cls(x0, y0,mask=mask, **kwargs)
+
+    @classmethod
+    def rectangle(cls, x0: int, y0: int,
+                  width: int, height: int, rotation: Number = 0, **kwargs) -> ROI:
+        """Construct a rectangular ROI."""
+        contour = SimpleContour(shape="rectangle", width=width, height=height, rotation=rotation)
+        mask = Mask(contour)
+        return cls(x0, y0,mask=mask, **kwargs)
+
+    @classmethod
+    def polygon(cls, x0: int, y0: int, corners: Iterable, **kwargs) -> ROI:
+        """Construct a polygonic ROI from a list of corners."""
+        contour = Contour(corners=np.array(corners))
+        mask = Mask(contour)
+        return cls(x0, y0,mask=mask, **kwargs)
+
+    @classmethod
+    def from_array(cls, x0: int, y0: int, array: Iterable, **kwargs) -> ROI:
+        """Construct a polygonic ROI from a list of corners."""
+        array = np.array(array)
+        mask = Mask(array)
+        return cls(x0, y0, mask=mask, **kwargs)
 
     def apply(self, obj: Image, return_array: bool = False) -> Union[Image,np.ndarray]:
         """Apply the MaskLike to a Dataobject and either return the masked
