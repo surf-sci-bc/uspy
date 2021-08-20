@@ -717,18 +717,15 @@ class Line(DataObject):
             return super().__setattr__(attr, value)
 
     def parse(self, source: Union(str, np.ndarray)) -> dict[str, Any]:
-
         if isinstance(source, np.ndarray):
             if source.ndim == 2:
                 if source.shape[0] == 2:
                     source = source.T
-
                 df = pd.DataFrame(source)
                 self._source = None
 
             else:
                 raise ValueError("Not a Line")
-
         elif isinstance(source, str):
             df = pd.read_csv(source)
 
