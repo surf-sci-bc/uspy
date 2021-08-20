@@ -623,8 +623,7 @@ class Line(DataObject):
     Base class for all 1D data.
     """
     # pylint: disable=no-member
-    _data_keys = ("table",)
-    # _meta_keys = ("npoints","xdim","ydim","xunit","yunit")
+    _data_keys = ("x", "y")
     _meta_defaults = {
         "ydim": "y",
         "xdim": "x",
@@ -637,66 +636,72 @@ class Line(DataObject):
     #def __init__(self, *args, **kwargs) -> None:
     #    super().__init__(*args, **kwargs)
 
+    # def __getattr__(self, attr: str) -> Any:
+    #     if attr == self._meta["xdim"]:
+    #         return self._data["x"]
+    #     if attr == self._meta["ydim"]:
+    #         return self._data["y"]
+
+    #     return super().__getattr__(attr)
+
+
     def parse(self, source: Union(str, np.ndarray)) -> dict[str, Any]:
 
         if isinstance(source, np.ndarray):
             if source.ndim == 2:
                 if source.shape[0] == 2:
-                    #x = source[0,:]
-                    #y = source[1,:]
-                    #df = pd.DataFrame(source.T)
                     source = source.T
-                #else:
-                    #x = source[:,0]
-                    #y = source[:,1]
-                df = pd.DataFrame(
-                    source,
-                    columns=[self._meta_defaults["xdim"], self._meta_defaults["ydim"]]
-                )
+
+                df = pd.DataFrame(source)
+                   
             else:
                 raise ValueError("Not a Line")
 
         elif isinstance(source, str):
-            #data = np.genfromtxt(source)
             df = pd.read_csv(source)
 
             if len(df.columns) != 2:
                 raise ValueError("Not a Line")
 
-            #if "0" in df and "1" in df:
+        x = df.to_numpy()[:,0]
+        y = df.to_numpy()[:,1]
 
-            df = df.rename(
-                columns={"0":self._meta_defaults["xdim"], "1":self._meta_defaults["ydim"]}
-            )
-
-
-            #x = data[:, 0]
-            #y = data[:, 1]
-
-        #assert len(x) == len(y)
-
-        return {"table": df, "npoints": len(df)}
-
-    @property
-    def x(self) -> np.ndarray:
-        """Raw x vector."""
-        return self.table.iloc[:,0].to_numpy()
-
-    @property
-    def y(self) -> np.ndarray:
-        """Raw y vector."""
-        return self.table.iloc[:,1].to_numpy()
+        xdim, ydim = list(df.columns)
+        x_unit, y_unit = self._unit_defaults['x'], self._unit_defaults['y']
+        if (xdim, ydim) == (0, 1) or (xdim, ydim) == ("0", "1"):
+            xdim = self._meta_defaults["xdim"]
+            ydim  = self._meta_defaults["ydim"]
+        else:
+            try: 
+                xdim, x_unit = xdim.split(" in ")
+                ydim, y_unit = ydim.split(" in ")
+            except ValueError:
+                pass
+    
+        return {
+            "x": x,
+            "y": y,
+            "xdim": xdim,
+            "ydim": ydim,
+            "x_unit": x_unit,
+            "y_unit": y_unit
+        }
 
     @property
     def length(self) -> int:
         """Length of the x and y data."""
         return len(self.x)
+    
+    @property
+    def dataframe(self) -> pd.DataFrame:
+        """Length of the x and y data."""
+        return pd.DataFrame(
+            data=np.stack([self.x, self.y], axis=1), 
+            columns=[f"{self.xdim} in {self._units['x']}", f"{self.ydim} in {self._units['y']}"]
+            )
 
     def save(self, fname: str) -> None:
         if fname.lower().endswith(".csv"):
-            #c = np.stack([self.x,self.y],axis=1)
-            #np.savetxt(fname, c)
-            self.table.to_csv(fname, index=False, header=True)
-
+            self.dataframe.to_csv(fname, index=False, header=True)
         else:
             super().save(fname)
