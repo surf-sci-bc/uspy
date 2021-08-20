@@ -203,7 +203,7 @@ class DataObject(Loadable):
         raise AttributeError(f"No attribute named {attr}")
 
     def __setattr__(self, attr: str, value: Any) -> None:
-        if attr.startswith("_") or hasattr(self, attr):
+        if attr.startswith("_") or attr in self.__dict__:
             super().__setattr__(attr, value)
         elif attr in self._data:
             self._data[attr] = value
@@ -636,13 +636,13 @@ class Line(DataObject):
     #def __init__(self, *args, **kwargs) -> None:
     #    super().__init__(*args, **kwargs)
 
-    # def __getattr__(self, attr: str) -> Any:
-    #     if attr == self._meta["xdim"]:
-    #         return self._data["x"]
-    #     if attr == self._meta["ydim"]:
-    #         return self._data["y"]
+    def __getattr__(self, attr: str) -> Any:
+        if attr == self._meta["xdim"]:
+            return self._data["x"]
+        if attr == self._meta["ydim"]:
+            return self._data["y"]
 
-    #     return super().__getattr__(attr)
+        return super().__getattr__(attr)
 
 
     def parse(self, source: Union(str, np.ndarray)) -> dict[str, Any]:
