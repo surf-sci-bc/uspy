@@ -25,6 +25,7 @@ class Loadable:
     Base class for loadable objects. Contains methods for serializing
     and deserializing.
     """
+
     _pickle_extension = ".pickle"
 
     def dump(self, fname: str, thin: bool = False) -> None:
@@ -54,14 +55,14 @@ class Loadable:
         if _fname.endswith((".thin" + self._pickle_extension, ".thin")):
             thin = True
         if not _fname.endswith(self._pickle_extension):
-            _fname+=self._pickle_extension
+            _fname += self._pickle_extension
             if compress:
                 _fname += ".bz2"
             fname = _fname
 
         if compress:
             print("Compressing data...")
-            with bz2.BZ2File(fname, 'w') as bzfile:
+            with bz2.BZ2File(fname, "w") as bzfile:
                 bzfile.write(self.dumps(thin))
             return
 
@@ -80,21 +81,23 @@ class Loadable:
 
         if fname.endswith(".bz2"):
             print("Uncompressing data...")
-            file = bz2.BZ2File(fname, 'rb')
+            file = bz2.BZ2File(fname, "rb")
             obj = pickle.load(file)
         else:
             with Path(fname).open("rb") as pfile:
                 obj = pickle.load(pfile)
 
-        #if isinstance(obj, Loadable.ThinObject):
+        # if isinstance(obj, Loadable.ThinObject):
         #    obj = obj.reconstruct()
         return obj
+
 
 class ThinObject:
     """
     Inner class which is a thin version of the full Loadable. Meant for
     lightweight data saving.
     """
+
     def __init__(self, obj: Loadable) -> None:
         self._obj = obj
         self._type = type(obj)
@@ -103,7 +106,7 @@ class ThinObject:
         state = self._obj._reduce()
         for _, val in state.items():
             # Check if something in state can be casted to Thinobject
-            #if isinstance(val, Loadable):
+            # if isinstance(val, Loadable):
             try:
                 val = ThinObject(val)
             # Is Loadable but has not _reduce function or is not Loadable
@@ -113,10 +116,10 @@ class ThinObject:
                     for item in val:
                         item = ThinObject(item)
                 except (TypeError, AttributeError, NotImplementedError):
-                    pass # do val stays val...
+                    pass  # do val stays val...
 
             state["_type"] = self._type
-            #state.update(self._obj._reduce())
+            # state.update(self._obj._reduce())
             return state
 
     def __setstate__(self, state: dict) -> None:
@@ -125,10 +128,12 @@ class ThinObject:
         self.__class__ = obj.__class__
         self.__dict__ = obj.__dict__
 
+
 class DataObject(Loadable):
     """
     Base class for data objects like images, lines, points, ...
     """
+
     _data_keys = ()
     _unit_defaults = {}
     _meta_defaults = {}
@@ -213,14 +218,20 @@ class DataObject(Loadable):
     def __eq__(self, other: DataObject):
         try:
             assert not DeepDiff(
-                self.meta, other.meta, ignore_order=True,
-                number_format_notation="e", significant_digits=5,
-                ignore_numeric_type_changes=True
+                self.meta,
+                other.meta,
+                ignore_order=True,
+                number_format_notation="e",
+                significant_digits=5,
+                ignore_numeric_type_changes=True,
             )
             assert not DeepDiff(
-                self.data, other.data, ignore_order=True,
-                number_format_notation="e", significant_digits=5,
-                ignore_numeric_type_changes=True
+                self.data,
+                other.data,
+                ignore_order=True,
+                number_format_notation="e",
+                significant_digits=5,
+                ignore_numeric_type_changes=True,
             )
         except AssertionError:
             return False
@@ -240,19 +251,24 @@ class DataObject(Loadable):
 
 class DataObjectStack(Loadable):
     """Contains multiple DataObjects. E.g., for an image stack."""
+
     _unique_attrs = ()
     _type = DataObject
 
-    def __init__(self, source: Union[str,Iterable], virtual: bool = False) -> None:
+    def __init__(self, source: Union[str, Iterable], virtual: bool = False) -> None:
         self._virtual = virtual
         if isinstance(source, Iterable) and isinstance(source[0], DataObject):
             if virtual:
-                print("WARNING: Stack won't be virtual (data objects were directly given)")
+                print(
+                    "WARNING: Stack won't be virtual (data objects were directly given)"
+                )
                 self._virtual = False
             # if stack is created from objects, all objects have to be the
             for obj in source[1:]:
                 if not source[0].is_compatible(obj):
-                    raise TypeError(f"Not all initialization objects are of type {self._type}")
+                    raise TypeError(
+                        f"Not all initialization objects are of type {self._type}"
+                    )
 
             self._elements = self._split_source(source)
         else:
@@ -272,7 +288,9 @@ class DataObjectStack(Loadable):
         """Build the stack from a list of sources."""
         self._virtual = False
         sources = self._elements
-        if len(sources) == 0: # sources might be an arbitrary iterable, so length is tested
+        if (
+            len(sources) == 0
+        ):  # sources might be an arbitrary iterable, so length is tested
             raise ValueError("Empty source for DataObjectStack (wrong file path?)")
         self._elements = [self._single_construct(sources[0])]
         for source in sources[1:]:
@@ -296,6 +314,7 @@ class DataObjectStack(Loadable):
     def elements(self) -> list:
         """Contents."""
         return self._elements
+
     @property
     def sources(self) -> list:
         """Sources."""
@@ -307,6 +326,7 @@ class DataObjectStack(Loadable):
     def virtual(self) -> bool:
         """If a data stack is virtual, it does only load the data on demand."""
         return self._virtual
+
     @virtual.setter
     def virtual(self, value: bool) -> None:
         if self._virtual == value:
@@ -324,15 +344,21 @@ class DataObjectStack(Loadable):
             other.virtual = virtual
         return other
 
-    def __getitem__(self, index: Union[int,slice]) -> Union[DataObject,DataObjectStack]:
+    def __getitem__(
+        self, index: Union[int, slice]
+    ) -> Union[DataObject, DataObjectStack]:
         elements = self._elements[index]
         if isinstance(index, int):
-            if self.virtual: # if virtual elements contains just sources not DataObjects
+            if (
+                self.virtual
+            ):  # if virtual elements contains just sources not DataObjects
                 return self._single_construct(elements)
             return elements
         return type(self)(elements, virtual=self.virtual)
 
-    def __setitem__(self, index: Union[int,slice], other: Union[DataObject,Iterable]) -> None:
+    def __setitem__(
+        self, index: Union[int, slice], other: Union[DataObject, Iterable]
+    ) -> None:
         # check compatibility -- implement in dataobject? (like img size)
         if not isinstance(other, (self._type, type(self))):
             raise ValueError(f"Unsupported type {type(other)} for {type(self)}")
@@ -342,11 +368,15 @@ class DataObjectStack(Loadable):
         if self.virtual:
             if isinstance(other, self._type):
                 if other.source is None:
-                    raise ValueError("Can't put DataObjects without source into virtual stack")
+                    raise ValueError(
+                        "Can't put DataObjects without source into virtual stack"
+                    )
                 insert = other.source
             else:
                 if None in other.sources:
-                    raise ValueError("Can't put DataObjects without source into virtual stack")
+                    raise ValueError(
+                        "Can't put DataObjects without source into virtual stack"
+                    )
                 insert = other.sources
 
         else:
@@ -361,7 +391,7 @@ class DataObjectStack(Loadable):
 
         self._elements.__setitem__(index, insert)
 
-    def extend(self, other: Union[DataObject,Iterable]) -> None:
+    def extend(self, other: Union[DataObject, Iterable]) -> None:
         """Add new DataObjects to the end of the stack."""
         if isinstance(other, DataObject):
             elements = [other]
@@ -373,7 +403,9 @@ class DataObjectStack(Loadable):
 
         if self.virtual:
             if None in elements:
-                raise ValueError("Can't put DataObjects without source into virtual stack")
+                raise ValueError(
+                    "Can't put DataObjects without source into virtual stack"
+                )
         else:
             for element in elements:
                 if not self._elements[0].is_compatible(element):
@@ -401,13 +433,15 @@ class DataObjectStack(Loadable):
                 )
             return super().__setattr__(attr, value)
 
-    def __delitem__(self, index: Union[int,slice]) -> None:
+    def __delitem__(self, index: Union[int, slice]) -> None:
         self._elements.__delitem__(index)
 
     def __len__(self) -> int:
         return len(self._elements)
 
-    def __iadd__(self, other: Union[DataObjectStack,DataObject,Number]) -> DataObjectStack:
+    def __iadd__(
+        self, other: Union[DataObjectStack, DataObject, Number]
+    ) -> DataObjectStack:
         if isinstance(other, type(self)):
             self.extend(other)
         else:
@@ -416,14 +450,20 @@ class DataObjectStack(Loadable):
             for element in self._elements:
                 element += other
         return self
-    def __add__(self, other: Union[DataObjectStack,DataObject,Number]) -> DataObjectStack:
+
+    def __add__(
+        self, other: Union[DataObjectStack, DataObject, Number]
+    ) -> DataObjectStack:
         result = self.copy(virtual=False)
         result += other
         return result
-    def __radd__(self, other: Union[DataObjectStack,DataObject,Number]) -> DataObjectStack:
+
+    def __radd__(
+        self, other: Union[DataObjectStack, DataObject, Number]
+    ) -> DataObjectStack:
         return self.__add__(other)
 
-    def __isub__(self, other: Union[DataObject,DataObject,Number]) -> DataObjectStack:
+    def __isub__(self, other: Union[DataObject, DataObject, Number]) -> DataObjectStack:
         if self.virtual:
             raise ValueError("Can't do '-' on virtual stacks.")
 
@@ -431,39 +471,43 @@ class DataObjectStack(Loadable):
             element -= other
 
         return self
-    def __sub__(self, other: Union[DataObjectStack,DataObject,Number]) -> DataObjectStack:
+
+    def __sub__(
+        self, other: Union[DataObjectStack, DataObject, Number]
+    ) -> DataObjectStack:
         result = self.copy(virtual=False)
         result -= other
         return result
 
-    def __imul__(self, other: Union[DataObject,Number]) -> DataObjectStack:
+    def __imul__(self, other: Union[DataObject, Number]) -> DataObjectStack:
         if self.virtual:
             raise ValueError("Can't do '*' on virtual stacks.")
         for element in self._elements:
             element *= other
         return self
-    def __mul__(self, other: Union[DataObject,Number]) -> DataObjectStack:
+
+    def __mul__(self, other: Union[DataObject, Number]) -> DataObjectStack:
         result = self.copy(virtual=False)
         result *= other
         return result
-    def __rmul__(self, other: Union[DataObject,Number]) -> DataObjectStack:
+
+    def __rmul__(self, other: Union[DataObject, Number]) -> DataObjectStack:
         return self.__mul__(other)
 
-    def __itruediv__(self, other: Union[DataObject,Number]) -> DataObjectStack:
+    def __itruediv__(self, other: Union[DataObject, Number]) -> DataObjectStack:
         if self.virtual:
             raise ValueError("Can't do '/' on virtual stacks.")
         for element in self._elements:
             element /= other
         return self
 
-    def __truediv__(self, other: Union[DataObject,Number]) -> DataObjectStack:
+    def __truediv__(self, other: Union[DataObject, Number]) -> DataObjectStack:
         result = self.copy(virtual=False)
         result /= other
         return result
 
     def _reduce(self) -> dict:
-        return {"sources": self.sources,
-                "virtual": self.virtual}
+        return {"sources": self.sources, "virtual": self.virtual}
 
     @classmethod
     def _reconstruct(cls, state: dict) -> DataObjectStack:
@@ -474,6 +518,7 @@ class Image(DataObject):
     """
     Base class for all spatial 2D data.
     """
+
     # pylint: disable=no-member
     _data_keys = ("image",)
     _meta_keys = ("width", "height")
@@ -483,14 +528,14 @@ class Image(DataObject):
         super().__init__(*args, **kwargs)
 
     def parse(self, source: Union(str, np.ndarray)) -> dict[str, Any]:
-        #self._source = source
-        #return {"image": np.float32(imread(source))}
+        # self._source = source
+        # return {"image": np.float32(imread(source))}
 
         if isinstance(source, np.ndarray):
             # if the object given already is a numpy array:
             image = source
             self._source = None
-        elif source.lower().endswith(('.tiff', '.tif')):
+        elif source.lower().endswith((".tiff", ".tif")):
             image = tifffile.imread(source)
             self._source = source
         else:
@@ -500,23 +545,20 @@ class Image(DataObject):
         if image.ndim != 2:
             raise ValueError(f"{source} is not a single image")
 
-        return_val = {
-            "image": image,
-            "width": image.shape[0],
-            "height": image.shape[1]
-        }
+        return_val = {"image": image, "width": image.shape[0], "height": image.shape[1]}
         return return_val
 
     @property
     def mask(self) -> np.ndarray:
         """Set a mask onto the image. TODO"""
         return self._mask
+
     @mask.setter
     def mask(self, value: np.ndarray) -> None:
         pass
 
     def save(self, fname: str, **kwargs) -> None:
-        if fname.lower().endswith((".tiff",".tif")):
+        if fname.lower().endswith((".tiff", ".tif")):
             tifffile.imwrite(fname, self.image, **kwargs)
         else:
             try:
@@ -524,60 +566,74 @@ class Image(DataObject):
             except ValueError:
                 super().save(fname)
 
-    def __iadd__(self, other: Union[Image,Number,np.ndarray]) -> Image:
+    def __iadd__(self, other: Union[Image, Number, np.ndarray]) -> Image:
         if isinstance(other, Image):
             self.image += other.image
         elif isinstance(other, (Number, np.ndarray)):
             self.image += other
         else:
-            raise TypeError(f"Unsupported Operation '+' for types {type(self)} and {type(other)}")
+            raise TypeError(
+                f"Unsupported Operation '+' for types {type(self)} and {type(other)}"
+            )
         return self
-    def __add__(self, other: Union[Image,Number,np.ndarray]) -> Image:
+
+    def __add__(self, other: Union[Image, Number, np.ndarray]) -> Image:
         result = self.copy()
         result += other
         return result
-    def __radd__(self, other: Union[Image,Number,np.ndarray]) -> Image:
+
+    def __radd__(self, other: Union[Image, Number, np.ndarray]) -> Image:
         if other == 0:
             return self
         return self.__add__(other)
 
-    def __isub__(self, other: Union[Image,Number,np.ndarray]) -> Image:
+    def __isub__(self, other: Union[Image, Number, np.ndarray]) -> Image:
         if isinstance(other, Image):
             self.image -= other.image
         elif isinstance(other, (Number, np.ndarray)):
             self.image -= other
         else:
-            raise TypeError(f"Unsupported Operation '-' for types {type(self)} and {type(other)}")
+            raise TypeError(
+                f"Unsupported Operation '-' for types {type(self)} and {type(other)}"
+            )
         return self
-    def __sub__(self, other: Union[Image,Number,np.ndarray]) -> Image:
+
+    def __sub__(self, other: Union[Image, Number, np.ndarray]) -> Image:
         result = self.copy()
         result -= other
         return result
 
-    def __imul__(self, other: Union[Image,Number,np.ndarray]) -> Image:
+    def __imul__(self, other: Union[Image, Number, np.ndarray]) -> Image:
         if isinstance(other, Image):
             self.image *= other.image
         elif isinstance(other, (Number, np.ndarray)):
             self.image *= other
         else:
-            raise TypeError(f"Unsupported Operation '*' for types {type(self)} and {type(other)}")
+            raise TypeError(
+                f"Unsupported Operation '*' for types {type(self)} and {type(other)}"
+            )
         return self
-    def __mul__(self, other: Union[Image,Number,np.ndarray]) -> Image:
+
+    def __mul__(self, other: Union[Image, Number, np.ndarray]) -> Image:
         result = self.copy()
         result *= other
         return result
-    def __rmul__(self, other: Union[Image,Number,np.ndarray]) -> Image:
+
+    def __rmul__(self, other: Union[Image, Number, np.ndarray]) -> Image:
         return self.__mul__(other)
 
-    def __itruediv__(self, other: Union[Image,Number,np.ndarray]) -> Image:
+    def __itruediv__(self, other: Union[Image, Number, np.ndarray]) -> Image:
         if isinstance(other, (Number, np.ndarray)):
             self.image /= other
         elif isinstance(other, Image):
             self.image /= other.image
         else:
-            raise TypeError(f"Unsupported Operation '/' for types {type(self)} and {type(other)}")
+            raise TypeError(
+                f"Unsupported Operation '/' for types {type(self)} and {type(other)}"
+            )
         return self
-    def __truediv__(self, other: Union[Image,Number,np.ndarray]) -> Image:
+
+    def __truediv__(self, other: Union[Image, Number, np.ndarray]) -> Image:
         result = self.copy()
         result /= other
         return result
@@ -590,9 +646,11 @@ class Image(DataObject):
         except AttributeError:
             return False
 
+
 class ImageStack(DataObjectStack):
     """DataObjectStack for Images which provides a default parsing mechanism for
     common image formats like png or tiff."""
+
     _type = Image
 
     def _split_source(self, source: Union[str, Iterable]) -> list:
@@ -603,7 +661,11 @@ class ImageStack(DataObjectStack):
         else:
             try:
                 images = tifffile.imread(source)
-            except (FileNotFoundError, TypeError, TiffFileError): # if not check if list of images
+            except (
+                FileNotFoundError,
+                TypeError,
+                TiffFileError,
+            ):  # if not check if list of images
                 return super()._split_source(source)
 
         if len(images.shape) != 3:
@@ -612,28 +674,27 @@ class ImageStack(DataObjectStack):
         return [images[i, :, :] for i in range(images.shape[0])]
 
     def save(self, fname: str) -> None:
-        if fname.lower().endswith((".tiff",".tif")):
+        if fname.lower().endswith((".tiff", ".tif")):
             array = np.stack([image.image for image in self])
             tifffile.imwrite(fname, array)
         else:
             super().save(fname)
 
+
 class Line(DataObject):
     """
     Base class for all 1D data.
     """
+
     # pylint: disable=no-member
     _data_keys = ("x", "y")
     _meta_defaults = {
         "ydim": "y",
         "xdim": "x",
     }
-    _unit_defaults = {
-        "x": "a.u.",
-        "y": "a.u."
-    }
+    _unit_defaults = {"x": "a.u.", "y": "a.u."}
 
-    #def __init__(self, *args, **kwargs) -> None:
+    # def __init__(self, *args, **kwargs) -> None:
     #    super().__init__(*args, **kwargs)
 
     def __getattr__(self, attr: str) -> Any:
@@ -644,6 +705,16 @@ class Line(DataObject):
 
         return super().__getattr__(attr)
 
+    def __setattr__(self, attr: str, value: Any) -> None:
+        if attr in ("_data", "_meta"):
+            return super().__setattr__(attr, value)
+
+        if attr == self._meta["xdim"]:
+            self._data["x"] = value
+        elif attr == self._meta["ydim"]:
+            self._data["y"] = value
+        else:
+            return super().__setattr__(attr, value)
 
     def parse(self, source: Union(str, np.ndarray)) -> dict[str, Any]:
 
@@ -653,7 +724,8 @@ class Line(DataObject):
                     source = source.T
 
                 df = pd.DataFrame(source)
-                   
+                self._source = None
+
             else:
                 raise ValueError("Not a Line")
 
@@ -663,21 +735,23 @@ class Line(DataObject):
             if len(df.columns) != 2:
                 raise ValueError("Not a Line")
 
-        x = df.to_numpy()[:,0]
-        y = df.to_numpy()[:,1]
+            self._source = source
+
+        x = df.to_numpy()[:, 0]
+        y = df.to_numpy()[:, 1]
 
         xdim, ydim = list(df.columns)
-        x_unit, y_unit = self._unit_defaults['x'], self._unit_defaults['y']
+        x_unit, y_unit = self._unit_defaults["x"], self._unit_defaults["y"]
         if (xdim, ydim) == (0, 1) or (xdim, ydim) == ("0", "1"):
             xdim = self._meta_defaults["xdim"]
-            ydim  = self._meta_defaults["ydim"]
+            ydim = self._meta_defaults["ydim"]
         else:
-            try: 
+            try:
                 xdim, x_unit = xdim.split(" in ")
                 ydim, y_unit = ydim.split(" in ")
             except ValueError:
                 pass
-    
+
         return {
             "x": x,
             "y": y,
@@ -691,14 +765,17 @@ class Line(DataObject):
     def length(self) -> int:
         """Length of the x and y data."""
         return len(self.x)
-    
+
     @property
     def dataframe(self) -> pd.DataFrame:
         """Length of the x and y data."""
         return pd.DataFrame(
-            data=np.stack([self.x, self.y], axis=1), 
-            columns=[f"{self.xdim} in {self._units['x']}", f"{self.ydim} in {self._units['y']}"]
-            )
+            data=np.stack([self.x, self.y], axis=1),
+            columns=[
+                f"{self.xdim} in {self._units['x']}",
+                f"{self.ydim} in {self._units['y']}",
+            ],
+        )
 
     def save(self, fname: str) -> None:
         if fname.lower().endswith(".csv"):
