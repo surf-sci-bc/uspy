@@ -57,13 +57,13 @@ class MinimalObject(DataObject):
         return False
 
     ### Property to set Source to None when needed
-    @property
-    def source(self) -> Optional[Any]:
-        return super().source
+    # @property
+    # def source(self) -> Optional[Any]:
+    #     return super().source
 
-    @source.setter
-    def source(self, val):
-        self._source = val
+    # @source.setter
+    # def source(self, val):
+    #     self._source = val
 
 
 ### Test DataObjectStack
@@ -105,6 +105,8 @@ def test_dataobj_setattr(source, val):
         print(obj.attr)
     obj.attr = val
     assert obj.attr == val
+    obj.attr = 1
+    assert obj.attr == 1
 
 
 @pytest.mark.parametrize(("source", "other_source"), [(ARRAY_2D[0], ARRAY_2D[1])])
@@ -120,20 +122,19 @@ def test_datobject_comparision(source, other_source):
 
 
 @pytest.mark.parametrize("source", ARRAY_2D)
-def test_dataobject_data_mutability(source):
+def test_dataobject_datadir_not_overridable(source):
     obj = MinimalObject(source)
 
-    # data and meta should be immutable
-    with pytest.raises(AttributeError):
-        obj.data = None
-        obj.meta = None
+    obj.data = None
+    obj.meta = None
+    assert obj.data is not None
+    assert obj.meta is not None
 
-    # _data and _meta are not immutable
     obj._data = None
     obj._meta = None
 
-    assert obj._data is None
-    assert obj._meta is None
+    assert obj._data is not None
+    assert obj._meta is not None
 
 
 @pytest.mark.parametrize("virtual", [False, True])
@@ -265,13 +266,13 @@ def test_stack_setitem(source, source_add, virtual):
     if virtual:
         assert stack[-1].source == add_obj.source
         with pytest.raises(ValueError):
-            add_obj.source = None
+            add_obj._source = None
             assert add_obj.source is None
             stack[-1] = add_obj
     else:
         assert stack[-1] is add_obj
 
-    add_obj.source = -10
+    add_obj._source = -10
 
     # set one element to list
     stack = load_stack.copy()

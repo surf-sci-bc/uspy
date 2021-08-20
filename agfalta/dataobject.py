@@ -208,6 +208,8 @@ class DataObject(Loadable):
         raise AttributeError(f"No attribute named {attr}")
 
     def __setattr__(self, attr: str, value: Any) -> None:
+        if attr in ("_meta", "_data") and attr in self.__dict__:
+            return
         if attr.startswith("_") or attr in self.__dict__:
             super().__setattr__(attr, value)
         elif attr in self._data:
@@ -418,6 +420,8 @@ class DataObjectStack(Loadable):
         return np.array([getattr(obj, attr) for obj in self])
 
     def __setattr__(self, attr: str, value: Any) -> None:
+        if attr in ("_meta", "_data") and attr in self.__dict__:
+            return
         if attr.startswith("_") or attr in self.__dict__:
             return super().__setattr__(attr, value)
         if isinstance(value, Iterable) and len(value) == len(self):
@@ -755,7 +759,7 @@ class Line(DataObject):
             "xdim": xdim,
             "ydim": ydim,
             "x_unit": x_unit,
-            "y_unit": y_unit
+            "y_unit": y_unit,
         }
 
     @property
