@@ -13,6 +13,7 @@ from pathlib import Path
 import tifffile
 import imageio
 import pandas as pd
+import warnings
 
 
 from deepdiff import DeepDiff
@@ -259,10 +260,12 @@ class DataObjectStack(Loadable):
 
     def __init__(self, source: Union[str, Iterable], virtual: bool = False) -> None:
         self._virtual = virtual
-        if isinstance(source, Iterable) and isinstance(source[0], DataObject):
+        if isinstance(source, Iterable) and isinstance(source[0], self._type):
             if virtual:
-                print(
-                    "WARNING: Stack won't be virtual (data objects were directly given)"
+                warnings.warn(
+                    UserWarning(
+                        "Stack won't be virtual (data objects were directly given)"
+                    )
                 )
                 self._virtual = False
             # if stack is created from objects, all objects have to be the
@@ -702,6 +705,8 @@ class Line(DataObject):
     #    super().__init__(*args, **kwargs)
 
     def __getattr__(self, attr: str) -> Any:
+        if attr in ("_data", "_meta"):
+            return super().__getattr__(attr)
         if attr == self._meta["xdim"]:
             return self._data["x"]
         if attr == self._meta["ydim"]:
