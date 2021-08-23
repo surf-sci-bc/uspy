@@ -14,7 +14,7 @@ import tifffile
 import imageio
 import pandas as pd
 import warnings
-
+import json_tricks
 
 from deepdiff import DeepDiff
 import numpy as np
@@ -139,11 +139,15 @@ class DataObject(Loadable):
     _unit_defaults = {}
     _meta_defaults = {}
 
+    def __new__(cls, *args, **kwargs):
+        obj = super().__new__(cls)
+        obj._data = {}
+        obj._meta = obj._meta_defaults.copy()
+        obj._units = obj._unit_defaults.copy()
+        obj._source = None
+        return obj
+
     def __init__(self, source) -> None:
-        self._data = {}
-        self._meta = self._meta_defaults.copy()
-        self._units = self._unit_defaults.copy()
-        self._source = None
         parsed = self.parse(source)
         for k in self._data_keys:
             if k not in parsed:
@@ -200,8 +204,8 @@ class DataObject(Loadable):
         return f"{value} {unit}".strip()
 
     def __getattr__(self, attr: str) -> Any:
-        if attr in ("_meta", "_data"):
-            raise AttributeError("Premature access to _meta or _data")
+        # if attr in ("_meta", "_data"):
+        #    raise AttributeError("Premature access to _meta or _data")
         if attr in self._data:
             return self._data[attr]
         if attr in self._meta:
@@ -293,9 +297,7 @@ class DataObjectStack(Loadable):
         """Build the stack from a list of sources."""
         self._virtual = False
         sources = self._elements
-        if (
-            len(sources) == 0
-        ):  # sources might be an arbitrary iterable, so length is tested
+        if not sources:
             raise ValueError("Empty source for DataObjectStack (wrong file path?)")
         self._elements = [self._single_construct(sources[0])]
         for source in sources[1:]:
@@ -354,9 +356,8 @@ class DataObjectStack(Loadable):
     ) -> Union[DataObject, DataObjectStack]:
         elements = self._elements[index]
         if isinstance(index, int):
-            if (
-                self.virtual
-            ):  # if virtual elements contains just sources not DataObjects
+            # if virtual elements contains just sources not DataObjects
+            if self.virtual:
                 return self._single_construct(elements)
             return elements
         return type(self)(elements, virtual=self.virtual)
@@ -705,6 +706,7 @@ class Line(DataObject):
     #    super().__init__(*args, **kwargs)
 
     def __getattr__(self, attr: str) -> Any:
+        # _data and _meta have to be handled by super() to avoid recursion
         if attr in ("_data", "_meta"):
             return super().__getattr__(attr)
         if attr == self._meta["xdim"]:
@@ -715,6 +717,7 @@ class Line(DataObject):
         return super().__getattr__(attr)
 
     def __setattr__(self, attr: str, value: Any) -> None:
+        # _data and _meta have to be handled by super() to avoid recursion
         if attr in ("_data", "_meta"):
             return super().__setattr__(attr, value)
 
