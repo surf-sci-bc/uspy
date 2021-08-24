@@ -29,105 +29,126 @@ class Loadable:
 
     _pickle_extension = ".pickle"
 
-    def dump(self, fname: str, thin: bool = False) -> None:
+    def dump(self, fname: str, thin: bool = False, use_pickle: bool = True) -> None:
         """Dumps the object into a JSON/pickle file."""
         with Path(fname).open("wb") as pfile:
-            pfile.write(self.dumps(thin))
+            pfile.write(self.dumps(thin, use_pickle))
 
-    def dumps(self, thin: bool = False) -> None:
+    def dumps(self, thin: bool = False, use_pickle: bool = True) -> None:
         """Dumps the object with pickle and returns it as a bytestring"""
-        if thin:
-            obj = ThinObject(self)
+        # if thin:
+        #     obj = ThinObject(self)
+        # else:
+        #     obj = self
+        # try:
+        if use_pickle:
+            try:
+                return pickle.dumps(self, protocol=4)
+            except RecursionError:
+                print("Did not pickle due to recursion error.")
+                raise
         else:
-            obj = self
-        try:
-            return pickle.dumps(obj, protocol=4)
-        except RecursionError:
-            print("Did not pickle due to recursion error.")
-            raise
+            return json_tricks.dumps(self, allow_nan=True).encode("utf-8")
 
     def save(self, fname: str) -> None:
         """Save the DataObject to a file depending on the filename extension."""
         _fname = fname
-        compress = thin = False
-        if _fname.endswith(".bz2"):
-            _fname = _fname.removesuffix(".bz2")
+        compress = thin = pickl = False
+
+        if fname.endswith(self._pickle_extension + ".bz2"):
             compress = True
-        if _fname.endswith((".thin" + self._pickle_extension, ".thin")):
-            thin = True
-        if not _fname.endswith(self._pickle_extension):
-            _fname += self._pickle_extension
-            if compress:
-                _fname += ".bz2"
-            fname = _fname
+            pickl = True
+        elif fname.endswith(self._pickle_extension):
+            pickl = True
+        elif not fname.endswith(".json"):
+            raise ValueError("No meaningful fileextension recognized.")
+
+        # if _fname.endswith(".bz2"):
+        #     _fname = _fname.removesuffix(".bz2")
+        #     compress = True
+        # if _fname.endswith((".thin" + self._pickle_extension, ".thin.json")):
+        #     thin = True
+        # if _fname.endswith(self._pickle_extension):
+        #     pickl = True
+        # elif not _fname.endswith(".json"):
+        #     raise ValueError("No meaningful fileextension recognized.")
+        # if not _fname.endswith(self._pickle_extension):
+        #     _fname += self._pickle_extension
+        #     if compress:
+        #         _fname += ".bz2"
+        #     fname = _fname
 
         if compress:
             print("Compressing data...")
             with bz2.BZ2File(fname, "w") as bzfile:
-                bzfile.write(self.dumps(thin))
-            return
+                bzfile.write(self.dumps(thin, use_pickle=pickl))
+            print("Done.")
+        else:
+            with Path(fname).open("wb") as pfile:
+                pfile.write(self.dumps(thin, use_pickle=pickl))
 
-        self.dump(fname, thin)
+    # def _reduce(self) -> dict:
+    #     raise NotImplementedError
 
-    def _reduce(self) -> dict:
-        raise NotImplementedError
-
-    @classmethod
-    def _reconstruct(cls, state) -> Loadable:
-        raise NotImplementedError
+    # @classmethod
+    # def _reconstruct(cls, state) -> Loadable:
+    #     raise NotImplementedError
 
     @classmethod
     def load(cls, fname: str) -> Loadable:
         """Returns an object retrieved from a JSON/pickle file."""
 
-        if fname.endswith(".bz2"):
+        if fname.endswith(cls._pickle_extension + ".bz2"):
             print("Uncompressing data...")
             file = bz2.BZ2File(fname, "rb")
             obj = pickle.load(file)
-        else:
+            print("Done.")
+        elif fname.endswith(cls._pickle_extension):
             with Path(fname).open("rb") as pfile:
                 obj = pickle.load(pfile)
+        elif fname.endswith(".json"):
+            obj = json_tricks.load(fname)
 
         # if isinstance(obj, Loadable.ThinObject):
         #    obj = obj.reconstruct()
         return obj
 
 
-class ThinObject:
-    """
-    Inner class which is a thin version of the full Loadable. Meant for
-    lightweight data saving.
-    """
+# class ThinObject:
+#     """
+#     Inner class which is a thin version of the full Loadable. Meant for
+#     lightweight data saving.
+#     """
 
-    def __init__(self, obj: Loadable) -> None:
-        self._obj = obj
-        self._type = type(obj)
+#     def __init__(self, obj: Loadable) -> None:
+#         self._obj = obj
+#         self._type = type(obj)
 
-    def __getstate__(self) -> dict:
-        state = self._obj._reduce()
-        for _, val in state.items():
-            # Check if something in state can be casted to Thinobject
-            # if isinstance(val, Loadable):
-            try:
-                val = ThinObject(val)
-            # Is Loadable but has not _reduce function or is not Loadable
-            except (NotImplementedError, AttributeError):
-                # See if it is a list of something that can be made thin
-                try:
-                    for item in val:
-                        item = ThinObject(item)
-                except (TypeError, AttributeError, NotImplementedError):
-                    pass  # do val stays val...
+#     def __getstate__(self) -> dict:
+#         state = self._obj._reduce()
+#         for _, val in state.items():
+#             # Check if something in state can be casted to Thinobject
+#             # if isinstance(val, Loadable):
+#             try:
+#                 val = ThinObject(val)
+#             # Is Loadable but has not _reduce function or is not Loadable
+#             except (NotImplementedError, AttributeError):
+#                 # See if it is a list of something that can be made thin
+#                 try:
+#                     for item in val:
+#                         item = ThinObject(item)
+#                 except (TypeError, AttributeError, NotImplementedError):
+#                     pass  # do val stays val...
 
-            state["_type"] = self._type
-            # state.update(self._obj._reduce())
-            return state
+#             state["_type"] = self._type
+#             # state.update(self._obj._reduce())
+#             return state
 
-    def __setstate__(self, state: dict) -> None:
-        obj = state["_type"]._reconstruct(state)
-        # cast ThinObject into the Object that it was originally
-        self.__class__ = obj.__class__
-        self.__dict__ = obj.__dict__
+#     def __setstate__(self, state: dict) -> None:
+#         obj = state["_type"]._reconstruct(state)
+#         # cast ThinObject into the Object that it was originally
+#         self.__class__ = obj.__class__
+#         self.__dict__ = obj.__dict__
 
 
 class DataObject(Loadable):
@@ -248,12 +269,20 @@ class DataObject(Loadable):
         """Check if another DataObject has data of the same dimensions."""
         return isinstance(other, type(self))
 
-    def _reduce(self) -> dict:
+    # def _reduce(self) -> dict:
+    #     return {"source": self._source}
+
+    # @classmethod
+    # def _reconstruct(cls, state: dict) -> DataObject:
+    #     return cls(state["source"])
+
+    def __json_encode__(self) -> dict:
+        """Returns dict with all information to reconstruct object from a .json file"""
         return {"source": self._source}
 
-    @classmethod
-    def _reconstruct(cls, state: dict) -> DataObject:
-        return cls(state["source"])
+    def __json_decode__(self, **attrs) -> None:
+        """Accepts attributes from .json file and initilizes new object."""
+        self.__init__(**attrs)
 
 
 class DataObjectStack(Loadable):
@@ -514,12 +543,18 @@ class DataObjectStack(Loadable):
         result /= other
         return result
 
-    def _reduce(self) -> dict:
-        return {"sources": self.sources, "virtual": self.virtual}
+    # def _reduce(self) -> dict:
+    #     return {"sources": self.sources, "virtual": self.virtual}
 
-    @classmethod
-    def _reconstruct(cls, state: dict) -> DataObjectStack:
-        return cls(state["sources"], state["virtual"])
+    # @classmethod
+    # def _reconstruct(cls, state: dict) -> DataObjectStack:
+    #     return cls(state["sources"], state["virtual"])
+
+    def __json_encode__(self) -> dict:
+        return {"source": self.sources, "virtual": self.virtual}
+
+    def __json_decode__(self, **attrs) -> None:
+        self.__init__(**attrs)
 
 
 class Image(DataObject):
@@ -662,6 +697,9 @@ class ImageStack(DataObjectStack):
     _type = Image
 
     def _split_source(self, source: Union[str, Iterable]) -> list:
+
+        if isinstance(source, list):
+            return super()._split_source(source)
 
         if isinstance(source, np.ndarray):
             # if the object given already is a numpy array:

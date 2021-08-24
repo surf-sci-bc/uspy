@@ -475,23 +475,23 @@ def test_stack_img_meansum(testimgpng, virtual):
 
 
 def test_image_pickling(testimgpng):
-    testimgpng.save(TESTDATA_DIR + "test_image")
+    testimgpng.save(TESTDATA_DIR + "test_image.pickle")
     img = Image.load(TESTDATA_DIR + "test_image.pickle")
     os.remove(TESTDATA_DIR + "test_image.pickle")
     assert (img.image == TESTIMAGE).all()
 
 
 def test_image_compression(testimgpng):
-    testimgpng.save(TESTDATA_DIR + "test_image.bz2")
+    testimgpng.save(TESTDATA_DIR + "test_image.pickle.bz2")
     img = Image.load(TESTDATA_DIR + "test_image.pickle.bz2")
     os.remove(TESTDATA_DIR + "test_image.pickle.bz2")
     assert (img.image == TESTIMAGE).all()
 
 
-def test_image_save_thin(testimgpng):
-    testimgpng.save(TESTDATA_DIR + "test_image.thin")
-    img = Image.load(TESTDATA_DIR + "test_image.thin.pickle")
-    os.remove(TESTDATA_DIR + "test_image.thin.pickle")
+def test_image_save_json(testimgpng):
+    testimgpng.save(TESTDATA_DIR + "test_image.json")
+    img = Image.load(TESTDATA_DIR + "test_image.json")
+    os.remove(TESTDATA_DIR + "test_image.json")
     assert (img.image == TESTIMAGE).all()
 
 
@@ -510,16 +510,14 @@ def test_image_save_thin(testimgpng):
 #     assert img.test == 1
 
 
-def test_imagestack_save_thin(testimgpng):
+@pytest.mark.parametrize("fileext", [".pickle", ".pickle.bz2", ".json"])
+def test_imagestack_save_full(fileext, testimgpng):
     stack = ImageStack([testimgpng, testimgpng])
-    stack.save(TESTDATA_DIR + "test_image.thin.pickle")
-    load_stack = Image.load(TESTDATA_DIR + "test_image.thin.pickle")
-    os.remove(TESTDATA_DIR + "test_image.thin.pickle")
+    stack.save(TESTDATA_DIR + "test_image"+ fileext)
+    load_stack = Image.load(TESTDATA_DIR + "test_image"+ fileext)
+    os.remove(TESTDATA_DIR + "test_image"+ fileext)
     assert len(stack) == len(load_stack)
-    assert all(
-        [(img1.image == img2.image).all for img1, img2 in zip(stack, load_stack)]
-    )
-
+    assert all([(img1.image == img2.image).all for img1, img2 in zip(stack, load_stack)])
 
 @pytest.mark.parametrize("fileext", [".png", ".tiff"])
 def test_image_save(testimgpng, fileext):
