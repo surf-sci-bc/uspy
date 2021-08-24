@@ -224,6 +224,13 @@ class ROI(StyledObject):
         return cls(x0, y0,mask=mask, **kwargs)
 
     @classmethod
+    def point(cls, x0: int, y0: int, **kwargs) -> ROI:
+        """Construct a point ROI."""
+        array = np.array([[True]])
+        mask = Mask(array)
+        return cls(x0, y0, mask=mask, **kwargs)
+
+    @classmethod
     def from_array(cls, x0: int, y0: int, array: Iterable, **kwargs) -> ROI:
         """Construct a polygonic ROI from a list of corners."""
         array = np.array(array)
