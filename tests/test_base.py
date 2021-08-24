@@ -6,7 +6,7 @@ import numbers
 
 import numpy as np
 import pytest
-from agfalta.dataobject import DataObject, DataObjectStack, Image, ImageStack
+from agfalta.dataobject import DataObject, DataObjectStack, Image, ImageStack, Line
 from deepdiff.diff import DeepDiff
 import os
 
@@ -57,13 +57,13 @@ class MinimalObject(DataObject):
         return False
 
     ### Property to set Source to None when needed
-    @property
-    def source(self) -> Optional[Any]:
-        return super().source
+    # @property
+    # def source(self) -> Optional[Any]:
+    #     return super().source
 
-    @source.setter
-    def source(self, val):
-        self._source = val
+    # @source.setter
+    # def source(self, val):
+    #     self._source = val
 
 
 ### Test DataObjectStack
@@ -105,6 +105,8 @@ def test_dataobj_setattr(source, val):
         print(obj.attr)
     obj.attr = val
     assert obj.attr == val
+    obj.attr = 1
+    assert obj.attr == 1
 
 
 @pytest.mark.parametrize(("source", "other_source"), [(ARRAY_2D[0], ARRAY_2D[1])])
@@ -120,20 +122,19 @@ def test_datobject_comparision(source, other_source):
 
 
 @pytest.mark.parametrize("source", ARRAY_2D)
-def test_dataobject_data_mutability(source):
+def test_dataobject_datadir_not_overridable(source):
     obj = MinimalObject(source)
 
-    # data and meta should be immutable
-    with pytest.raises(AttributeError):
-        obj.data = None
-        obj.meta = None
+    obj.data = None
+    obj.meta = None
+    assert obj.data is not None
+    assert obj.meta is not None
 
-    # _data and _meta are not immutable
     obj._data = None
     obj._meta = None
 
-    assert obj._data is None
-    assert obj._meta is None
+    assert obj._data is not None
+    assert obj._meta is not None
 
 
 @pytest.mark.parametrize("virtual", [False, True])
@@ -265,13 +266,13 @@ def test_stack_setitem(source, source_add, virtual):
     if virtual:
         assert stack[-1].source == add_obj.source
         with pytest.raises(ValueError):
-            add_obj.source = None
+            add_obj._source = None
             assert add_obj.source is None
             stack[-1] = add_obj
     else:
         assert stack[-1] is add_obj
 
-    add_obj.source = -10
+    add_obj._source = -10
 
     # set one element to list
     stack = load_stack.copy()
@@ -418,15 +419,23 @@ def test_stack_addsub_stack():
 # Further Tests have to be done with a Stack of a Class that implements calc itself
 
 
+#@pytest.mark.parametrize("x", [Image(TESTDATA_DIR + TESTIMAGE_NAME + ".png"), 10, 10.0])
+#@pytest.mark.parametrize(
+#    "virtual", [False, pytest.param(True, marks=pytest.mark.xfail(raises=ValueError))]
+#)
 @pytest.mark.parametrize("x", [Image(TESTDATA_DIR + TESTIMAGE_NAME + ".png"), 10, 10.0])
 @pytest.mark.parametrize(
-    "virtual", [False, pytest.param(True, marks=pytest.mark.xfail(raises=ValueError))]
+    "virtual", [False, True]
 )
 @pytest.mark.filterwarnings("ignore::RuntimeWarning")
+@pytest.mark.filterwarnings("ignore::UserWarning")
 def test_stack_calc_imgNumber(x, virtual, testimgpng):
     sources = [testimgpng * i for i in range(1, 3)]
-
-    stack = ImageStack(sources, virtual=virtual)
+    if virtual:
+        with pytest.warns(UserWarning):
+            stack = ImageStack(sources, virtual=virtual)
+    else:
+        stack = ImageStack(sources, virtual=virtual)
     stack_calc = stack + x
 
     for index, img in enumerate(stack_calc):
@@ -447,12 +456,15 @@ def test_stack_calc_imgNumber(x, virtual, testimgpng):
             assert img == sources[index] * x
 
 
-@pytest.mark.parametrize(
-    "virtual", [False, pytest.param(True, marks=pytest.mark.xfail(raises=ValueError))]
-)
+@pytest.mark.parametrize("virtual", [False, True])
+@pytest.mark.filterwarnings("ignore::UserWarning")
 def test_stack_img_meansum(testimgpng, virtual):
     sources = [testimgpng * i for i in range(1, 4)]
-    stack = ImageStack(sources, virtual=virtual)
+    if virtual:
+        with pytest.warns(UserWarning):
+            stack = ImageStack(sources, virtual=virtual)
+    else:
+        stack = ImageStack(sources, virtual=virtual)
 
     # pylint: disable = no-member
     assert (np.mean(stack).image == TESTIMAGE * 2).all()
@@ -463,51 +475,49 @@ def test_stack_img_meansum(testimgpng, virtual):
 
 
 def test_image_pickling(testimgpng):
-    testimgpng.save(TESTDATA_DIR + "test_image")
+    testimgpng.save(TESTDATA_DIR + "test_image.pickle")
     img = Image.load(TESTDATA_DIR + "test_image.pickle")
     os.remove(TESTDATA_DIR + "test_image.pickle")
     assert (img.image == TESTIMAGE).all()
 
 
 def test_image_compression(testimgpng):
-    testimgpng.save(TESTDATA_DIR + "test_image.bz2")
+    testimgpng.save(TESTDATA_DIR + "test_image.pickle.bz2")
     img = Image.load(TESTDATA_DIR + "test_image.pickle.bz2")
     os.remove(TESTDATA_DIR + "test_image.pickle.bz2")
     assert (img.image == TESTIMAGE).all()
 
 
-def test_image_save_thin(testimgpng):
-    testimgpng.save(TESTDATA_DIR + "test_image.thin")
-    img = Image.load(TESTDATA_DIR + "test_image.thin.pickle")
-    os.remove(TESTDATA_DIR + "test_image.thin.pickle")
+def test_image_save_json(testimgpng):
+    testimgpng.save(TESTDATA_DIR + "test_image.json")
+    img = Image.load(TESTDATA_DIR + "test_image.json")
+    os.remove(TESTDATA_DIR + "test_image.json")
     assert (img.image == TESTIMAGE).all()
 
 
-@pytest.mark.parametrize(
-    "fileext",
-    [
-        ".thin.pickle",
-        pytest.param(".pickle", marks=pytest.mark.xfail(raises=AttributeError)),
-    ],
-)
-def test_thin_obj_is_newly_generated(fileext, testimgpng):
-    testimgpng.save(TESTDATA_DIR + "test_image" + fileext)
-    Image.test = 1
-    img = Image.load(TESTDATA_DIR + "test_image" + fileext)
-    os.remove(TESTDATA_DIR + "test_image" + fileext)
-    assert img.test == 1
+# @pytest.mark.parametrize(
+#     "fileext",
+#     [
+#         ".thin.pickle",
+#         pytest.param(".pickle", marks=pytest.mark.xfail(raises=AttributeError, strict = True)),
+#     ],
+# )
+# def test_thin_obj_is_newly_generated(fileext, testimgpng):
+#     testimgpng.save(TESTDATA_DIR + "test_image" + fileext)
+#     Image.test = 1
+#     img = Image.load(TESTDATA_DIR + "test_image" + fileext)
+#     os.remove(TESTDATA_DIR + "test_image" + fileext)
+#     assert img.test == 1
 
 
-def test_imagestack_save_thin(testimgpng):
+@pytest.mark.parametrize("fileext", [".pickle", ".pickle.bz2", ".json"])
+def test_imagestack_save_full(fileext, testimgpng):
     stack = ImageStack([testimgpng, testimgpng])
-    stack.save(TESTDATA_DIR + "test_image.thin.pickle")
-    load_stack = Image.load(TESTDATA_DIR + "test_image.thin.pickle")
-    os.remove(TESTDATA_DIR + "test_image.thin.pickle")
+    stack.save(TESTDATA_DIR + "test_image"+ fileext)
+    load_stack = Image.load(TESTDATA_DIR + "test_image"+ fileext)
+    os.remove(TESTDATA_DIR + "test_image"+ fileext)
     assert len(stack) == len(load_stack)
-    assert all(
-        [(img1.image == img2.image).all for img1, img2 in zip(stack, load_stack)]
-    )
-
+    assert all([(img1.image == img2.image).all for img1, img2 in zip(stack, load_stack)])
 
 @pytest.mark.parametrize("fileext", [".png", ".tiff"])
 def test_image_save(testimgpng, fileext):
@@ -525,3 +535,32 @@ def test_stack_save():
     load_stack = ImageStack(TESTDATA_DIR + "test_image.tiff")
     os.remove(TESTDATA_DIR + "test_image.tiff")
     assert all([(img1.image == img2).all() for img1, img2 in zip(load_stack, array)])
+
+@pytest.mark.parametrize("source", ARRAY_2D)
+def test_line_generation(source):
+    line = Line(source)
+    assert (line.dataframe.to_numpy() == source.T).all()
+    assert line.xdim == "x"
+    assert line.ydim == "y"
+
+@pytest.mark.xfail(raises = ValueError, strict = True)
+@pytest.mark.parametrize("source", ARRAY_1D)
+def test_line_incompatible_generation(source):
+    Line(source)
+
+@pytest.mark.parametrize("source", ARRAY_2D)
+def test_line_xy_alias(source):
+    line = Line(source)
+    line.xdim = "a"
+    line.ydim = "b"
+    assert (line.a == source[0,:]).all()
+    assert (line.b == source[1,:]).all()
+
+@pytest.mark.parametrize("source", ARRAY_2D)
+def test_line_saveload_csv(source):
+    line = Line(source)
+    line.xdim = "a"
+    line.ydim = "b"
+    line.save(TESTDATA_DIR+"test.csv")
+    line2 = Line(TESTDATA_DIR+"test.csv")
+    assert line.dataframe.equals(line2.dataframe)

@@ -37,6 +37,7 @@ setup(
         "lmfit",
         "ipython",
         "netCDF4",
+        "json_tricks",
         "setuptools_scm",       # see agfalta/version.py
     ],
     package_data={"agfalta.xps": ["rsf.db"]},
