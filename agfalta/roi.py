@@ -191,6 +191,8 @@ class ROI(StyledObject):
         super().__init__(style=style)
         self.position = np.array([x0, y0])
         self.mask = mask
+        self._mask_buffer = np.array([[]])
+        self._center_buffer = True
 
     @classmethod
     def circle(cls, x0: int, y0: int,
@@ -247,8 +249,15 @@ class ROI(StyledObject):
         result.image = np.ma.masked_array(result.image, mask=full_mask)
         return result
 
+    # @property
+    # def array(self) -> np.ndarray:
+    #     """Directly access the mask array."""
+    #     return self.mask.array.astype(np.bool)
+
     def pad_to(self, width: int, height: int, center: bool = True):
         """Return the the mask padded to a given extent."""
+        if self._mask_buffer.shape == (height, width) and center == self._center_buffer:
+            return self._mask_buffer
         # find sizes and corners. The low corner is the difference between the mask's
         # center of mass and the position:
         if center:
@@ -272,6 +281,8 @@ class ROI(StyledObject):
         pad_low = np.clip(low_corner, 0, None)
         pad_high = pad_size - np.clip(high_corner, 0, None)
         result[pad_low[0]:pad_high[0], pad_low[1]:pad_high[1]] = mask
+        self._mask_buffer = result
+        self._center_buffer = center
         return result
 
 
