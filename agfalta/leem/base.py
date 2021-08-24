@@ -2,8 +2,11 @@
 Basic classes for Elmitec LEEM ".dat"-file parsing and data visualization.
 """
 # pylint: disable=missing-docstring
+# pylint: disable=attribute-defined-outside-init
+# plyint: disable=access-member-before-definition
 
 from __future__ import annotations
+from agfalta.leem.utility import imgify
 from typing import Any, Union, Optional
 from collections.abc import Iterable
 from numbers import Number
@@ -12,6 +15,7 @@ import glob
 from pathlib import Path
 
 import numpy as np
+import cv2 as cv
 
 from agfalta.utility import parse_bytes, parse_cp1252_until_null
 from agfalta.dataobject import Image, ImageStack
@@ -38,6 +42,9 @@ class LEEMImg(Image):
         "temperature": np.nan,
         "fov": np.nan,
         "timestamp": np.nan,
+        "mcp": None,
+        "dark_counts": 0,
+        "warp_matrix": None
     }
     _unit_defaults = {
         "energy": "eV",
@@ -61,6 +68,79 @@ class LEEMImg(Image):
         super().__init__(*args, **kwargs)
         self._time_origin = time_origin   # is a list so it can be mutable
 
+    def warp(self, inplace:bool = False):
+        
+        if not self.warp_matrix:
+            warp_matrix = np.eye(3)
+        else:
+            warp_matrix = self.warp_matrix
+        
+        image = cv.warpPerspective(
+            self.image,
+            warp_matrix,
+            self.image.shape[::-1],
+            flags=cv.INTER_LINEAR + cv.WARP_INVERSE_MAP,
+        )
+        if inplace:
+            self.image = image
+            return self
+
+        result = self.copy()
+        result.image = image
+        return result
+
+
+    def normalize(self, mcp:Image = None, dark_counts:Union[int, float, Image]=100, inplace:bool = False) -> LEEMImg:
+        if mcp is None:
+            mcp = self.mcp
+        mcp = imgify(mcp)
+        if not isinstance(dark_counts, (int, float, complex)):
+            dark_counts = imgify(dark_counts)
+
+        result = (self - dark_counts) / (mcp - dark_counts)
+
+        if inplace:
+            self.image = result.image
+            self.mcp = mcp
+            self.dark_counts = dark_counts
+            return self
+        
+        result.mcp = mcp
+        result.dark_counts = dark_counts
+        return result
+        
+    @staticmethod
+    def do_ecc_align(inputImg: Image, templateImg: Image, max_iter=500, eps=1e-4, trafo="translation", mask=None):
+
+        criteria = (cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, max_iter, eps)
+        if trafo == "translation":
+            warp_mode = cv.MOTION_TRANSLATION
+        elif trafo in ("euclidean", "rigid"):
+            warp_mode = cv.MOTION_EUCLIDEAN
+        elif trafo == "affine":
+            warp_mode = cv.MOTION_AFFINE
+        else:
+            print("Unrecognized transformation. Using Translation.")
+            warp_mode = cv.MOTION_TRANSLATION
+
+        warp_matrix = np.eye(2, 3, dtype=np.float32)
+
+        _, warp_matrix = cv.findTransformECC(  # template = warp_matrix * input
+            templateImg.image,  
+            inputImg.image,
+            warp_matrix,
+            warp_mode,
+            criteria,
+            mask,  # hide everything that is not in ROI
+            5,  # gaussian blur to apply before
+        )
+        # Expand to 3x3 matrix
+        warp_matrix = np.append(
+            warp_matrix, [[0, 0, 1]], axis=0
+        )
+
+        return warp_matrix
+
     def parse(self, source: str) -> dict[str, Any]:
         if isinstance(source, Image):
             self._source = None
@@ -69,13 +149,25 @@ class LEEMImg(Image):
             if source.endswith(".dat"):
                 self._source = source
                 return parse_dat(source)
-            else:
-                raise AttributeError
+            raise AttributeError
         except AttributeError:
             try:
                 return super().parse(source)
             except:
                 raise FileNotFoundError(f"{source} does not exist or can't read.") from None
+
+    def __json_encode__(self) -> dict:
+        return {
+            "source": self.source,
+            "mcp": self.mcp,
+            "warp_matrix": self.warp_matrix,
+            "dark_counts": self.dark_counts
+        }
+    
+    def __json_decode__(self, **attrs) -> None:
+        self.__init__(source=attrs["source"])
+        if attrs["mcp"]:
+            self.normalize(mcp=attrs["mcp"], dark_counts=attrs["dark_counts"], inplace=True)
 
     @property
     def pressure(self) -> Number:

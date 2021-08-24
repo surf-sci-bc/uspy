@@ -10,6 +10,7 @@ import numpy as np
 from agfalta.leem import base
 
 from .conftest import (
+    MCP_IMG_FNAME,
     same_or_nan,
     IMG_FNAMES_COMPATIBLE,
     STACK_FNAMES,
@@ -89,3 +90,9 @@ def test_img_attr_types(img):
         assert np.isnan(img.rel_time)
     assert np.isnan(img.temperature) or img.temperature > -280
     assert isinstance(img.timestamp, (int, float))
+
+def test_img_normalize(normed_img):
+    img = base.LEEMImg(TESTDATA_DIR+"bremen.dat")
+    mcp = MCP_IMG_FNAME
+    img = img.normalize(mcp=mcp, dark_counts=100)
+    assert (img.image == normed_img.image).all()

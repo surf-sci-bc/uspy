@@ -8,21 +8,22 @@ import sys
 import contextlib
 from datetime import datetime, timedelta
 
-from agfalta.leem.base import LEEMImg, LEEMStack
+#from agfalta.leem.base import LEEMImg, LEEMStack
+import agfalta.leem.base as base
 
 
 def imgify(img):
-    if isinstance(img, LEEMImg):
+    if isinstance(img, base.LEEMImg):
         return img
-    return LEEMImg(img)
+    return base.LEEMImg(img)
 
 def stackify(stack, virtual=False):
-    if isinstance(stack, LEEMStack):
+    if isinstance(stack, base.LEEMStack):
         return stack
-    if isinstance(stack, LEEMImg):
-        return LEEMStack([stack])
+    if isinstance(stack, base.LEEMImg):
+        return base.LEEMStack([stack])
         # raise ValueError("LEEMStack expected, but got LEEMImg")
-    return LEEMStack(stack, virtual=virtual)
+    return base.LEEMStack(stack, virtual=virtual)
 
 def timing_notification(title=""):
     print("agfalta.leem.utility.timing_notification moved to agfalta.utility")

@@ -106,6 +106,10 @@ def img_fname(request):
 def img(img_fname):
     return LEEMImg(img_fname)
 
+@pytest.fixture(scope="module")
+def normed_img():
+    return LEEMImg(TESTDATA_DIR+"bremen_normed.tif")
+
 
 @pytest.fixture(scope="module", params=STACK_FNAMES)
 def stack_fname(request):
