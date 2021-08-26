@@ -3,21 +3,21 @@ Basic data containers.
 """
 # pylint: disable=abstract-method
 from __future__ import annotations
-import bz2
 from typing import Any, Union, Optional
 from collections.abc import Iterable
 from numbers import Number
+from pathlib import Path
+import bz2
 import copy
 import pickle
-from pathlib import Path
-import tifffile
-import imageio
-import pandas as pd
 import warnings
-import json_tricks
 
 from deepdiff import DeepDiff
 import numpy as np
+import pandas as pd
+import imageio
+import json_tricks
+import tifffile
 from tifffile.tifffile import TiffFileError
 
 
@@ -34,7 +34,7 @@ class Loadable:
         with Path(fname).open("wb") as pfile:
             pfile.write(self.dumps(thin, use_pickle))
 
-    def dumps(self, thin: bool = False, use_pickle: bool = True) -> None:
+    def dumps(self, _thin: bool = False, use_pickle: bool = True) -> None:
         """Dumps the object with pickle and returns it as a bytestring"""
         # if thin:
         #     obj = ThinObject(self)
@@ -160,8 +160,8 @@ class DataObject(Loadable):
     _unit_defaults = {}
     _meta_defaults = {}
 
-    def __new__(cls, *args, **kwargs):
-        obj = super().__new__(cls)
+    def __new__(cls, *_args, **_kwargs):
+        obj = super().__new__(cls)      # really not forward args and kwargs?
         obj._data = {}
         obj._meta = obj._meta_defaults.copy()
         obj._units = obj._unit_defaults.copy()

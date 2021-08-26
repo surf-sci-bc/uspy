@@ -15,12 +15,26 @@ from agfalta.dataobject import Loadable, Image
 
 
 class StyledObject(Loadable):
+    """Contains a style dictionary that can have class-wise defaults. The dictionary
+    is intended for matplotlib keyword arguments."""
+    _idx = 0
+    _default_style = {}
+
     """Contains information on how to include this object into a matplotlib plot."""
-    def __init__(self, style: dict[str, Any] = None) -> None:
-        if style is None:
-            style = {}
-        style["color"] = style.get("color", "k")
-        self.style = style
+    def __init__(self, style: dict[str, Any] = None, color: Optional[str] = None) -> None:
+        style_ = self._default_style.copy()
+        if style is not None:
+            style_.update(style)
+        if color is not None:
+            style_["color"] = color
+        if "color" not in style_:
+            cycler = mpl.rc_params()["axes.prop_cycle"]
+            color = cycler.by_key()["color"][StyledObject._idx]
+            StyledObject._idx += 1
+            if StyledObject._idx + 1 > len(cycler):
+                StyledObject._idx = 0
+            style_["color"] = color
+        self.style = style_
 
     @property
     def color(self) -> str:
@@ -36,11 +50,12 @@ class StyledObject(Loadable):
 class Contour(StyledObject):
     """Define a contour in two dimensions thorugh a list of 2D coordinates."""
     _shapes = ("polygon",)
+    _default_style = {"fill": False, "linewidth": 3}
 
     def __init__(self, corners: Optional[Iterable[Iterable]] = None,
                  shape: str = "polygon", center: tuple = (0, 0),
-                 style: dict[str, Any] = None) -> None:
-        super().__init__(style=style)
+                 style: dict[str, Any] = None, color: Optional[str] = None) -> None:
+        super().__init__(style=style, color=color)
         self.corners = np.array(corners)
         if not self.corners.shape[1] == 2:
             raise ValueError(f"Contour points are not 2-dimensional (shape: {self.corners.shape})")
@@ -66,7 +81,13 @@ class Contour(StyledObject):
 
     @property
     def artist(self) -> mpl.artist.Artist:
-        raise NotImplementedError
+        art = mpl.patches.Polygon(self.corners, **self.style)
+        return art
+
+    def get_artist(self, position: Iterable) -> mpl.artist.Artist:
+        """Create artist at a given position (x, y)."""
+        art = mpl.patches.Polygon(self.corners + position, **self.style)
+        return art
 
 
 class SimpleContour(Contour):
@@ -76,10 +97,11 @@ class SimpleContour(Contour):
 
     def __init__(self,
                  shape: Optional[str] = "circle", center: tuple = (0, 0),
-                 style: dict[str, Any] = None, **kwargs):
+                 style: dict[str, Any] = None, color: Optional[str] = None,
+                 **kwargs):
         self.params = kwargs
         corners = self.shape2corners(shape)
-        super().__init__(corners=corners, shape=shape, center=center, style=style)
+        super().__init__(corners=corners, shape=shape, center=center, style=style, color=color)
 
     def shape2corners(self, shape: str) -> np.ndarray:
         """Convert a geometric rectangular or elliptic description to polygon contour.
@@ -115,22 +137,21 @@ class SimpleContour(Contour):
             raise ValueError(f"Unknown shape {shape}")
         return corners
 
-    @property
-    def artist(self) -> mpl.artist.Artist:
+    def get_artist(self, position: Iterable) -> mpl.artist.Artist:
         width, height, rotation = (self.params[key] for key in ("width", "height", "rotation"))
         if self.shape in ("circle", "ellipse"):
             art = mpl.patches.Ellipse(
-                self.ref_point,
-                width * 2, height * 2,
+                self.ref_point + position,
+                width, height,
                 angle=rotation,
                 **self.style,
             )
         elif self.shape in ("square", "rectangle"):
             rot_c, rot_s = np.cos(-rotation * np.pi / 180), np.sin(-rotation * np.pi / 180)
             rot_matrix = np.array([[rot_c, -rot_s], [rot_s, rot_c]])
-            lower_left = np.rint(np.dot([-width / 2, -height / 2], rot_matrix) + self.ref_point)
+            lower_left = np.rint(np.dot([-width / 2, -height / 2], rot_matrix))
             art = mpl.patches.Rectangle(
-                lower_left,
+                lower_left + self.ref_point + position,
                 self.params["width"],
                 self.params["height"],
                 angle=self.params["rot"],
@@ -144,7 +165,7 @@ class SimpleContour(Contour):
 class Mask(StyledObject):
     """Filled contour."""
     def __init__(self, contour_or_array: Union[Contour,Iterable],
-                 style: dict[str, Any] = None) -> None:
+                 style: dict[str, Any] = None, color: Optional[str] = None) -> None:
         if isinstance(contour_or_array, Iterable):
             self.contour = None
             self.array = np.array(contour_or_array)
@@ -155,7 +176,7 @@ class Mask(StyledObject):
             self.array = self._make_polygon(self.contour)
             if style is None:
                 style = self.contour.style
-        super().__init__(style=style)
+        super().__init__(style=style, color=color)
 
     @staticmethod
     def _make_polygon(contour: Contour) -> np.ndarray:
@@ -185,10 +206,10 @@ class ROI(StyledObject):
     """An image region represented as a boolean 2D array."""
     # take care: OpenCV-points are given as (x, y),
     # but numpy 2d image arrays are in (y, x)-coordinates
-    def __init__(self, x0: int, y0: int, mask: Mask, style: dict[str, Any] = None) -> None:
+    def __init__(self, x0: int, y0: int, mask: Mask, style: dict[str, Any] = None, color: Optional[str] = None) -> None:
         if style is None:
             style = mask.style
-        super().__init__(style=style)
+        super().__init__(style=style, color=color)
         self.position = np.array([x0, y0])
         self.mask = mask
         self._mask_buffer = np.array([[]])
@@ -196,47 +217,54 @@ class ROI(StyledObject):
 
     @classmethod
     def circle(cls, x0: int, y0: int,
-               radius: Number, rotation: Number = 0, **kwargs) -> ROI:
+               radius: Number, rotation: Number = 0,
+               style: dict[str, Any] = None, color: Optional[str] = None, **kwargs) -> ROI:
         """Construct a circular ROI."""
-        contour = SimpleContour(shape="circle", radius=radius, rotation=rotation)
+        contour = SimpleContour(shape="circle", radius=radius, rotation=rotation,
+                                style=style, color=color)
         mask = Mask(contour)
         return cls(x0, y0, mask=mask, **kwargs)
 
     @classmethod
-    def ellipse(cls, x0: int, y0: int,
-                width: int, height: int, rotation: Number = 0, **kwargs) -> ROI:
+    def ellipse(cls, x0: int, y0: int, width: int, height: int, rotation: Number = 0,
+                style: dict[str, Any] = None, color: Optional[str] = None, **kwargs) -> ROI:
         """Construct an elliptic ROI."""
-        contour = SimpleContour(shape="ellipse", width=width, height=height, rotation=rotation)
+        contour = SimpleContour(shape="ellipse", width=width, height=height, rotation=rotation,
+                                style=style, color=color)
         mask = Mask(contour)
         return cls(x0, y0,mask=mask, **kwargs)
 
     @classmethod
-    def rectangle(cls, x0: int, y0: int,
-                  width: int, height: int, rotation: Number = 0, **kwargs) -> ROI:
+    def rectangle(cls, x0: int, y0: int, width: int, height: int, rotation: Number = 0,
+                  style: dict[str, Any] = None, color: Optional[str] = None, **kwargs) -> ROI:
         """Construct a rectangular ROI."""
-        contour = SimpleContour(shape="rectangle", width=width, height=height, rotation=rotation)
+        contour = SimpleContour(shape="rectangle", width=width, height=height, rotation=rotation,
+                                style=style, color=color)
         mask = Mask(contour)
         return cls(x0, y0,mask=mask, **kwargs)
 
     @classmethod
-    def polygon(cls, x0: int, y0: int, corners: Iterable, **kwargs) -> ROI:
+    def polygon(cls, x0: int, y0: int, corners: Iterable,
+                style: dict[str, Any] = None, color: Optional[str] = None, **kwargs) -> ROI:
         """Construct a polygonic ROI from a list of corners."""
-        contour = Contour(corners=np.array(corners))
+        contour = Contour(corners=np.array(corners), style=style, color=color)
         mask = Mask(contour)
         return cls(x0, y0,mask=mask, **kwargs)
 
     @classmethod
-    def point(cls, x0: int, y0: int, **kwargs) -> ROI:
+    def point(cls, x0: int, y0: int,
+              style: dict[str, Any] = None, color: Optional[str] = None, **kwargs) -> ROI:
         """Construct a point ROI."""
         array = np.array([[True]])
-        mask = Mask(array)
+        mask = Mask(array, style=style, color=color)
         return cls(x0, y0, mask=mask, **kwargs)
 
     @classmethod
-    def from_array(cls, x0: int, y0: int, array: Iterable, **kwargs) -> ROI:
+    def from_array(cls, x0: int, y0: int, array: Iterable,
+                   style: dict[str, Any] = None, color: Optional[str] = None, **kwargs) -> ROI:
         """Construct a polygonic ROI from a list of corners."""
         array = np.array(array)
-        mask = Mask(array)
+        mask = Mask(array, style=style, color=color)
         return cls(x0, y0, mask=mask, **kwargs)
 
     def apply(self, obj: Image, return_array: bool = False) -> Union[Image,np.ndarray]:
@@ -244,17 +272,12 @@ class ROI(StyledObject):
         DataObject or the raw masked data."""
         full_mask = self.pad_to(*obj.image.shape).astype(np.bool)
         if return_array:
-            return full_mask * obj.image
+            return np.ma.masked_array(obj.image, mask=~full_mask)
         result = obj.copy()
-        result.image = np.ma.masked_array(result.image, mask=full_mask)
+        result.image = np.ma.masked_array(result.image, mask=~full_mask)
         return result
 
-    # @property
-    # def array(self) -> np.ndarray:
-    #     """Directly access the mask array."""
-    #     return self.mask.array.astype(np.bool)
-
-    def pad_to(self, width: int, height: int, center: bool = True):
+    def pad_to(self, width: int, height: int, center: bool = True) -> np.ndarray:
         """Return the the mask padded to a given extent."""
         if self._mask_buffer.shape == (height, width) and center == self._center_buffer:
             return self._mask_buffer
@@ -265,8 +288,8 @@ class ROI(StyledObject):
         else:
             mask_ref = self.mask.ref_point
         mask_size = self.mask.array.shape
-        pad_size = np.array((height, width))
-        low_corner = (self.position - mask_ref).astype(int)
+        pad_size = np.array((width, height))
+        low_corner = (self.position[::-1] - mask_ref[::-1]).astype(int)
         high_corner = (pad_size - mask_size - low_corner).astype(int)
 
         result = np.zeros(pad_size)
@@ -284,6 +307,27 @@ class ROI(StyledObject):
         self._mask_buffer = result
         self._center_buffer = center
         return result
+
+    @property
+    def contour(self) -> Contour:
+        """Redirect to mask's contour."""
+        return self.mask.contour
+
+    @property
+    def artist(self) -> mpl.artist.Artist:
+        if isinstance(self.contour, Contour):
+            return self.contour.get_artist(self.position)
+        if self.mask.array.shape == (1, 1):
+            self.style["markersize"] = self.style.get("markersize", 10)
+            self.style["marker"] = self.style.get("marker", "x")        # "X" is also good
+            art = mpl.lines.Line2D([self.position[0]], [self.position[1]], **self.style)
+            return art
+        # something with art = mpl.image.AxesImage()??
+        raise NotImplementedError
+
+    # def __add__(self, other: ROI) -> ROI:
+    #     return ROI.from_array(self.mask.array + other.mask.array)
+
 
 
 class Profile:
