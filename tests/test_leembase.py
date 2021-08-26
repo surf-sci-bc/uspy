@@ -4,6 +4,7 @@
 # pylint: disable=redefined-outer-name
 # pylint: disable=protected-access
 
+import cv2 as cv
 import pytest
 import numpy as np
 
@@ -16,6 +17,7 @@ from .conftest import (
     STACK_FNAMES,
     STACK_INCOMPATIBLE_IMG_FNAME,
     TESTDATA_DIR,
+    single_stack,
 )
 
 ### Image loading
@@ -91,8 +93,36 @@ def test_img_attr_types(img):
     assert np.isnan(img.temperature) or img.temperature > -280
     assert isinstance(img.timestamp, (int, float))
 
+
 def test_img_normalize(normed_img):
-    img = base.LEEMImg(TESTDATA_DIR+"bremen.dat")
+    img = base.LEEMImg(TESTDATA_DIR + "bremen.dat")
     mcp = MCP_IMG_FNAME
     img = img.normalize(mcp=mcp, dark_counts=100)
     assert (img.image == normed_img.image).all()
+
+
+def test_stack_align(short_stack):
+    stack = short_stack
+    template = stack[0].copy()
+
+    # create Stack with artificial shifts
+    x = np.random.rand(len(stack)) * 20 - 10
+    y = np.random.rand(len(stack)) * 20 - 10
+    x[0] = y[0] = 0
+
+    for dx, dy, img in zip(x, y, stack):
+        warp = np.array([[1, 0, dx], [0, 1, dy], [0, 0, 1]])
+        img.image = cv.warpPerspective(
+            template.image,
+            warp,
+            img.image.shape[::-1],
+            flags=cv.INTER_LINEAR,
+        )
+    stack = stack.align(mask=True)
+
+    # extract aligned shifts
+    dx = stack.warp_matrix[:, 0, 2]
+    dy = stack.warp_matrix[:, 1, 2]
+
+    np.testing.assert_allclose(x, dx, atol=1)
+    np.testing.assert_allclose(y, dy, atol=1)

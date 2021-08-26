@@ -245,20 +245,22 @@ class LEEMStack(ImageStack):
             return elements
         return type(self)(elements, virtual=self.virtual, time_origin=self._time_origin)
 
-    def align(self, inplace = False, mask=None):
+    def align(self, inplace:bool = False, mask = True):
         if inplace:
             stack = self
         else:
             stack = self.copy()
 
-        if mask is None:
-            roi = ROI.circle(x0=stack[0].width//2, y0=stack[0].height//2, radius=stack[0].width*9//10)
-            mask = np.ma.getmask(roi.apply(stack[0]).image)
+        if mask:
+            roi = ROI.circle(x0=stack[0].width//2, y0=stack[0].height//2, radius=stack[0].width//2)
+            mask = (~np.ma.getmaskarray(roi.apply(stack[0]).image)).astype(np.uint8)
             print(mask)
+        else:
+            mask = None
 
-        for index, img in enumerate(stack[1:]):
-            warp_matrix = img.find_warp_matrix(stack[index-1], mask=mask)
-            img.warp(warp_matrix, inplace = True)
+        for img1, img2 in zip(stack[1:],stack):
+            warp_matrix = img1.find_warp_matrix(img2, mask=mask)
+            img1.warp(warp_matrix, inplace = True)
         
         return stack
 
