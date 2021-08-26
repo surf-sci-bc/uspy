@@ -7,6 +7,7 @@ Basic classes for Elmitec LEEM ".dat"-file parsing and data visualization.
 
 from __future__ import annotations
 from agfalta.leem.utility import imgify
+from agfalta.roi import ROI
 from typing import Any, Union, Optional
 from collections.abc import Iterable
 from numbers import Number
@@ -44,7 +45,7 @@ class LEEMImg(Image):
         "timestamp": np.nan,
         "mcp": None,
         "dark_counts": 0,
-        "warp_matrix": None
+        "warp_matrix": np.eye(3)
     }
     _unit_defaults = {
         "energy": "eV",
@@ -68,11 +69,9 @@ class LEEMImg(Image):
         super().__init__(*args, **kwargs)
         self._time_origin = time_origin   # is a list so it can be mutable
 
-    def warp(self, inplace:bool = False):
-        
-        if not self.warp_matrix:
-            warp_matrix = np.eye(3)
-        else:
+    def warp(self, warp_matrix=None, inplace:bool = False):
+
+        if warp_matrix is None:
             warp_matrix = self.warp_matrix
         
         image = cv.warpPerspective(
@@ -83,10 +82,12 @@ class LEEMImg(Image):
         )
         if inplace:
             self.image = image
+            self.warp_matrix = warp_matrix
             return self
 
         result = self.copy()
         result.image = image
+        result.warp_matrix = warp_matrix
         return result
 
 
@@ -97,7 +98,7 @@ class LEEMImg(Image):
         if not isinstance(dark_counts, (int, float, complex)):
             dark_counts = imgify(dark_counts)
 
-        result = (self - dark_counts) / (mcp - dark_counts)
+        result = np.nan_to_num((self - dark_counts) / (mcp - dark_counts))
 
         if inplace:
             self.image = result.image
@@ -109,37 +110,12 @@ class LEEMImg(Image):
         result.dark_counts = dark_counts
         return result
         
-    @staticmethod
-    def do_ecc_align(inputImg: Image, templateImg: Image, max_iter=500, eps=1e-4, trafo="translation", mask=None):
-
-        criteria = (cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, max_iter, eps)
-        if trafo == "translation":
-            warp_mode = cv.MOTION_TRANSLATION
-        elif trafo in ("euclidean", "rigid"):
-            warp_mode = cv.MOTION_EUCLIDEAN
-        elif trafo == "affine":
-            warp_mode = cv.MOTION_AFFINE
-        else:
-            print("Unrecognized transformation. Using Translation.")
-            warp_mode = cv.MOTION_TRANSLATION
-
-        warp_matrix = np.eye(2, 3, dtype=np.float32)
-
-        _, warp_matrix = cv.findTransformECC(  # template = warp_matrix * input
-            templateImg.image,  
-            inputImg.image,
-            warp_matrix,
-            warp_mode,
-            criteria,
-            mask,  # hide everything that is not in ROI
-            5,  # gaussian blur to apply before
-        )
-        # Expand to 3x3 matrix
-        warp_matrix = np.append(
-            warp_matrix, [[0, 0, 1]], axis=0
-        )
-
-        return warp_matrix
+    def find_warp_matrix(self, template: Image, algorithm = "ecc", **kwargs) -> np.ndarray:
+        if algorithm == "ecc":
+            return do_ecc_align(self, template, **kwargs)
+        
+        raise ValueError("Unknown Algorithm")
+    
 
     def parse(self, source: str) -> dict[str, Any]:
         if isinstance(source, Image):
@@ -269,8 +245,35 @@ class LEEMStack(ImageStack):
             return elements
         return type(self)(elements, virtual=self.virtual, time_origin=self._time_origin)
 
+    def align(self, inplace = False, mask=None):
+        if inplace:
+            stack = self
+        else:
+            stack = self.copy()
 
+        if mask is None:
+            roi = ROI.circle(x0=stack[0].width//2, y0=stack[0].height//2, radius=stack[0].width*9//10)
+            mask = np.ma.getmask(roi.apply(stack[0]).image)
+            print(mask)
 
+        for index, img in enumerate(stack[1:]):
+            warp_matrix = img.find_warp_matrix(stack[index-1], mask=mask)
+            img.warp(warp_matrix, inplace = True)
+        
+        return stack
+
+    def normalize(self, mcp:Image = None, inplace:bool = False):
+        mcp = imgify(mcp).copy() # if not a copy funny things might happen when mcp is part of stack
+        if inplace:
+            stack = self
+        else:
+            stack = self.copy()
+        
+        for img in stack:
+            img.normalize(mcp=mcp, inplace=True)
+        
+        return stack
+        
 # Format: meta_key: (byte_position, encoding)
 HEADER_ONE = {
     "_id":              (0, "cp1252"),
@@ -402,3 +405,34 @@ def parse_dat(fname: str, debug: bool = False) -> dict[str, Any]:
     data["energy_unit"] = "eV"
 
     return data
+
+def do_ecc_align(input_img: Image, template_img: Image, max_iter=500, eps=1e-4, trafo="translation", mask=None) -> np.ndarray:
+
+    criteria = (cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, max_iter, eps)
+    if trafo == "translation":
+        warp_mode = cv.MOTION_TRANSLATION
+    elif trafo in ("euclidean", "rigid"):
+        warp_mode = cv.MOTION_EUCLIDEAN
+    elif trafo == "affine":
+        warp_mode = cv.MOTION_AFFINE
+    else:
+        print("Unrecognized transformation. Using Translation.")
+        warp_mode = cv.MOTION_TRANSLATION
+
+    warp_matrix = np.eye(2, 3, dtype=np.float32)
+
+    _, warp_matrix = cv.findTransformECC(  # template = warp_matrix * input
+        template_img.image,
+        input_img.image,
+        warp_matrix,
+        warp_mode,
+        criteria,
+        mask,  # hide everything that is not in ROI
+        5,  # gaussian blur to apply before
+    )
+    # Expand to 3x3 matrix
+    warp_matrix = np.append(
+        warp_matrix, [[0, 0, 1]], axis=0
+    )
+
+    return warp_matrix
