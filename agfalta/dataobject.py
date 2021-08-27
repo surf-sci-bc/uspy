@@ -588,7 +588,7 @@ class Image(DataObject):
         if image.ndim != 2:
             raise ValueError(f"{source} is not a single image")
 
-        return_val = {"image": image, "width": image.shape[0], "height": image.shape[1]}
+        return_val = {"image": image, "width": image.shape[1], "height": image.shape[0]}
         return return_val
 
     @property
