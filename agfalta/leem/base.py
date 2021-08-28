@@ -246,7 +246,38 @@ class LEEMStack(ImageStack):
             return elements
         return type(self)(elements, virtual=self.virtual, time_origin=self._time_origin)
 
-    def align(self, inplace:bool = False, mask = True, **kwargs):
+    def align(self, inplace:bool = False, mask: Union[bool, np.ndarray, None] = True, **kwargs) -> LEEMStack:
+        """
+        Image registration of the stack
+
+        The images of the stack are registered subsequently by calling Image.find_warp_matrix() for
+        each image and finally warping them using Image.warp()
+
+        Parameter
+        ---------
+        inplace : bool, default False
+            If 'True' the stack itself will be registered
+            If 'False' a copy of the stack will be registered
+        mask : bool, np.ndarray or None, default True
+            Mask that will be used during registration
+            If 'True' a circular mask with a radius=0.9*Image.width is used as mask
+            If 'False' or 'None' no mask is used during registration
+            If np.ndarray the array must be of dtype=np.uint8 and contain the mask that should be
+               applied
+        **kwargs
+            Additional keyword arguments are passed through to Image.find_warp_matrix
+
+        Returns
+        -------
+        LEEMStack
+            LEEMStack with aligned images. The stack itself is returned when 'inplace' = True
+
+        
+        See Also
+        --------
+        find_warp_matrix
+        warp
+        """
         if inplace:
             stack = self
         else:
@@ -278,7 +309,35 @@ class LEEMStack(ImageStack):
         
         return stack
 
-    def normalize(self, mcp:Image = None, inplace:bool = False):
+    def normalize(self, mcp: Union[Image, str, None] = None, inplace:bool = False, **kwargs) -> LEEMStack:
+        """
+        Normalization of images in stack
+
+        The images in the stack are normalied by appling Image.normalize(mcp) to each image
+
+        Parameter
+        ---------
+        mcp : Image, str or None
+            Image or filename of image if str. If 'None' the mcp attribute of the images will be 
+            used
+        inplace : bool, default False
+            If 'True' the stack itself will be normalized
+            If 'False' a copy of the stack will be normalized
+        **kwargs
+            Additional keyword arguments are passed through to Image.normalize
+            note:: Consider passing 'dark_counts' as a keyword argument, to specify non-default
+            dark counts of the images
+
+        Returns
+        -------
+        LEEMStack
+            LEEMStack with registered images. The stack itself is returned when 'inplace'=True
+
+        See Also
+        --------
+        Image.normalize
+
+        """
         mcp = imgify(mcp).copy() # if not a copy funny things might happen when mcp is part of stack
         if inplace:
             stack = self
@@ -286,7 +345,7 @@ class LEEMStack(ImageStack):
             stack = self.copy()
         
         for img in tqdm(stack):
-            img.normalize(mcp=mcp, inplace=True)
+            img.normalize(mcp=mcp, inplace=True, **kwargs)
         
         return stack
         
@@ -422,7 +481,37 @@ def parse_dat(fname: str, debug: bool = False) -> dict[str, Any]:
 
     return data
 
-def do_ecc_align(input_img: Image, template_img: Image, max_iter=500, eps=1e-4, trafo="translation", mask=None) -> np.ndarray:
+def do_ecc_align(input_img: Image, template_img: Image, max_iter: int = 500, eps: float = 1e-4, trafo: str = "translation", mask: Union[np.ndarray, None] = None) -> np.ndarray:
+    """
+    Finds warp matrix between two Images using ECC
+
+    Takes two images and calculates the warp matrix between both applying the transformation 
+    specified by 'trafo' using the ECC Algorithm. A optional mask can be given to masked areas of 
+    the images that are not taken into account during registration
+
+    Parameter
+    ---------
+    input_img, template_image : Image
+        The warp matrix will be determined to match the 'input_img' onto the 'tempate_img'
+        template_img = warp_matrix @ input_img (@ means matrix multiplication) 
+    max_iter : int, default 500
+        Number of iterations to find the warp matrix. Regstration fails if max_iter is exceeded
+    eps : float, default 1e-4
+        Abortion criterion to determine successfull registration
+    trafo : str, default "translation"
+        The transformation that is applied to the images. 'trafo' must be either 
+            - "translation" for only x,y shifting of images
+            - "rigid" or "euclidean" for tarnslation, rotation and scaling
+            - "affine" for translation, rotation, scaling and shearing
+    mask : np.ndarray or None, default None
+        The mask must be a 2D numpy array of dtype=np.uint8 containing 0 where pixels in the images 
+        will not be taken into account during registratio and 1 when they are
+
+    Returns
+    -------
+    np.ndarray
+        3x3 numpy array representing the warp matrix
+    """
 
     criteria = (cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, max_iter, eps)
     if trafo == "translation":

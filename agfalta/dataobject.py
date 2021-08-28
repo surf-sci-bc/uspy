@@ -843,7 +843,8 @@ class Line(DataObject):
             When a string must be either "linear", "quad" or "cubic".
             When an int must be 1 <= order <= 5
         kwargs:
-            Additional keywords passed through to scipy.interpolate.InterpolatedUnivariateSpline
+            Additional keyword arguments are passed through to 
+            scipy.interpolate.InterpolatedUnivariateSpline
 
         Returns
         -------
@@ -882,15 +883,16 @@ class Line(DataObject):
         """
         Saves the line as .csv
         
-        Parameters:
-        -----------
+        Parameters
+        ----------
         fname: str
             Filename of the file to save.
             If it ends with .csv a csv file of the dataframe representation of the line is saved
             Otherwise the parent(dataobject) save method is called.
 
-        Returns:
-            Nothing
+        Returns
+        -------
+            None
         """
         if fname.lower().endswith(".csv"):
             self.dataframe.to_csv(fname, index=False, header=True)
