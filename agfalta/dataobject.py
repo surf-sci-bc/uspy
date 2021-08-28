@@ -7,6 +7,8 @@ from typing import Any, Union, Optional
 from collections.abc import Iterable
 from numbers import Number
 from pathlib import Path
+import scipy.interpolate
+import scipy.integrate
 import bz2
 import copy
 import pickle
@@ -812,10 +814,15 @@ class Line(DataObject):
     def length(self) -> int:
         """Length of the x and y data."""
         return len(self.x)
+    
+    @property
+    def area(self) -> float:
+        "Area under the line integrated by simpson rule"
+        return scipy.integrate.simpson(self.y,self.x)
 
     @property
     def dataframe(self) -> pd.DataFrame:
-        """Length of the x and y data."""
+        """Pandas Dataframe of the lines x,y data"""
         return pd.DataFrame(
             data=np.stack([self.x, self.y], axis=1),
             columns=[
@@ -823,8 +830,68 @@ class Line(DataObject):
                 f"{self.ydim} in {self._units['y']}",
             ],
         )
+    
+    def interpolate(self, x_data: Union[Number, list[Number], np.ndarray, None] = None, order: Union[str, int] = "cubic", **kwargs) -> Union[np.ndarray, function]:
+        """
+        Interpolates the x,y data of the Line with a spline of order 'order'
+
+        Parameters
+        ----------
+        x_data: Number, list of numbers or 1d numpy array or None
+            x_values at which the interpolation will be evaluated
+        order: str or int
+            When a string must be either "linear", "quad" or "cubic".
+            When an int must be 1 <= order <= 5
+        kwargs:
+            Additional keywords passed through to scipy.interpolate.InterpolatedUnivariateSpline
+
+        Returns
+        -------
+        if x_data was not None:
+            numpy array containing interpolated Numbers
+        if x_data was None:
+            the interpolation function itself
+        """
+
+        k = {
+            "linear": 1,
+            "quad": 2,
+            "cubic": 3
+        }
+        if order not in k.keys():
+            k[order] = order
+
+        f = scipy.interpolate.InterpolatedUnivariateSpline(self.x, self.y, k=k[order], **kwargs)
+        if x_data is None:
+            return f
+        return f(x_data)
+
+    def integral(self) -> Line:
+        """Returns the integrated values of a cubic spline evaluated at the x values of the line"""
+        f = self.interpolate()
+        y = np.array([f.integral(self.x[0], x) for x in self.x])
+        return Line(np.array([self.x,y]))
+
+    def derivative(self) -> Line:
+        """Returns the derivative of a cubic spline evaluated at the x values of the line"""
+        f = self.interpolate()
+        y = np.array([f.derivative()(x) for x in self.x[1:]])
+        return Line(np.array([self.x[1:],y]))
 
     def save(self, fname: str) -> None:
+        """
+        Saves the line as .csv
+        
+        Parameters:
+        -----------
+        fname: str
+            Filename of the file to save.
+            If it ends with .csv a csv file of the dataframe representation of the line is saved
+            Otherwise the parent(dataobject) save method is called.
+
+        Returns:
+            Nothing
+        """
         if fname.lower().endswith(".csv"):
             self.dataframe.to_csv(fname, index=False, header=True)
         else:
