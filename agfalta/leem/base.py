@@ -14,6 +14,7 @@ from numbers import Number
 from datetime import datetime
 import glob
 from pathlib import Path
+from tqdm.auto import tqdm
 
 import numpy as np
 import cv2 as cv
@@ -252,15 +253,29 @@ class LEEMStack(ImageStack):
             stack = self.copy()
 
         if mask:
-            roi = ROI.circle(x0=stack[0].width//2, y0=stack[0].height//2, radius=stack[0].width//2)
+            roi = ROI.circle(x0=stack[0].width//2, y0=stack[0].height//2, radius=stack[0].width//2*9//10)
             mask = (~np.ma.getmaskarray(roi.apply(stack[0]).image)).astype(np.uint8)
             print(mask)
         else:
             mask = None
+        # List of all warp matrices
+        warp_matrices = [np.eye(3, dtype=np.float32)]
 
-        for img1, img2 in zip(stack[1:],stack):
+        # find warp matrices between subsequent images
+  
+        for img1, img2 in zip(tqdm(stack[1:]),stack):
             warp_matrix = img1.find_warp_matrix(img2, mask=mask)
-            img1.warp(warp_matrix, inplace = True)
+            #img1.warp(warp_matrix, inplace = True)
+            warp_matrices.append(warp_matrix)
+
+
+        # calculate the warp matrices with respect to the position of first image
+        for index, matrix in enumerate(warp_matrices[1:]):
+            warp_matrices[index+1] = matrix@warp_matrices[index]
+
+        # apply warp matrices to image
+        for warp_matrix,img in zip(warp_matrices, stack):
+            img.warp(warp_matrix=warp_matrix, inplace=True)
         
         return stack
 
@@ -271,7 +286,7 @@ class LEEMStack(ImageStack):
         else:
             stack = self.copy()
         
-        for img in stack:
+        for img in tqdm(stack):
             img.normalize(mcp=mcp, inplace=True)
         
         return stack
@@ -423,15 +438,17 @@ def do_ecc_align(input_img: Image, template_img: Image, max_iter=500, eps=1e-4, 
 
     warp_matrix = np.eye(2, 3, dtype=np.float32)
 
-    _, warp_matrix = cv.findTransformECC(  # template = warp_matrix * input
-        template_img.image,
-        input_img.image,
-        warp_matrix,
-        warp_mode,
-        criteria,
-        mask,  # hide everything that is not in ROI
-        5,  # gaussian blur to apply before
-    )
+    for sigma in [5,1]:
+
+        _, warp_matrix = cv.findTransformECC(  # template = warp_matrix * input
+            template_img.image,
+            input_img.image,
+            warp_matrix,
+            warp_mode,
+            criteria,
+            mask,  # hide everything that is not in ROI
+            sigma,  # gaussian blur to apply before
+        )
     # Expand to 3x3 matrix
     warp_matrix = np.append(
         warp_matrix, [[0, 0, 1]], axis=0

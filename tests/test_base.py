@@ -5,6 +5,8 @@ from typing import Any, Optional
 import numbers
 
 import numpy as np
+import pandas as pd
+from numpy.testing import assert_array_equal
 import pytest
 from agfalta.dataobject import DataObject, DataObjectStack, Image, ImageStack, Line
 from deepdiff.diff import DeepDiff
@@ -543,18 +545,21 @@ def test_line_generation(source):
     assert line.xdim == "x"
     assert line.ydim == "y"
 
-@pytest.mark.xfail(raises = ValueError, strict = True)
+#@pytest.mark.xfail(raises = ValueError, strict = True)
 @pytest.mark.parametrize("source", ARRAY_1D)
 def test_line_incompatible_generation(source):
-    Line(source)
+    with pytest.raises(ValueError):
+        Line(source)
 
 @pytest.mark.parametrize("source", ARRAY_2D)
 def test_line_xy_alias(source):
     line = Line(source)
     line.xdim = "a"
     line.ydim = "b"
-    assert (line.a == source[0,:]).all()
-    assert (line.b == source[1,:]).all()
+    #assert (line.a == source[0,:]).all()
+    #assert (line.b == source[1,:]).all()
+    assert_array_equal(line.a, source[0,:])
+    assert_array_equal(line.b, source[1,:])
 
 @pytest.mark.parametrize("source", ARRAY_2D)
 def test_line_saveload_csv(source):
@@ -563,4 +568,5 @@ def test_line_saveload_csv(source):
     line.ydim = "b"
     line.save(TESTDATA_DIR+"test.csv")
     line2 = Line(TESTDATA_DIR+"test.csv")
-    assert line.dataframe.equals(line2.dataframe)
+    #assert line.dataframe.equals(line2.dataframe)
+    pd.testing.assert_frame_equal(line.dataframe, line2.dataframe)

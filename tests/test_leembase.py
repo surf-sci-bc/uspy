@@ -116,7 +116,7 @@ def test_stack_align(short_stack):
             template.image,
             warp,
             img.image.shape[::-1],
-            flags=cv.INTER_LINEAR,
+            flags=cv.INTER_CUBIC,
         )
     stack = stack.align(mask=True)
 
@@ -124,5 +124,5 @@ def test_stack_align(short_stack):
     dx = stack.warp_matrix[:, 0, 2]
     dy = stack.warp_matrix[:, 1, 2]
 
-    np.testing.assert_allclose(x, dx, atol=1)
-    np.testing.assert_allclose(y, dy, atol=1)
+    np.testing.assert_allclose(x, dx, atol=0.5)
+    np.testing.assert_allclose(y, dy, atol=0.5)
