@@ -246,7 +246,7 @@ class LEEMStack(ImageStack):
             return elements
         return type(self)(elements, virtual=self.virtual, time_origin=self._time_origin)
 
-    def align(self, inplace:bool = False, mask = True):
+    def align(self, inplace:bool = False, mask = True, **kwargs):
         if inplace:
             stack = self
         else:
@@ -255,7 +255,6 @@ class LEEMStack(ImageStack):
         if mask:
             roi = ROI.circle(x0=stack[0].width//2, y0=stack[0].height//2, radius=stack[0].width//2*9//10)
             mask = (~np.ma.getmaskarray(roi.apply(stack[0]).image)).astype(np.uint8)
-            print(mask)
         else:
             mask = None
         # List of all warp matrices
@@ -264,7 +263,7 @@ class LEEMStack(ImageStack):
         # find warp matrices between subsequent images
   
         for img1, img2 in zip(tqdm(stack[1:]),stack):
-            warp_matrix = img1.find_warp_matrix(img2, mask=mask)
+            warp_matrix = img1.find_warp_matrix(img2, mask=mask, **kwargs)
             #img1.warp(warp_matrix, inplace = True)
             warp_matrices.append(warp_matrix)
 

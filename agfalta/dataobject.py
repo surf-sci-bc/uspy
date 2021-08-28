@@ -551,7 +551,7 @@ class DataObjectStack(Loadable):
     #     return cls(state["sources"], state["virtual"])
 
     def __json_encode__(self) -> dict:
-        return {"source": self.sources, "virtual": self.virtual}
+        return {"source": self.elements, "virtual": self.virtual}
 
     def __json_decode__(self, **attrs) -> None:
         self.__init__(**attrs)
