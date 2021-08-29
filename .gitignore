@@ -10,3 +10,9 @@ venv
 dev
 .vscode
 agfalta/dev
+
+# sphinx
+/docs/build
+
+#MacOS
+.DS_Store
