@@ -53,14 +53,19 @@ class Contour(StyledObject):
     _default_style = {"fill": False, "linewidth": 3}
 
     def __init__(self, corners: Optional[Iterable[Iterable]] = None,
-                 shape: str = "polygon", center: tuple = (0, 0),
+                 shape: str = "polygon", ref_point: Optional[tuple] = None,
                  style: dict[str, Any] = None, color: Optional[str] = None) -> None:
         super().__init__(style=style, color=color)
         self.corners = np.array(corners)
+        self.corners -= self.corners.min(axis=0)
         if not self.corners.shape[1] == 2:
             raise ValueError(f"Contour points are not 2-dimensional (shape: {self.corners.shape})")
         self._shape = shape
-        self._ref_point = np.array([center]).squeeze()
+        if ref_point is None:
+            self._ref_point = self.center_of_mass
+        else:
+            self._ref_point = np.array([ref_point]).squeeze()
+            self._ref_point -= self.corners.min(axis=0)
 
     @property
     def shape(self) -> str:
@@ -80,6 +85,12 @@ class Contour(StyledObject):
         self._ref_point = value
 
     @property
+    def center_of_mass(self) -> np.ndarray:
+        """The center of mass position of the mask array."""
+        x, y = self.corners[:, 0].mean(), self.corners[:, 1].mean()
+        return np.array([x, y])
+
+    @property
     def artist(self) -> mpl.artist.Artist:
         art = mpl.patches.Polygon(self.corners, **self.style)
         return art
@@ -96,12 +107,12 @@ class SimpleContour(Contour):
     _param_keys = ("radius", "width", "height", "rotation")
 
     def __init__(self,
-                 shape: Optional[str] = "circle", center: tuple = (0, 0),
+                 shape: Optional[str] = "circle", ref_point: Optional[tuple] = None,
                  style: dict[str, Any] = None, color: Optional[str] = None,
                  **kwargs):
         self.params = kwargs
         corners = self.shape2corners(shape)
-        super().__init__(corners=corners, shape=shape, center=center, style=style, color=color)
+        super().__init__(corners=corners, shape=shape, ref_point=ref_point, style=style, color=color)
 
     def shape2corners(self, shape: str) -> np.ndarray:
         """Convert a geometric rectangular or elliptic description to polygon contour.
@@ -141,7 +152,7 @@ class SimpleContour(Contour):
         width, height, rotation = (self.params[key] for key in ("width", "height", "rotation"))
         if self.shape in ("circle", "ellipse"):
             art = mpl.patches.Ellipse(
-                self.ref_point + position,
+                self.center_of_mass - self.ref_point + position,
                 width, height,
                 angle=rotation,
                 **self.style,
@@ -151,10 +162,10 @@ class SimpleContour(Contour):
             rot_matrix = np.array([[rot_c, -rot_s], [rot_s, rot_c]])
             lower_left = np.rint(np.dot([-width / 2, -height / 2], rot_matrix))
             art = mpl.patches.Rectangle(
-                lower_left + self.ref_point + position,
+                lower_left + self.center_of_mass - self.ref_point + position,
                 self.params["width"],
                 self.params["height"],
-                angle=self.params["rot"],
+                angle=self.params["rotation"],
                 **self.style,
             )
         else:
@@ -277,7 +288,7 @@ class ROI(StyledObject):
         result.image = np.ma.masked_array(result.image, mask=~full_mask)
         return result
 
-    def pad_to(self, width: int, height: int, center: bool = True) -> np.ndarray:
+    def pad_to(self, width: int, height: int, center: bool = False) -> np.ndarray:
         """Return the the mask padded to a given extent."""
         if self._mask_buffer.shape == (height, width) and center == self._center_buffer:
             return self._mask_buffer
@@ -306,6 +317,7 @@ class ROI(StyledObject):
         result[pad_low[0]:pad_high[0], pad_low[1]:pad_high[1]] = mask
         self._mask_buffer = result
         self._center_buffer = center
+
         return result
 
     @property
