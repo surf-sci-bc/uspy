@@ -53,25 +53,62 @@ class Contour(StyledObject):
     _default_style = {"fill": False, "linewidth": 3}
 
     def __init__(self, corners: Optional[Iterable[Iterable]] = None,
-                 shape: str = "polygon", ref_point: Optional[tuple] = None,
+                 ref_point: Optional[tuple] = None,
                  style: dict[str, Any] = None, color: Optional[str] = None) -> None:
         super().__init__(style=style, color=color)
         self.corners = np.array(corners)
         self.corners -= self.corners.min(axis=0)
         if not self.corners.shape[1] == 2:
             raise ValueError(f"Contour points are not 2-dimensional (shape: {self.corners.shape})")
-        self._shape = shape
         if ref_point is None:
             self._ref_point = self.center_of_mass
         else:
             self._ref_point = np.array([ref_point]).squeeze()
             self._ref_point -= self.corners.min(axis=0)
+        self._shape = "polygon"
+        self.params = dict(width=None, height=None, rotation=None)
+
+    @classmethod
+    def from_params(cls, *args, shape: Optional[str] = "circle", **kwargs):
+        """Convert a geometric rectangular or elliptic description to polygon contour.
+        Arguments belonging to the shapes:
+            - circle: radius
+            - ellipse: width, height, rotation
+            - square: width, rotation
+            - rectangle: width, height, rotation
+        where radius, width and height are in pixels; rotation is in degrees (anti-clockwise).
+        """
+        if "radius" in kwargs:
+            if "width" in kwargs:
+                raise ValueError("Both radius and width were given for a shape-ROI")
+            width = kwargs.pop("radius") * 2
+        else:
+            width = kwargs.pop("width")
+        height = kwargs.pop("height", width)
+        rotation = kwargs.pop("rotation", 0)
+
+        if shape in ("circle", "ellipse"):
+            corners = cv2.ellipse2Poly(
+                center=(0, 0), axes=(width // 2, height // 2),
+                angle=int(rotation), arcStart=0, arcEnd=360, delta=1
+            )
+        elif shape in ("square", "rectangle"):
+            rot_c, rot_s = np.cos(-rotation * np.pi / 180), np.sin(-rotation * np.pi / 180)
+            rot_matrix = np.array([[rot_c, -rot_s], [rot_s, rot_c]])
+            corners = np.array([[0, 0], [width, 0], [width, height], [0, height]])
+            corners = np.rint(np.dot(corners, rot_matrix)).astype(np.int32)
+            corners = corners - corners.min(axis=0)
+        else:
+            raise ValueError(f"Unknown shape {shape}")
+
+        obj = cls(*args, corners=corners, **kwargs)
+        obj.params = dict(width=width, height=height, rotation=rotation)
+        obj._shape = shape
+        return obj
 
     @property
     def shape(self) -> str:
         """Shape should be immutable."""
-        if self._shape not in self._shapes:
-            raise ValueError(f"Invalid shape '{self._shape}' for contour '{type(self)}'")
         return self._shape
 
     @property
@@ -95,82 +132,104 @@ class Contour(StyledObject):
         art = mpl.patches.Polygon(self.corners, **self.style)
         return art
 
-    def get_artist(self, position: Iterable) -> mpl.artist.Artist:
+    def get_artist(self, position: Optional[Iterable]) -> mpl.artist.Artist:
         """Create artist at a given position (x, y)."""
-        art = mpl.patches.Polygon(self.corners + position, **self.style)
-        return art
-
-
-class SimpleContour(Contour):
-    """Define a contour from simple parametrized geometric objects."""
-    _shapes = ("circle", "ellipse", "square", "rectangle")
-    _param_keys = ("radius", "width", "height", "rotation")
-
-    def __init__(self,
-                 shape: Optional[str] = "circle", ref_point: Optional[tuple] = None,
-                 style: dict[str, Any] = None, color: Optional[str] = None,
-                 **kwargs):
-        self.params = kwargs
-        corners = self.shape2corners(shape)
-        super().__init__(corners=corners, shape=shape, ref_point=ref_point, style=style, color=color)
-
-    def shape2corners(self, shape: str) -> np.ndarray:
-        """Convert a geometric rectangular or elliptic description to polygon contour.
-        Arguments belonging to the shapes:
-            - circle: radius
-            - ellipse: width, height, rotation
-            - square: width, rotation
-            - rectangle: width, height, rotation
-        where radius, width and height are in pixels; rotation is in degrees (anti-clockwise).
-        """
-        if "radius" in self.params:
-            if "width" in self.params:
-                raise ValueError("Both radius and width were given for a shape-ROI")
-            self.params["width"] = self.params.pop("radius") * 2
-        self.params["height"] = self.params.get("height", self.params["width"])
-        self.params["rotation"] = self.params.get("rotation", 0)
-
-        width, height = self.params["width"], self.params["height"]
-        rotation = -self.params["rotation"]
-
-        if shape in ("circle", "ellipse"):
-            corners = cv2.ellipse2Poly(
-                center=(0, 0), axes=(width // 2, height // 2),
-                angle=int(rotation), arcStart=0, arcEnd=360, delta=1
-            )
-        elif shape in ("square", "rectangle"):
-            rot_c, rot_s = np.cos(-rotation * np.pi / 180), np.sin(-rotation * np.pi / 180)
-            rot_matrix = np.array([[rot_c, -rot_s], [rot_s, rot_c]])
-            corners = np.array([[0, 0], [width, 0], [width, height], [0, height]])
-            corners = np.rint(np.dot(corners, rot_matrix)).astype(np.int32)
-            corners = corners - corners.min(axis=0)
-        else:
-            raise ValueError(f"Unknown shape {shape}")
-        return corners
-
-    def get_artist(self, position: Iterable) -> mpl.artist.Artist:
-        width, height, rotation = (self.params[key] for key in ("width", "height", "rotation"))
-        if self.shape in ("circle", "ellipse"):
+        if position is None:
+            position = self.ref_point
+        if self._shape == "polygon":
+            art = mpl.patches.Polygon(self.corners + position, **self.style)
+        elif self._shape in ("circle", "ellipse"):
             art = mpl.patches.Ellipse(
                 self.center_of_mass - self.ref_point + position,
-                width, height,
-                angle=rotation,
+                self.params["width"], self.params["height"], angle=self.params["rotation"],
                 **self.style,
             )
-        elif self.shape in ("square", "rectangle"):
-            rot_c, rot_s = np.cos(-rotation * np.pi / 180), np.sin(-rotation * np.pi / 180)
+        elif self._shape in ("square", "rectangle"):
+            # pylint: disable=invalid-unary-operand-type
+            rot_c = np.cos(-self.params["rotation"] * np.pi / 180)
+            rot_s = np.sin(-self.params["rotation"] * np.pi / 180)
             rot_matrix = np.array([[rot_c, -rot_s], [rot_s, rot_c]])
-            lower_left = np.rint(np.dot([-width / 2, -height / 2], rot_matrix))
+            lower_left = np.dot([-self.params["width"] / 2, -self.params["height"] / 2], rot_matrix)
             art = mpl.patches.Rectangle(
                 lower_left + self.center_of_mass - self.ref_point + position,
-                self.params["width"],
-                self.params["height"],
-                angle=self.params["rotation"],
+                self.params["width"], self.params["height"], angle=self.params["rotation"],
                 **self.style,
             )
         else:
-            raise ValueError(f"Unknown shape {self.shape}")
+            raise ValueError(f"Unknown shape {self._shape}")
         return art
+
+
+# class SimpleContour(Contour):
+#     """Define a contour from simple parametrized geometric objects."""
+#     _shapes = ("circle", "ellipse", "square", "rectangle")
+#     _param_keys = ("radius", "width", "height", "rotation")
+
+#     def __init__(self,
+#                  shape: Optional[str] = "circle", ref_point: Optional[tuple] = None,
+#                  style: dict[str, Any] = None, color: Optional[str] = None,
+#                  **kwargs):
+#         self.params = kwargs
+#         corners = self.shape2corners(shape)
+#         super().__init__(corners=corners, shape=shape, ref_point=ref_point, style=style, color=color)
+
+#     def shape2corners(self, shape: str) -> np.ndarray:
+#         """Convert a geometric rectangular or elliptic description to polygon contour.
+#         Arguments belonging to the shapes:
+#             - circle: radius
+#             - ellipse: width, height, rotation
+#             - square: width, rotation
+#             - rectangle: width, height, rotation
+#         where radius, width and height are in pixels; rotation is in degrees (anti-clockwise).
+#         """
+#         if "radius" in self.params:
+#             if "width" in self.params:
+#                 raise ValueError("Both radius and width were given for a shape-ROI")
+#             self.params["width"] = self.params.pop("radius") * 2
+#         self.params["height"] = self.params.get("height", self.params["width"])
+#         self.params["rotation"] = self.params.get("rotation", 0)
+
+#         width, height = self.params["width"], self.params["height"]
+#         rotation = -self.params["rotation"]
+
+#         if shape in ("circle", "ellipse"):
+#             corners = cv2.ellipse2Poly(
+#                 center=(0, 0), axes=(width // 2, height // 2),
+#                 angle=int(rotation), arcStart=0, arcEnd=360, delta=1
+#             )
+#         elif shape in ("square", "rectangle"):
+#             rot_c, rot_s = np.cos(-rotation * np.pi / 180), np.sin(-rotation * np.pi / 180)
+#             rot_matrix = np.array([[rot_c, -rot_s], [rot_s, rot_c]])
+#             corners = np.array([[0, 0], [width, 0], [width, height], [0, height]])
+#             corners = np.rint(np.dot(corners, rot_matrix)).astype(np.int32)
+#             corners = corners - corners.min(axis=0)
+#         else:
+#             raise ValueError(f"Unknown shape {shape}")
+#         return corners
+
+#     def get_artist(self, position: Iterable) -> mpl.artist.Artist:
+#         width, height, rotation = (self.params[key] for key in ("width", "height", "rotation"))
+#         if self.shape in ("circle", "ellipse"):
+#             art = mpl.patches.Ellipse(
+#                 self.center_of_mass - self.ref_point + position,
+#                 width, height,
+#                 angle=rotation,
+#                 **self.style,
+#             )
+#         elif self.shape in ("square", "rectangle"):
+#             rot_c, rot_s = np.cos(-rotation * np.pi / 180), np.sin(-rotation * np.pi / 180)
+#             rot_matrix = np.array([[rot_c, -rot_s], [rot_s, rot_c]])
+#             lower_left = np.rint(np.dot([-width / 2, -height / 2], rot_matrix))
+#             art = mpl.patches.Rectangle(
+#                 lower_left + self.center_of_mass - self.ref_point + position,
+#                 self.params["width"],
+#                 self.params["height"],
+#                 angle=self.params["rotation"],
+#                 **self.style,
+#             )
+#         else:
+#             raise ValueError(f"Unknown shape {self.shape}")
+#         return art
 
 
 class Mask(StyledObject):
@@ -217,7 +276,8 @@ class ROI(StyledObject):
     """An image region represented as a boolean 2D array."""
     # take care: OpenCV-points are given as (x, y),
     # but numpy 2d image arrays are in (y, x)-coordinates
-    def __init__(self, x0: int, y0: int, mask: Mask, style: dict[str, Any] = None, color: Optional[str] = None) -> None:
+    def __init__(self, x0: int, y0: int, mask: Mask,
+                 style: dict[str, Any] = None, color: Optional[str] = None) -> None:
         if style is None:
             style = mask.style
         super().__init__(style=style, color=color)
@@ -231,8 +291,10 @@ class ROI(StyledObject):
                radius: Number, rotation: Number = 0,
                style: dict[str, Any] = None, color: Optional[str] = None, **kwargs) -> ROI:
         """Construct a circular ROI."""
-        contour = SimpleContour(shape="circle", radius=radius, rotation=rotation,
-                                style=style, color=color)
+        contour = Contour.from_params(
+            shape="circle", radius=radius, rotation=rotation,
+            style=style, color=color
+        )
         mask = Mask(contour)
         return cls(x0, y0, mask=mask, **kwargs)
 
@@ -240,8 +302,10 @@ class ROI(StyledObject):
     def ellipse(cls, x0: int, y0: int, width: int, height: int, rotation: Number = 0,
                 style: dict[str, Any] = None, color: Optional[str] = None, **kwargs) -> ROI:
         """Construct an elliptic ROI."""
-        contour = SimpleContour(shape="ellipse", width=width, height=height, rotation=rotation,
-                                style=style, color=color)
+        contour = Contour.from_params(
+            shape="ellipse", width=width, height=height, rotation=rotation,
+            style=style, color=color
+        )
         mask = Mask(contour)
         return cls(x0, y0,mask=mask, **kwargs)
 
@@ -249,8 +313,10 @@ class ROI(StyledObject):
     def rectangle(cls, x0: int, y0: int, width: int, height: int, rotation: Number = 0,
                   style: dict[str, Any] = None, color: Optional[str] = None, **kwargs) -> ROI:
         """Construct a rectangular ROI."""
-        contour = SimpleContour(shape="rectangle", width=width, height=height, rotation=rotation,
-                                style=style, color=color)
+        contour = Contour.from_params(
+            shape="rectangle", width=width, height=height, rotation=rotation,
+            style=style, color=color
+        )
         mask = Mask(contour)
         return cls(x0, y0,mask=mask, **kwargs)
 
