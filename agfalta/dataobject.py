@@ -22,6 +22,8 @@ import json_tricks
 import tifffile
 from tifffile.tifffile import TiffFileError
 
+import agfalta.roi as roi
+
 
 class Loadable:
     """
@@ -156,21 +158,27 @@ class Loadable:
 class DataObject(Loadable):
     """
     Base class for data objects like images, lines, points, ...
+
+    Parameters
+    ----------
+    source: Any
+        The source from which the object is created
     """
 
     _data_keys = ()
     _unit_defaults = {}
     _meta_defaults = {}
 
-    def __new__(cls, *_args, **_kwargs):
-        obj = super().__new__(cls)      # really not forward args and kwargs?
+    def __new__(cls, *args, **kwargs):
+        obj = super().__new__(cls)  # really not forward args and kwargs?
         obj._data = {}
         obj._meta = obj._meta_defaults.copy()
         obj._units = obj._unit_defaults.copy()
         obj._source = None
         return obj
 
-    def __init__(self, source) -> None:
+    def __init__(self, source: Any) -> None:
+        """__init__(self, source: Any)"""
         parsed = self.parse(source)
         for k in self._data_keys:
             if k not in parsed:
@@ -268,7 +276,19 @@ class DataObject(Loadable):
         return True
 
     def is_compatible(self, other: DataObject) -> bool:
-        """Check if another DataObject has data of the same dimensions."""
+        """[summary]
+
+        Parameters
+        ----------
+        other : DataObject
+            [description]
+
+        Returns
+        -------
+        bool
+            [description]
+        """
+        # """Check if another DataObject has data of the same dimensions."""
         return isinstance(other, type(self))
 
     # def _reduce(self) -> dict:
@@ -814,11 +834,11 @@ class Line(DataObject):
     def length(self) -> int:
         """Length of the x and y data."""
         return len(self.x)
-    
+
     @property
     def area(self) -> float:
         "Area under the line integrated by simpson rule"
-        return scipy.integrate.simpson(self.y,self.x)
+        return scipy.integrate.simpson(self.y, self.x)
 
     @property
     def dataframe(self) -> pd.DataFrame:
@@ -830,8 +850,15 @@ class Line(DataObject):
                 f"{self.ydim} in {self._units['y']}",
             ],
         )
-    
-    def interpolate(self, x_data: Union[Number, list[Number], np.ndarray, None] = None, order: Union[str, int] = "cubic", **kwargs) -> Union[np.ndarray, function]:
+
+    def interpolate(
+        self,
+        x_data: Union[Number, list[Number], np.ndarray, None] = None,
+        order: Union[str, int] = "cubic",
+        **kwargs,
+    ) -> Union[np.ndarray, function]:
+        
+
         """
         Interpolates the x,y data of the Line with a spline of order 'order'
 
@@ -843,7 +870,7 @@ class Line(DataObject):
             When a string must be either "linear", "quad" or "cubic".
             When an int must be 1 <= order <= 5
         kwargs:
-            Additional keyword arguments are passed through to 
+            Additional keyword arguments are passed through to
             scipy.interpolate.InterpolatedUnivariateSpline
 
         Returns
@@ -854,15 +881,13 @@ class Line(DataObject):
             the interpolation function itself
         """
 
-        k = {
-            "linear": 1,
-            "quad": 2,
-            "cubic": 3
-        }
+        k = {"linear": 1, "quad": 2, "cubic": 3}
         if order not in k.keys():
             k[order] = order
 
-        f = scipy.interpolate.InterpolatedUnivariateSpline(self.x, self.y, k=k[order], **kwargs)
+        f = scipy.interpolate.InterpolatedUnivariateSpline(
+            self.x, self.y, k=k[order], **kwargs
+        )
         if x_data is None:
             return f
         return f(x_data)
@@ -871,18 +896,18 @@ class Line(DataObject):
         """Returns the integrated values of a cubic spline evaluated at the x values of the line"""
         f = self.interpolate()
         y = np.array([f.integral(self.x[0], x) for x in self.x])
-        return Line(np.array([self.x,y]))
+        return Line(np.array([self.x, y]))
 
     def derivative(self) -> Line:
         """Returns the derivative of a cubic spline evaluated at the x values of the line"""
         f = self.interpolate()
         y = np.array([f.derivative()(x) for x in self.x[1:]])
-        return Line(np.array([self.x[1:],y]))
+        return Line(np.array([self.x[1:], y]))
 
-    def save(self, fname: str) -> None:
+    def save(self, fname: str) -> None:        
         """
         Saves the line as .csv
-        
+
         Parameters
         ----------
         fname: str
@@ -898,3 +923,68 @@ class Line(DataObject):
             self.dataframe.to_csv(fname, index=False, header=True)
         else:
             super().save(fname)
+
+
+class IntensityLine(Line):
+    """
+    A Class to extract Intensities from an ImageStack
+
+    Unlike Line from which it inherits it takes an ImagseStack, a ROI and a String representing the
+    dimension along which the itensities in the stack should be extracted, e.g. time, energy ...
+    For each image the the mean value of intensites inside the ROI is extracted as y-values together
+    with the dimensional value of the image (time, energy, ...) as the lines x-axes.
+    """
+
+    def __init__(self, stack: ImageStack, roi_: roi.ROI, xaxis: str) -> None:
+        """
+        Parameters
+        ----------
+        stack : ImageStack
+            ImageStack from which the intensities will be extracted
+        roi_ : roi.ROI
+            ROI from within the intensities will be extracted in each image,
+        xaxis : str
+            a string indicates the axis of the dimension along the intensites shall be extracted,
+            e.g. time, energy ...
+        """
+        super().__init__((stack, roi_, xaxis))
+
+    def parse(self, source: tuple[ImageStack, roi.ROI, str]) -> dict[str, Any]:
+        """Applies a ROI to an Imagestack and extracts mean of ROI from each image
+
+        Parameters
+        ----------
+        source : tuple[ImageStack, roi.ROI, str]
+            Must be a Tuple of
+            
+            1. an ImageStack from which the intensities will be extracted,
+            2. a ROI from within the intensities will be extracted in each image,
+            3. a string indicates the axis of the dimension along the intensites shall be extracted,\
+            e.g. time, energy ...
+
+        Returns
+        -------
+        dict
+            a dict containing the x,y-values of the line, the stack, the ROI, the x- and 
+            y-dimensions and the unit of the x axis extracted from the images. The y-dimension is 
+            "intensity" by default with unit "a.u."
+        """
+
+        stack, roi_, xaxis = source
+        self._source = source
+        y = []
+        x = []
+        for img in stack:
+            masked_img = roi_.apply(img)
+            y.append(np.mean(masked_img.image))
+            x.append(img.meta[xaxis])
+
+        return {
+            "x": np.array(x),
+            "y": np.array(y),
+            "stack": stack,
+            "roi": roi_,
+            "xdim": xaxis,
+            "ydim": "intensity",
+            "x_unit": stack[0].unit[xaxis],
+        }
