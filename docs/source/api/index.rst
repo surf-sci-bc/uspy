@@ -67,4 +67,8 @@ Class :class:`LEEMStack`
 ------------------------
 .. autoclass:: LEEMStack
     :members:
-    
+
+Class :class:`IVCurve`
+----------------------
+.. autoclass:: IVCurve
+    :members:

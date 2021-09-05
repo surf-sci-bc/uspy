@@ -3,7 +3,7 @@ Basic data containers.
 """
 # pylint: disable=abstract-method
 from __future__ import annotations
-from typing import Any, Sequence, Union, Optional
+from typing import Any, Callable, Sequence, Union, Optional
 from collections.abc import Iterable
 from numbers import Number
 from pathlib import Path
@@ -20,7 +20,7 @@ import pandas as pd
 import imageio
 import json_tricks
 import tifffile
-from tifffile.tifffile import TiffFileError, sequence
+from tifffile.tifffile import TiffFileError
 
 import agfalta.roi as roi
 
@@ -752,6 +752,54 @@ class ImageStack(DataObjectStack):
 class Line(DataObject):
     """
     Base class for all 1D data.
+
+    Parameters
+    ----------
+    source : Union[str, np.ndarray]
+        When a str: path to .csv file with x y data as columns. The delimiter is guessed from the file
+        When np.ndarray: 2d numpy array containing the x and y values either als rows or cols
+
+    Attributes
+    ----------
+    x, y : np.ndarray
+        Numpy arrays containing the x and y data of the line
+    ydim, xdmin : str
+        Dimension of the x and y values, e.g. time, energy ...
+
+    Examples
+    --------
+    Initialization from .csv file
+
+    .. code-block:: none
+
+       example.csv:
+       U in V,  I in A
+       0.0,     0.0
+       1.0,     2.0
+
+    >>> line = Line("example.csv")
+    >>> line.x, line.y
+    array([0.0, 1.0]), array([0.0, 2.0])
+
+    When reading from a .csv file the column header is interpreted as *xdim* and *ydim*. If the
+    header has the form *A in B*, *A* is the dimension and *B* is the corresponding unit.
+
+    >>> line.xdim, line.ydim
+    U, I
+
+    The x and y values are also accessible over their corresponding dimension:
+
+    >>> line.U
+    array([0.0, 1.0])
+
+    Initialization from numpy array
+
+    >>> line = Line(np.array([[0.0, 1.0], [0.0, 2.0]]))
+    >>> line.x
+    array([0.0, 1.0])
+    >>> line.xdim, line.ydim
+    x, y
+
     """
 
     # pylint: disable=no-member
@@ -762,8 +810,8 @@ class Line(DataObject):
     }
     _unit_defaults = {"x": "a.u.", "y": "a.u."}
 
-    # def __init__(self, *args, **kwargs) -> None:
-    #    super().__init__(*args, **kwargs)
+    def __init__(self, source: Union[str, np.ndarray]) -> None:
+        super().__init__(source)
 
     def __getattr__(self, attr: str) -> Any:
         # _data and _meta have to be handled by super() to avoid recursion
@@ -788,7 +836,7 @@ class Line(DataObject):
         else:
             return super().__setattr__(attr, value)
 
-    def parse(self, source: Union(str, np.ndarray)) -> dict[str, Any]:
+    def parse(self, source: Union[str, np.ndarray]) -> dict[str, Any]:
         if isinstance(source, np.ndarray):
             if source.ndim == 2:
                 if source.shape[0] == 2:
@@ -856,7 +904,7 @@ class Line(DataObject):
         x_data: Union[Number, list[Number], np.ndarray, None] = None,
         order: Union[str, int] = "cubic",
         **kwargs,
-    ) -> Union[np.ndarray, function]:
+    ) -> Union[np.ndarray, Callable]:
 
         """
         Interpolates the x,y data of the Line with a spline of order 'order'
@@ -962,7 +1010,14 @@ class Line(DataObject):
             self.dataframe.to_csv(fname, index=False, header=True)
         else:
             super().save(fname)
-
+        
+    def is_compatible(self, other: Line) -> bool:
+        try:
+            assert super().is_compatible(other)
+            assert self.length == other.length
+            return True
+        except AssertionError:
+            return False
 
 class IntensityLine(Line):
     """
@@ -1050,15 +1105,19 @@ class StitchedLine(Line):
     """
 
     def __init__(
-        self, stacks: Sequence[ImageStack], rois: Sequence[roi.ROI], xaxis: str
+        self,
+        stacks: Union[Sequence[ImageStack], ImageStack],
+        rois: Union[Sequence[roi.ROI], roi.ROI],
+        xaxis: str,
     ) -> None:
         """
         Parameters
         ----------
-        stacks : Sequence[ImageStack]
-            Sequence of ImagesStacks, which will be used for Line extraction
-        rois : Sequence[roi.ROI]
-            Sequence of ROIs used for Line extraction. Must be of the same length as ``stacks``.
+        stacks : Sequence[ImageStack] or ImageStack
+            ImageStacks, which will be used for Line extraction
+        rois : Sequence[roi.ROI] or roi.ROI
+            ROIs used for Line extraction. Must be of the same length as ``stacks``. If stacks is a
+            single stack, ROI has to be a single ROI
         xaxis:
             a string indicates the axis of the dimension along the intensites shall be extracted,
             e.g. time, energy ...
@@ -1068,6 +1127,9 @@ class StitchedLine(Line):
         ValueError
             When len(stacks) != len(rois)
         """
+        if isinstance(stacks, ImageStack):
+            stacks = [stacks]
+            rois = [rois]
 
         super().__init__((stacks, rois, xaxis))
 

@@ -20,7 +20,7 @@ import numpy as np
 import cv2 as cv
 
 from agfalta.utility import parse_bytes, parse_cp1252_until_null
-from agfalta.dataobject import Image, ImageStack, IntensityLine, Line
+from agfalta.dataobject import Image, ImageStack, IntensityLine, Line, StitchedLine
 
 
 class TimeOrigin:
@@ -397,6 +397,25 @@ class LEEMStack(ImageStack):
             img.normalize(mcp=mcp, inplace=True, **kwargs)
 
         return stack
+
+class IVCurve(StitchedLine):
+
+    """
+    Convenience Class for generating LEEM IV-Curves. 
+    """
+
+    def __init__(self, *args, **kwargs):
+        """
+        It is called and behaves exactly like StitchedLine but is called with *xaxis* = "energy" by 
+        default.
+
+        See Also
+        --------
+        dataobject.StitchedLine
+        """
+        print(*args)
+        print(**kwargs)
+        super().__init__(*args, **kwargs, xaxis="energy")
 
 
 # Format: meta_key: (byte_position, encoding)
