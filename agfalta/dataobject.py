@@ -3,7 +3,7 @@ Basic data containers.
 """
 # pylint: disable=abstract-method
 from __future__ import annotations
-from typing import Any, Union, Optional
+from typing import Any, Sequence, Union, Optional
 from collections.abc import Iterable
 from numbers import Number
 from pathlib import Path
@@ -20,7 +20,7 @@ import pandas as pd
 import imageio
 import json_tricks
 import tifffile
-from tifffile.tifffile import TiffFileError
+from tifffile.tifffile import TiffFileError, sequence
 
 import agfalta.roi as roi
 
@@ -857,7 +857,6 @@ class Line(DataObject):
         order: Union[str, int] = "cubic",
         **kwargs,
     ) -> Union[np.ndarray, function]:
-        
 
         """
         Interpolates the x,y data of the Line with a spline of order 'order'
@@ -904,7 +903,47 @@ class Line(DataObject):
         y = np.array([f.derivative()(x) for x in self.x[1:]])
         return Line(np.array([self.x[1:], y]))
 
-    def save(self, fname: str) -> None:        
+    def smooth(self, kernel: Union[int, np.ndarray]) -> Line:
+        """
+        Recieves a kernel and convolves the values of the line
+
+        Parameters
+        ----------
+        kernel : np.ndarray, int
+            Kernel that will be convolved with the line data.
+            If ``int`` an equaly distributed kernel of size ``kernel`` will be applied.
+
+        Returns
+        -------
+        Line
+            smoothed line
+
+        Examples
+        --------
+        Rolling average over three data points of line. Note that sum(kernel) should be 1.
+
+        >>> kernel = np.array([1,1,1])/3
+        >>> smoothed = line.smooth(kernel)
+
+        Above code is equivalent to:
+
+        >>> smoothed = line.smooth(3)
+
+        The weights do not have to be the same. To put more weigh on the current point than on
+        adjecent points:
+
+        >>> kernel = np.array([1,2,1])/4
+        >>> smoothed = line.smooth(kernel)
+        """
+
+        if isinstance(kernel, int):
+            kernel = np.ones(kernel) / kernel
+
+        line = self.copy()
+        line.x, line.y = self.x, np.convolve(self.y, kernel, mode="same")
+        return line
+
+    def save(self, fname: str) -> None:
         """
         Saves the line as .csv
 
@@ -977,7 +1016,7 @@ class IntensityLine(Line):
         for img in stack:
             masked_img = roi_.apply(img)
             y.append(np.mean(masked_img.image))
-            x.append(img.meta[xaxis])
+            x.append(getattr(img, xaxis))
 
         return {
             "x": np.array(x),
@@ -988,3 +1027,159 @@ class IntensityLine(Line):
             "ydim": "intensity",
             "x_unit": stack[0].unit[xaxis],
         }
+
+
+class StitchedLine(Line):
+    """
+    Class for combining IntensityLines from multiple ImageStacks.
+
+    Works like IntensityLine, but accepts multiple ImageStacks and the same amount of ROIs. Every
+    stack is mapped to a ROI (in the order that they are given, e.g. first stack to first ROI) and
+    the intensity profile is extracted. If the x-values of the extracted Lines are overlapping, the
+    Lines are scaled to matched each other. The stacks may be sorted by their first xaxis value
+    before extraction.
+
+    Attributes
+    ----------
+    x, y : np.ndarray
+        x and y values of stitched lines
+    lines : list[IntensityLine]
+        list of single IntensityLines that are used for stitching
+    xdim, ydim : str
+        string representing the dimension of the x and y values, default for y is "intensity"
+    """
+
+    def __init__(
+        self, stacks: Sequence[ImageStack], rois: Sequence[roi.ROI], xaxis: str
+    ) -> None:
+        """
+        Parameters
+        ----------
+        stacks : Sequence[ImageStack]
+            Sequence of ImagesStacks, which will be used for Line extraction
+        rois : Sequence[roi.ROI]
+            Sequence of ROIs used for Line extraction. Must be of the same length as ``stacks``.
+        xaxis:
+            a string indicates the axis of the dimension along the intensites shall be extracted,
+            e.g. time, energy ...
+
+        Raises
+        ------
+        ValueError
+            When len(stacks) != len(rois)
+        """
+
+        super().__init__((stacks, rois, xaxis))
+
+    def parse(self, source: Sequence[Sequence, Sequence, str]) -> dict[str, Any]:
+        """Extract IntensityLines from Stacks and handle their stitching.
+
+        Parameters
+        ----------
+        source : Sequence[Sequence, Sequence, str]
+            List or tuple containing
+
+            1. A list or tuple of ImageStacks
+            2. A list or tuple of ROIs with the same length as the tuple of ImageStacks
+            3. A str representing the xaxis along which the intensity is extracted
+
+        Returns
+        -------
+        dict[str, Any]
+            dict containing all metadata and data, including rois and stacks
+
+        Raises
+        ------
+        ValueError
+            When len(stacks) != len(rois)
+        """
+
+        stacks, rois, xaxis = source
+
+        if len(stacks) != len(rois):
+            raise ValueError(f"Cannot map {len(rois)} to {len(stacks)}")
+
+        lines = [
+            IntensityLine(stack, roi, xaxis)
+            for stack, roi in sorted(
+                zip(stacks, rois), key=lambda x: getattr(x[0][0], xaxis)
+            )
+        ]
+
+        if len(lines) == 1:
+            x, y = lines[0].x, lines[0].y
+        else:
+            x, y = self._stitch_curves(lines)
+
+        self._source = source
+
+        return {
+            "x": x,
+            "y": y,
+            "lines": lines,
+            "xdim": xaxis,
+            "ydim": "intensity",
+            "x_unit": stacks[0][0].unit[xaxis],
+        }
+
+    def _stitch_curves(
+        self, lines: Sequence[IntensityLine]
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Combine x,y values to mulitple lines to one pair of x,y values
+
+        Parameters
+        ----------
+        lines : Sequence[IntensityLine]
+            List or tuple of Lines to be stitched together
+
+        Returns
+        -------
+        tuple[np.ndarray, np.ndarray]
+            tuple containing the x and y values of the stitched curve
+        """
+        coeffs = [1]
+
+        for curr_line, next_line in zip(lines, lines[1:]):
+            # calculate overlap in x values between lines, assuming ordered values:
+
+            start_x = next_line.x[0]
+            end_x = curr_line.x[-1]
+
+            if start_x > end_x:
+                print("No Overlap detected.")
+                coeffs.append(1)
+            elif start_x == end_x:
+                print("One Point overlap")
+                coeffs.append(next_line.y[0] / curr_line.y[-1])
+            else:
+                curr_line_points = np.array(
+                    [
+                        (x, y)
+                        for x, y in zip(curr_line.x, curr_line.y)
+                        if start_x <= x <= end_x
+                    ]
+                )
+                next_spline = next_line.interpolate(order="cubic")
+
+                func = lambda x, a: a * next_spline(x)
+                popt, _ = scipy.optimize.curve_fit(
+                    func, curr_line_points[:, 0], curr_line_points[:, 1]
+                )
+
+                coeffs.append(popt)
+
+        x_data = np.array([])
+        y_data = np.array([])
+
+        for coeff, line in zip(coeffs, lines):
+            x_data = np.append(x_data, line.x)
+            y_data = np.append(y_data, coeff * line.y)
+
+        # sort values and average over same x values
+        data = np.array([x_data, y_data]).T
+        df = pd.DataFrame(data).groupby(0).mean()
+
+        x = df.index.values
+        y = df.values.flatten()
+
+        return x, y

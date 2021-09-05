@@ -46,6 +46,11 @@ Class :class:`IntensityLine`
 .. autoclass:: IntensityLine
     :members:
 
+Class :class:`StitchedLine`
+---------------------------
+.. autoclass:: StitchedLine
+    :members:
+
 .. currentmodule:: leem.base
 
 Module :mod:`leem.base`
@@ -54,23 +59,12 @@ Module :mod:`leem.base`
 .. automodule:: leem.base
 
 Class :class:`LEEMImg`
------------------------
+----------------------
 .. autoclass:: LEEMImg
     :members:
 
 Class :class:`LEEMStack`
------------------------
+------------------------
 .. autoclass:: LEEMStack
     :members:
-
-
-
-.. Module :mod:`leem.base`
-.. -----------------------
-.. .. automodule:: base
-..     :members:
-
-.. Module :mod:`roi`
-.. ------------------
-.. .. automodule:: roi
-..     :members:
+    

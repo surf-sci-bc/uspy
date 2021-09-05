@@ -33,7 +33,6 @@ extensions = [
     'sphinx.ext.napoleon',
     'sphinx.ext.autodoc',
     'sphinx_copybutton',
-    'sphinx.ext.inheritance_diagram'
 ]
 
 # Add any paths that contain templates here, relative to this directory.
@@ -48,6 +47,7 @@ exclude_patterns = []
 autoclass_content = "both"
 add_module_names = False
 autodoc_typehints = "none"
+
 
 # -- Options for HTML output -------------------------------------------------
 
