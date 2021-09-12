@@ -10,6 +10,7 @@ import pytest
 import numpy as np
 
 from agfalta.leem.base import LEEMImg, LEEMStack
+from agfalta.dataobject import Line
 from agfalta.dataobject import Image
 
 
@@ -94,7 +95,15 @@ def list2darrays(request):
 
 @pytest.fixture()
 def testimgpng():
-    return Image(TESTDATA_DIR + TESTIMAGE_NAME + ".png")  # , request.param[1]
+    return Image(TESTDATA_DIR + TESTIMAGE_NAME + ".png")
+
+@pytest.fixture()
+def quad_line():
+    a = np.linspace(0,10,11)
+    b = a**2
+    c = np.asarray([a,b])
+
+    return Line(c)
 
 
 @pytest.fixture(scope="module", params=IMG_FNAMES)

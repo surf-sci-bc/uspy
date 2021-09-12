@@ -1080,7 +1080,7 @@ class Line(DataObject):
 
     def __sub__(self, other: Union[Line, Number, np.ndarray]) -> Line:
         result = self.copy()
-        result += other
+        result -= other
         return result
 
     def __mul__(self, other: Union[Line, Number, np.ndarray]) -> Line:

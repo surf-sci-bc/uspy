@@ -10,9 +10,13 @@ venv
 dev
 .vscode
 agfalta/dev
+tests/htmlcov
 
 # sphinx
 /docs/build
 
-#MacOS
+# MacOS
 .DS_Store
+
+# pyenv
+.python-version
