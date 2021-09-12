@@ -988,6 +988,7 @@ class Line(DataObject):
             kernel = np.ones(kernel) / kernel
 
         line = self.copy()
+        # pylint: disable=atribute-definded-outside-init
         line.x, line.y = self.x, np.convolve(self.y, kernel, mode="same")
         return line
 
@@ -1010,7 +1011,7 @@ class Line(DataObject):
             self.dataframe.to_csv(fname, index=False, header=True)
         else:
             super().save(fname)
-        
+
     def is_compatible(self, other: Line) -> bool:
         try:
             assert super().is_compatible(other)
@@ -1018,6 +1019,83 @@ class Line(DataObject):
             return True
         except AssertionError:
             return False
+
+    def __iadd__(self, other: Union[Line, Number, np.ndarray]) -> Line:
+        if isinstance(other, Line):
+            self.y += other.y
+        elif isinstance(other, (Number, np.ndarray)):
+            self.y += other
+        else:
+            raise TypeError(
+                f"Unsupported Operation '+' for types {type(self)} and {type(other)}"
+            )
+
+        return self
+
+    def __isub__(self, other: Union[Line, Number, np.ndarray]) -> Line:
+        if isinstance(other, Line):
+            self.y -= other.y
+        elif isinstance(other, (Number, np.ndarray)):
+            self.y -= other
+        else:
+            raise TypeError(
+                f"Unsupported Operation '-' for types {type(self)} and {type(other)}"
+            )
+
+        return self
+
+    def __imul__(self, other: Union[Line, Number, np.ndarray]) -> Line:
+        if isinstance(other, Line):
+            self.y *= other.y
+        elif isinstance(other, (Number, np.ndarray)):
+            self.y *= other
+        else:
+            raise TypeError(
+                f"Unsupported Operation '*' for types {type(self)} and {type(other)}"
+            )
+
+        return self
+
+    def __itruediv__(self, other: Union[Line, Number, np.ndarray]) -> Line:
+        if isinstance(other, Line):
+            self.y /= other.y
+        elif isinstance(other, (Number, np.ndarray)):
+            self.y /= other
+        else:
+            raise TypeError(
+                f"Unsupported Operation '/' for types {type(self)} and {type(other)}"
+            )
+        
+        return self
+
+    def __add__(self, other: Union[Line, Number, np.ndarray]) -> Line:
+        result = self.copy()
+        result += other
+        return result
+
+    def __radd__(self, other: Union[Line, Number, np.ndarray]) -> Line:
+        if other == 0:
+            return self
+        return self.__add__(other)
+
+    def __sub__(self, other: Union[Line, Number, np.ndarray]) -> Line:
+        result = self.copy()
+        result += other
+        return result
+
+    def __mul__(self, other: Union[Line, Number, np.ndarray]) -> Line:
+        result = self.copy()
+        result *= other
+        return result
+
+    def __rmul__(self, other: Union[Line, Number, np.ndarray]) -> Line:
+        return self.__mul__(other)
+
+    def __truediv__(self, other: Union[Line, Number, np.ndarray]) -> Line:
+        result = self.copy()
+        result /= other
+        return result
+
 
 class IntensityLine(Line):
     """
