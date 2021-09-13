@@ -359,7 +359,7 @@ class LEEMStack(ImageStack):
         """
         Normalization of images in stack
 
-        The images in the stack are normalied by appling Image.normalize(mcp) to each image
+        The images in the stack are normalized by appling Image.normalize(mcp) to each image
 
         Parameters
         ----------
@@ -393,20 +393,24 @@ class LEEMStack(ImageStack):
         else:
             stack = self.copy()
 
-        for img in tqdm(stack):
-            img.normalize(mcp=mcp, inplace=True, **kwargs)
+        for img in stack:
+            # if an image is multiple times in a stack and inplace is True, it should not be
+            # normalized twice, so if the mcp is already the current mcp, it will not be processed
+            if img.mcp is None or not img.mcp == mcp:
+                img.normalize(mcp=mcp, inplace=True, **kwargs)
 
         return stack
+
 
 class IVCurve(StitchedLine):
 
     """
-    Convenience Class for generating LEEM IV-Curves. 
+    Convenience Class for generating LEEM IV-Curves.
     """
 
     def __init__(self, *args, **kwargs):
         """
-        It is called and behaves exactly like StitchedLine but is called with *xaxis* = "energy" by 
+        It is called and behaves exactly like StitchedLine but is called with *xaxis* = "energy" by
         default.
 
         See Also
@@ -434,7 +438,7 @@ HEADER_TWO = {
     "_iversion": (2, "short"),
     "_colorscale_low": (4, "short"),
     "_colorscale_high": (6, "short"),
-    "time":             (8, "time"),
+    "time": (8, "time"),
     "_mask_xshift": (16, "short"),
     "_mask_yshift": (18, "short"),
     "_usemask": (20, "bool"),

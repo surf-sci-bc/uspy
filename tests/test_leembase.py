@@ -7,11 +7,13 @@
 import cv2 as cv
 import pytest
 import numpy as np
+from numpy.testing import assert_array_equal
 
 from agfalta.leem import base
 
 from .conftest import (
     MCP_IMG_FNAME,
+    dark_counts,
     same_or_nan,
     IMG_FNAMES_COMPATIBLE,
     STACK_FNAMES,
@@ -94,11 +96,36 @@ def test_img_attr_types(img):
     assert isinstance(img.timestamp, (int, float))
 
 
-def test_img_normalize(normed_img):
+@pytest.mark.parametrize("inplace", [True, False])
+def test_img_normalize(inplace, normed_img):
     img = base.LEEMImg(TESTDATA_DIR + "bremen.dat")
+    ref = img
     mcp = MCP_IMG_FNAME
-    img = img.normalize(mcp=mcp, dark_counts=100)
-    assert (img.image == normed_img.image).all()
+    if inplace:
+        img.normalize(mcp=mcp, inplace=inplace, dark_counts=100)
+    else:
+        img = img.normalize(mcp=mcp, inplace=inplace, dark_counts=100)
+    assert (img is ref) == inplace
+    assert_array_equal(img.image, normed_img.image)
+
+
+@pytest.mark.parametrize("inplace", [True, False])
+@pytest.mark.parametrize("copy", [True, False])
+def test_stack_normalize(inplace, copy, normed_img):
+    img = base.LEEMImg(TESTDATA_DIR + "bremen.dat")
+    if copy:
+        stack = base.LEEMStack([img.copy(), img.copy()])
+    else:
+        stack = base.LEEMStack([img, img])
+    ref = stack
+    if inplace:
+        stack.normalize(mcp=MCP_IMG_FNAME, inplace=inplace, dark_counts=100)
+    else:
+        stack = stack.normalize(mcp=MCP_IMG_FNAME, inplace=inplace, dark_counts=100)
+    assert (stack is ref) == inplace
+    for img, ref_img in zip(stack, ref):
+        assert (img is ref_img) == inplace
+        assert_array_equal(img.image, normed_img.image)
 
 
 def test_stack_align(short_stack):

@@ -105,7 +105,6 @@ def quad_line():
 
     return Line(c)
 
-
 @pytest.fixture(scope="module", params=IMG_FNAMES)
 def img_fname(request):
     return request.param
@@ -115,7 +114,7 @@ def img_fname(request):
 def img(img_fname):
     return LEEMImg(img_fname)
 
-@pytest.fixture(scope="module")
+@pytest.fixture()
 def normed_img():
     return LEEMImg(TESTDATA_DIR+"bremen_normed.tif")
 
