@@ -741,6 +741,49 @@ class ImageStack(DataObjectStack):
 
         return [images[i, :, :] for i in range(images.shape[0])]
 
+    def average(self, avg: int) -> ImageStack:
+        """Averages over consecutive images in a stack.
+
+        Parameters
+        ----------
+        avg : int
+            Number of consecutive image that will be averaged. The total number of images must be
+            dividable by *avg*.
+
+        Returns
+        -------
+        ImageStack
+            Stack with averaged images. The metadata of the first element in every averaged slice of
+            images is preserved.
+
+        Raises
+        ------
+        ValueError
+            If number of images in stack is not dividable by *avg*
+
+        Examples
+        --------
+        >>> stack = ImageStack("testdata/test_stack_IV_RuO2_normed_aligned_80-140.tif")[0:60]
+        >>> len(stack)
+        60
+        >>> avg = stack.average(4)
+        >>> len(avg)
+        15
+
+        """
+        if len(self) % avg != 0:
+            raise ValueError(
+                f"Number of Images in Stack ({len(self)}) is not dividable by {avg}"
+            )
+
+        imgs = []
+
+        for i in range(0, len(self) // avg):
+            img = np.mean(self[i * avg : i * avg + avg])
+            imgs.append(img)
+
+        return ImageStack(imgs)
+
     def save(self, fname: str) -> None:
         if fname.lower().endswith((".tiff", ".tif")):
             array = np.stack([image.image for image in self])
@@ -1065,7 +1108,7 @@ class Line(DataObject):
             raise TypeError(
                 f"Unsupported Operation '/' for types {type(self)} and {type(other)}"
             )
-        
+
         return self
 
     def __add__(self, other: Union[Line, Number, np.ndarray]) -> Line:
