@@ -6,8 +6,6 @@ Basic classes for Elmitec LEEM ".dat"-file parsing and data visualization.
 # plyint: disable=access-member-before-definition
 
 from __future__ import annotations
-from agfalta.leem.utility import imgify
-from agfalta.roi import ROI
 from typing import Any, Union, Optional
 from collections.abc import Iterable
 from numbers import Number
@@ -21,6 +19,8 @@ import cv2 as cv
 
 from agfalta.utility import parse_bytes, parse_cp1252_until_null
 from agfalta.dataobject import Image, ImageStack
+from agfalta.leem.utility import imgify
+from agfalta.roi import ROI
 
 
 class TimeOrigin:
@@ -74,7 +74,7 @@ class LEEMImg(Image):
 
         if warp_matrix is None:
             warp_matrix = self.warp_matrix
-        
+
         image = cv.warpPerspective(
             self.image,
             warp_matrix,
@@ -92,9 +92,10 @@ class LEEMImg(Image):
         return result
 
 
-    def normalize(self, mcp:Image = None, dark_counts:Union[int, float, Image]=100, inplace:bool = False) -> LEEMImg:
+    def normalize(self, mcp:Image = None, dark_counts: Union[int, float, Image]=100,
+                  inplace: bool = False) -> LEEMImg:
         if mcp is None:
-            mcp = self.mcp
+            mcp = self.mcp   # pylint: disable=access-member-before-definition
         mcp = imgify(mcp)
         if not isinstance(dark_counts, (int, float, complex)):
             dark_counts = imgify(dark_counts)
@@ -106,17 +107,17 @@ class LEEMImg(Image):
             self.mcp = mcp
             self.dark_counts = dark_counts
             return self
-        
+
         result.mcp = mcp
         result.dark_counts = dark_counts
         return result
-        
+
     def find_warp_matrix(self, template: Image, algorithm = "ecc", **kwargs) -> np.ndarray:
         if algorithm == "ecc":
             return do_ecc_align(self, template, **kwargs)
-        
+
         raise ValueError("Unknown Algorithm")
-    
+
 
     def parse(self, source: str) -> dict[str, Any]:
         if isinstance(source, Image):
@@ -140,7 +141,7 @@ class LEEMImg(Image):
             "warp_matrix": self.warp_matrix,
             "dark_counts": self.dark_counts
         }
-    
+
     def __json_decode__(self, **attrs) -> None:
         self.__init__(source=attrs["source"])
         if attrs["mcp"]:
@@ -246,7 +247,8 @@ class LEEMStack(ImageStack):
             return elements
         return type(self)(elements, virtual=self.virtual, time_origin=self._time_origin)
 
-    def align(self, inplace:bool = False, mask: Union[bool, np.ndarray, None] = True, **kwargs) -> LEEMStack:
+    def align(self, inplace:bool = False,
+              mask: Union[bool, np.ndarray, None] = True, **kwargs) -> LEEMStack:
         """
         Image registration of the stack
 
@@ -272,7 +274,7 @@ class LEEMStack(ImageStack):
         LEEMStack
             LEEMStack with aligned images. The stack itself is returned when 'inplace' = True
 
-        
+
         See Also
         --------
         find_warp_matrix
@@ -284,7 +286,11 @@ class LEEMStack(ImageStack):
             stack = self.copy()
 
         if mask:
-            roi = ROI.circle(x0=stack[0].width//2, y0=stack[0].height//2, radius=stack[0].width//2*9//10)
+            roi = ROI.circle(
+                x0=stack[0].width // 2,
+                y0=stack[0].height // 2,
+                radius=stack[0].width // 2 * 9 // 10
+            )
             mask = (~np.ma.getmaskarray(roi.apply(stack[0]).image)).astype(np.uint8)
         else:
             mask = None
@@ -292,7 +298,7 @@ class LEEMStack(ImageStack):
         warp_matrices = [np.eye(3, dtype=np.float32)]
 
         # find warp matrices between subsequent images
-  
+
         for img1, img2 in zip(tqdm(stack[1:]),stack):
             warp_matrix = img1.find_warp_matrix(img2, mask=mask, **kwargs)
             #img1.warp(warp_matrix, inplace = True)
@@ -306,10 +312,11 @@ class LEEMStack(ImageStack):
         # apply warp matrices to image
         for warp_matrix,img in zip(warp_matrices, stack):
             img.warp(warp_matrix=warp_matrix, inplace=True)
-        
+
         return stack
 
-    def normalize(self, mcp: Union[Image, str, None] = None, inplace:bool = False, **kwargs) -> LEEMStack:
+    def normalize(self, mcp: Union[Image, str, None] = None,
+                  inplace:bool = False, **kwargs) -> LEEMStack:
         """
         Normalization of images in stack
 
@@ -318,7 +325,7 @@ class LEEMStack(ImageStack):
         Parameter
         ---------
         mcp : Image, str or None
-            Image or filename of image if str. If 'None' the mcp attribute of the images will be 
+            Image or filename of image if str. If 'None' the mcp attribute of the images will be
             used
         inplace : bool, default False
             If 'True' the stack itself will be normalized
@@ -343,12 +350,12 @@ class LEEMStack(ImageStack):
             stack = self
         else:
             stack = self.copy()
-        
+
         for img in tqdm(stack):
             img.normalize(mcp=mcp, inplace=True, **kwargs)
-        
+
         return stack
-        
+
 # Format: meta_key: (byte_position, encoding)
 HEADER_ONE = {
     "_id":              (0, "cp1252"),
@@ -396,7 +403,8 @@ VARIABLE_HEADER = {
     244: (4, {"mcp_voltage":        (0, "float")})
 }
 UNIT_CODES = {"1": "V", "2": "mA", "3": "A", "4": "°C",
-              "5": "K", "6": "mV", "7": "pA", "8": "nA", "9": "\xb5A"}
+              "5": "K", "6": "mV", "7": "pA", "8": "nA", "9": "\xb5A",
+              "B": "µm"}
 
 
 def parse_dat(fname: str, debug: bool = False) -> dict[str, Any]:
@@ -438,6 +446,7 @@ def parse_dat(fname: str, debug: bool = False) -> dict[str, Any]:
                     print(f"\tknown: pressure {key} -> {data[key]}")
             elif bit in (110, 238):                             # field of view
                 fov_str = parse_cp1252_until_null(uk_file, debug)
+                #TODO make this a string: fov_str = "setup_str\tpreset_str"
                 if "LEED" in fov_str:
                     data["fov"] = -1
                 else:
@@ -481,30 +490,32 @@ def parse_dat(fname: str, debug: bool = False) -> dict[str, Any]:
 
     return data
 
-def do_ecc_align(input_img: Image, template_img: Image, max_iter: int = 500, eps: float = 1e-4, trafo: str = "translation", mask: Union[np.ndarray, None] = None) -> np.ndarray:
+def do_ecc_align(input_img: Image, template_img: Image, max_iter: int = 500,
+                 eps: float = 1e-4, trafo: str = "translation",
+                 mask: Union[np.ndarray, None] = None) -> np.ndarray:
     """
     Finds warp matrix between two Images using ECC
 
-    Takes two images and calculates the warp matrix between both applying the transformation 
-    specified by 'trafo' using the ECC Algorithm. A optional mask can be given to masked areas of 
+    Takes two images and calculates the warp matrix between both applying the transformation
+    specified by 'trafo' using the ECC Algorithm. A optional mask can be given to masked areas of
     the images that are not taken into account during registration
 
     Parameter
     ---------
     input_img, template_image : Image
         The warp matrix will be determined to match the 'input_img' onto the 'tempate_img'
-        template_img = warp_matrix @ input_img (@ means matrix multiplication) 
+        template_img = warp_matrix @ input_img (@ means matrix multiplication)
     max_iter : int, default 500
         Number of iterations to find the warp matrix. Regstration fails if max_iter is exceeded
     eps : float, default 1e-4
         Abortion criterion to determine successfull registration
     trafo : str, default "translation"
-        The transformation that is applied to the images. 'trafo' must be either 
+        The transformation that is applied to the images. 'trafo' must be either
             - "translation" for only x,y shifting of images
             - "rigid" or "euclidean" for tarnslation, rotation and scaling
             - "affine" for translation, rotation, scaling and shearing
     mask : np.ndarray or None, default None
-        The mask must be a 2D numpy array of dtype=np.uint8 containing 0 where pixels in the images 
+        The mask must be a 2D numpy array of dtype=np.uint8 containing 0 where pixels in the images
         will not be taken into account during registratio and 1 when they are
 
     Returns
