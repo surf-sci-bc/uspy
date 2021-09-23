@@ -14,7 +14,7 @@ import scipy.interpolate
 import scipy.optimize
 import scipy.constants as sc
 import scipy.signal
-#import skimage.measure
+import skimage.measure
 # import agfalta.leem.driftnorm as driftnorm
 
 # from agfalta.leem.base import LEEMStack#, Loadable

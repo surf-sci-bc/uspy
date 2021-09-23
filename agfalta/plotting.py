@@ -1,146 +1,157 @@
 """Plotting helper functions."""
-# pylint: disable=invalid-name
-# pylint: disable=missing-docstring
 # pylint: disable=too-many-arguments
+# pylint: disable=invalid-name
 
 
+from __future__ import annotations
+from typing import Union, Optional
+from collections.abc import Iterable
+from numbers import Number
 import os.path
 import itertools
-from collections import abc
-
 import math
+
 import numpy as np
-import cv2
-from matplotlib import pyplot as plt
-import matplotlib.colors
 import pandas as pd
+import cv2 as cv
+from matplotlib import pyplot as plt
+import matplotlib as mpl
+import matplotlib.colors
 import skvideo.io
 from IPython.display import display, Video
 
+import agfalta.dataobject as do
 from agfalta.leem.utility import stackify, imgify
 from agfalta.leem.processing import roify, get_max_variance_idx, ROI, RSM
 from agfalta.leem.driftnorm import normalize_image
 
 
 def plot_img(
-    img,
-    fields=("temperature", "pressure", "energy", "fov"),
-    field_color=None,
-    mcp=None,
-    dark_counts=100,
-    contrast=None,
-    invert=False,
-    log=False,
-    ax=None,
-    title=True,
-    figsize=None,
-    dpi=100,
-    ticks=False,
-    cutout_diameter=None,
+    img: Union[do.Image, str],
+    fields: Optional[Union[str, Iterable[str]]] = None,
+    field_color: Optional[str] = None,
+    contrast: Optional[Union[str, Iterable[Number, Number]]] = None,
+    invert: bool = False,
+    log: bool = False,
+    cmap: str = "gray",
+    ax: Optional[mpl.axes.Axes] = None,
+    title: Optional[Union[str, bool]] = None,
+    figsize: Optional[Iterable[Number, Number]] = None,
+    dpi: int = 100,
+    ticks: bool = False,
+    mask: Union[ROI, bool] = False,
     **kwargs,
-):
-    """Plots a single LEEM image with some metadata. Takes either a file name
-    or a LEEMImg object. Metadata fields given are shown in the corners of the
-    image.
+) -> mpl.axes.Axes:
+    """Plots a single image with some metadata.
 
-    Optional keyword arguments:
-    - fields:
-      List of metadata fields to show in the image. Set to None to disable.
-      Maximum 4 fields show up: (topleft, topright, bottomleft, bottomright)
-    - field_color:
-      Color of field labels (defaults to yellow normally, defaults to black if
-      invert or cutout_diameter is set)
-    - mcp:
-      Filename of a channelplate background file (will be divided by)
-    - dark_counts:
-      Works only together with mcp -- subtracts dark_counts from
-      the image and from the background file before dividing them (default 100)
-    - contrast:
-      "auto": Use the maximum dynamic range of the image.
-      "inner": Same as "auto", but it will only use the inner 60 % of the image.
-      (n, m) -- two numbers: Use those values as lower/upper intensity boundary
-    - invert:
-      Invert grayscale
-    - log:
-      Whether to show the logarithmic (useful for LEED)
-    - ax:
-      If given, use this matplotlib axes to plot on. Else make a new one.
-    - title:
-      Defaults to the filename, set it to an empty string "" to disable it.
-      (only if ax is not given)
-    - figsize:
-      Size of image in inches (only if ax is not given)
-    - dpi:
-      Image resolution (only if ax is not given)
-    - ticks:
-      Whether to show x and y coordinates for the pixels (only if ax is not given)
-    - cutout_diameter:
-      Cut away the beam tube for publication-ready images:
-      A value of 1 means to use the biggest circle that fits in the image,
-      lower values mean smaller cutouts. Also sets the "fields" font color
-      to black
-    All other arguments will be passed to matplotlib's plot() function (e.g. linewidth)
-    Returns an axes object.
+    Uses matplotlib's imshow() to display an image. It either takes a dataobject.Image or just
+    the path to an image as mandatory argument. Optional arguments change the plot
+    appearance.
+
+    Parameters
+    ----------
+    img : Union[do.Image, str]
+        The image that will be displayed.
+    fields : Union[str, Iterable[str]], optional
+        Iterable of metadata field strings. The corresponding metadata will be displayed in the
+        image corners (maximum 4 fields: topleft, topright, bottomleft, bottomright).
+        Defaults to sensible values for the type of image that is put in.
+    field_color : str, optional
+        Font color of the field strings in the corners, by default yellow or black, depending on
+        the background.
+    contrast : Union[str, Iterable[Number, Number]], optional
+        Sets the lower and upper intensity value of the image. None and "auto" will use the
+        full dynamical range. "inner" does the same but disregards the outer 20% of the image.
+        Alternatively, an iterable with two numbers for the lower and upper boundary is given
+        directly. Defaults to None.
+    invert : bool, optional
+        If True, image intensity is inverted. By default False.
+    log : bool, optional
+        If True, plots the logarithmic of the image. By default False.
+    ax : mpl.axes.Axes, optional
+        If given, use this matplotlib axes object to plot on. Otherwise create a new one.
+    title : Union[str, bool], optional
+        Sets an image title. Defaults to the image's source (usually the path). When Latex is
+        enabled for matplotlib, this is set to False.
+    figsize : Iterable[Number, Number], optional
+        Size of the figure to plot on. Has no effect if a preexisting ax is given (see above).
+    dpi : int, optional
+        Plot DPI, by default 100. Has no effect if a preexisting ax is given (see above).
+    ticks : bool, optional
+        If True, show x and y coordinates for the pixels on each axis, by default False.
+    mask : Union[ROI, bool], optional
+        If given, use a ROI to mask out parts of the image. If set to True, take the default
+        mask of the image class. By default False.
+    cmap : str, optional
+        The colormap that matplotlib should use. Defaults to grayscale.
+    **kwargs :
+        All other arguments will be passed to matplotlib's plot() function (e.g., linewidth).
+
+    Returns
+    -------
+    ax : mpl.axes.Axes
+        The matplotlib axes object that the plot was drawn on.
     """
-    img = imgify(img)
-    if mcp is not None:
-        img = normalize_image(img, mcp=mcp, dark_counts=dark_counts)
-    if title is False or not isinstance(img.source, str):
-        title = ""
-    elif title is None or title is True:
-        title = img.source
-    if title and len(title) > 25:
-        title = f"...{title[-25:]}"
+
+    if isinstance(img, str):
+        img = do.Image(img)
+
+    if title is None and mpl.rcParams["text.usetex"]:
+        title = False
+    elif title is True:
+        title = str(img.source)
+        if len(title) > 25:
+            title = f"...{title[-25:]}"
+
     if isinstance(fields, str):
         fields = [fields]
 
     ax = _get_ax(ax, figsize=figsize, dpi=dpi, ticks=ticks, title=title, axis_off=True)
 
     data = np.nan_to_num(img.image)
+    if mask is True:
+        mask = img.default_mask
+    if isinstance(mask, ROI):
+        data = mask.apply(data, return_array=True)
+
     if log:
-        data = np.log(data)
+        data = np.ma.log(data)
 
-    if cutout_diameter:
-        h, w = data.shape
-        radius = min(h, w) / 2 * cutout_diameter
-        y, x = np.arange(0, h), np.arange(0, w)
-        y, x = y[:, np.newaxis], x[np.newaxis, :]
-        mask = (x - w / 2) ** 2 + (y - h / 2) ** 2 > radius ** 2
-        data = np.ma.masked_where(mask, data)
-
-    if contrast in ("auto", "maximum"):
+    if contrast is None or contrast in ("auto", "maximum"):
         contrast = data.min(), data.max()
     elif contrast == "inner":
         dy, dx = map(int, 0.2 * np.array(data.shape))
         inner = img.image[dy:-dy, dx:-dx]
         contrast = inner.min(), inner.max()
-    if isinstance(contrast, abc.Iterable) and len(contrast) == 2:
-        data = np.clip(data, contrast[0], None) - contrast[0]
-        data = data / (contrast[1] - contrast[0]) * 255
-        data = np.clip(data, 0, 255).astype(np.uint8)
-    elif contrast is not None:
-        raise ValueError(f"Invalid '{contrast=}'")
+    elif log:
+        # contrast = np.where(np.array(contrast) > 0, np.log(contrast), 0)
+        contrast = np.array(contrast)
+        contrast[contrast > 0] = np.log(contrast[contrast > 0])
+
+    data = np.clip(data, contrast[0], None) - contrast[0]
+    data = data / (contrast[1] - contrast[0]) * 255
+    data = np.clip(data, 0, 255).astype(np.uint8)
 
     if invert:
         data = -data + data.max()
 
-    cmap = kwargs.pop("cmap", "gray")
     ax.imshow(
         data, cmap=cmap, clim=(np.nanmin(data), np.nanmax(data)), aspect=1, **kwargs
     )
 
     if fields is None:
-        return ax
+        fields = img.default_fields
 
     if field_color is None:
         field_color = "yellow"
-        if cutout_diameter or invert:
+        if mask or invert:
             field_color = "black"
+
     for i, field in enumerate(fields):
         if i > 3:
             print(f"Ignoring field {field}, not enough space")
             continue
-        if field is None:
+        if not field:
             continue
         ax.text(
             x=_MPL_IMG_POS[i][2],
@@ -153,12 +164,6 @@ def plot_img(
             fontsize=14,
         )
     return ax
-
-
-def plot_image(*args, **kwargs):
-    """Alias for agfalta.leem.plotting.plot_img()."""
-    print("plot_image() is DEPRECATED, use plot_img() instead")
-    return plot_img(*args, **kwargs)
 
 
 def make_video(
@@ -252,7 +257,7 @@ def make_video(
         contrast = sorted((c0, c1))
         print(f"Set contrast to {contrast}")
         contrast_type = "static"
-    elif isinstance(contrast, abc.Iterable) and len(contrast) == 2:
+    elif isinstance(contrast, Iterable) and len(contrast) == 2:
         contrast_type = "static"
     else:
         raise ValueError(f"Invalid '{contrast=}'")
@@ -297,19 +302,19 @@ def make_video(
             contrast = inner.min(), inner.max()
         if contrast_type == "auto":
             contrast = data.min(), data.max()
-        data = cv2.normalize(
+        data = cv.normalize(
             np.clip(data, contrast[0], contrast[1]),
             np.ones_like(data, dtype=np.uint8),
             0,
             255,
-            norm_type=cv2.NORM_MINMAX,
+            norm_type=cv.NORM_MINMAX,
         )
 
         if invert:
             data = -data + data.max()
 
         if fields:
-            data = cv2.cvtColor(data, cv2.COLOR_GRAY2RGB)
+            data = cv.cvtColor(data, cv.COLOR_GRAY2RGB)
             for i, field in enumerate(fields):
                 if field is None:
                     continue
@@ -318,15 +323,15 @@ def make_video(
 
                 for pos, char in enumerate(text):
                     xy = _CV2_IMG_POS(i, height, width, text, pos=pos)
-                    data = cv2.putText(
+                    data = cv.putText(
                         data,
                         char,
                         org=xy,
-                        fontFace=cv2.FONT_HERSHEY_SIMPLEX,
+                        fontFace=cv.FONT_HERSHEY_SIMPLEX,
                         fontScale=1,
                         color=color,
                         thickness=2,
-                        lineType=cv2.LINE_AA,
+                        lineType=cv.LINE_AA,
                     )
         writer.writeFrame(data)
     writer.close()
@@ -371,12 +376,6 @@ def plot_mov(stack, skip=None, ncols=4, virtual=True, dpi=100, **kwargs):
         plot_img(img, ax=ax, **kwargs)
 
     return axes.flatten()
-
-
-def plot_movie(*args, **kwargs):
-    """Alias for agfalta.leem.plotting.plot_mov()."""
-    print("plot_movie() is DEPRECATED, use plot_mov() instead")
-    return plot_mov(*args, **kwargs)
 
 
 def plot_meta(stack, fields="temperature"):
@@ -641,7 +640,7 @@ _MPL_IMG_POS = {  # (verticalalignment, horizontalalignment, x, y)
 
 
 _CV2_CONTRASTS = {
-    "auto": cv2.NORM_MINMAX,
+    "auto": cv.NORM_MINMAX,
 }
 
 

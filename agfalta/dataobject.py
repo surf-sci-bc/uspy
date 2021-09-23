@@ -168,6 +168,7 @@ class DataObject(Loadable):
     _data_keys = ()
     _unit_defaults = {}
     _meta_defaults = {}
+    default_fields = ()
 
     def __new__(cls, *_args, **_kwargs):
         obj = super().__new__(cls)  # really not forward args and kwargs?
@@ -224,8 +225,10 @@ class DataObject(Loadable):
         """Dictionary with unit strings for meta values."""
         return self._units
 
-    def get_field_string(self, field: str, fmt: str = ".5g") -> str:
+    def get_field_string(self, field: str, fmt: Optional[str] = None) -> str:
         """Get a string that contains the value and its unit."""
+        if fmt is None:
+            fmt = ".5g"
         value = getattr(self, field)
         if value == np.nan:
             return "NaN"
@@ -599,6 +602,8 @@ class Image(DataObject):
     # pylint: disable=no-member
     _data_keys = ("image",)
     _meta_keys = ("width", "height")
+    # TODO make a sensible default
+    default_mask = None
 
     def __init__(self, *args, **kwargs) -> None:
         self._mask = None

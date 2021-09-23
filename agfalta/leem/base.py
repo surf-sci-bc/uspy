@@ -41,8 +41,9 @@ class LEEMImg(Image):
     """
 
     _meta_defaults = {
-        "energy": np.nan,
         "temperature": np.nan,
+        "pressure": np.nan,
+        "energy": np.nan,
         "fov": "Unknown FoV",
         "timestamp": np.nan,
         "mcp": None,
@@ -63,6 +64,7 @@ class LEEMImg(Image):
         "x_position": "µm",
         "y_position": "µm",
     }
+    default_fields = ("temperature", "pressure", "energy", "fov")
 
     def __init__(
         self, *args, time_origin: Union[TimeOrigin, Number] = None, **kwargs
@@ -71,6 +73,16 @@ class LEEMImg(Image):
             time_origin = TimeOrigin(time_origin)
         super().__init__(*args, **kwargs)
         self._time_origin = time_origin  # is a list so it can be mutable
+
+    def get_field_string(self, field: str, fmt: Optional[str] = None) -> str:
+        """Get a string that contains the value and its unit. Some LEEM-specific fields
+        have different default formats than the pure DataObject method."""
+        if fmt is None:
+            if field == "temperature":
+                fmt = ".0f"
+            elif field == "energy":
+                fmt = ".3g"
+        return super().get_field_string(field, fmt)
 
     def warp(self, warp_matrix=None, inplace: bool = False):
 
@@ -148,15 +160,19 @@ class LEEMImg(Image):
         try:
             if source.endswith(".dat"):
                 self._source = source
-                return parse_dat(source)
-            raise AttributeError
+                idict = parse_dat(source)
+            else:
+                raise AttributeError
         except AttributeError:
             try:
-                return super().parse(source)
+                idict = super().parse(source)
             except:
                 raise FileNotFoundError(
                     f"{source} does not exist or can't read."
                 ) from None
+        if idict.get("temperature", 0) > 3000:
+            idict["temperature"] = np.nan
+        return idict
 
     def __json_encode__(self) -> dict:
         return {
