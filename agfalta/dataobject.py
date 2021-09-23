@@ -3,7 +3,7 @@ Basic data containers.
 """
 # pylint: disable=abstract-method
 from __future__ import annotations
-from typing import Any, Union, Optional
+from typing import Any, Callable, Sequence, Union, Optional
 from collections.abc import Iterable
 from numbers import Number
 from pathlib import Path
@@ -21,6 +21,8 @@ import imageio
 import json_tricks
 import tifffile
 from tifffile.tifffile import TiffFileError
+
+import agfalta.roi as roi
 
 
 class Loadable:
@@ -156,21 +158,27 @@ class Loadable:
 class DataObject(Loadable):
     """
     Base class for data objects like images, lines, points, ...
+
+    Parameters
+    ----------
+    source: Any
+        The source from which the object is created
     """
 
     _data_keys = ()
     _unit_defaults = {}
     _meta_defaults = {}
 
-    def __new__(cls, *_args, **_kwargs):
-        obj = super().__new__(cls)      # really not forward args and kwargs?
+    def __new__(cls, *args, **kwargs):
+        obj = super().__new__(cls)  # really not forward args and kwargs?
         obj._data = {}
         obj._meta = obj._meta_defaults.copy()
         obj._units = obj._unit_defaults.copy()
         obj._source = None
         return obj
 
-    def __init__(self, source) -> None:
+    def __init__(self, source: Any) -> None:
+        """__init__(self, source: Any)"""
         parsed = self.parse(source)
         for k in self._data_keys:
             if k not in parsed:
@@ -268,7 +276,19 @@ class DataObject(Loadable):
         return True
 
     def is_compatible(self, other: DataObject) -> bool:
-        """Check if another DataObject has data of the same dimensions."""
+        """[summary]
+
+        Parameters
+        ----------
+        other : DataObject
+            [description]
+
+        Returns
+        -------
+        bool
+            [description]
+        """
+        # """Check if another DataObject has data of the same dimensions."""
         return isinstance(other, type(self))
 
     # def _reduce(self) -> dict:
@@ -721,6 +741,49 @@ class ImageStack(DataObjectStack):
 
         return [images[i, :, :] for i in range(images.shape[0])]
 
+    def average(self, avg: int) -> ImageStack:
+        """Averages over consecutive images in a stack.
+
+        Parameters
+        ----------
+        avg : int
+            Number of consecutive image that will be averaged. The total number of images must be
+            dividable by *avg*.
+
+        Returns
+        -------
+        ImageStack
+            Stack with averaged images. The metadata of the first element in every averaged slice of
+            images is preserved.
+
+        Raises
+        ------
+        ValueError
+            If number of images in stack is not dividable by *avg*
+
+        Examples
+        --------
+        >>> stack = ImageStack("testdata/test_stack_IV_RuO2_normed_aligned_80-140.tif")[0:60]
+        >>> len(stack)
+        60
+        >>> avg = stack.average(4)
+        >>> len(avg)
+        15
+
+        """
+        if len(self) % avg != 0:
+            raise ValueError(
+                f"Number of Images in Stack ({len(self)}) is not dividable by {avg}"
+            )
+
+        imgs = []
+
+        for i in range(0, len(self) // avg):
+            img = np.mean(self[i * avg : i * avg + avg])
+            imgs.append(img)
+
+        return ImageStack(imgs)
+
     def save(self, fname: str) -> None:
         if fname.lower().endswith((".tiff", ".tif")):
             array = np.stack([image.image for image in self])
@@ -732,6 +795,54 @@ class ImageStack(DataObjectStack):
 class Line(DataObject):
     """
     Base class for all 1D data.
+
+    Parameters
+    ----------
+    source : Union[str, np.ndarray]
+        When a str: path to .csv file with x y data as columns. The delimiter is guessed from the file
+        When np.ndarray: 2d numpy array containing the x and y values either als rows or cols
+
+    Attributes
+    ----------
+    x, y : np.ndarray
+        Numpy arrays containing the x and y data of the line
+    ydim, xdmin : str
+        Dimension of the x and y values, e.g. time, energy ...
+
+    Examples
+    --------
+    Initialization from .csv file
+
+    .. code-block:: none
+
+       example.csv:
+       U in V,  I in A
+       0.0,     0.0
+       1.0,     2.0
+
+    >>> line = Line("example.csv")
+    >>> line.x, line.y
+    array([0.0, 1.0]), array([0.0, 2.0])
+
+    When reading from a .csv file the column header is interpreted as *xdim* and *ydim*. If the
+    header has the form *A in B*, *A* is the dimension and *B* is the corresponding unit.
+
+    >>> line.xdim, line.ydim
+    U, I
+
+    The x and y values are also accessible over their corresponding dimension:
+
+    >>> line.U
+    array([0.0, 1.0])
+
+    Initialization from numpy array
+
+    >>> line = Line(np.array([[0.0, 1.0], [0.0, 2.0]]))
+    >>> line.x
+    array([0.0, 1.0])
+    >>> line.xdim, line.ydim
+    x, y
+
     """
 
     # pylint: disable=no-member
@@ -742,8 +853,8 @@ class Line(DataObject):
     }
     _unit_defaults = {"x": "a.u.", "y": "a.u."}
 
-    # def __init__(self, *args, **kwargs) -> None:
-    #    super().__init__(*args, **kwargs)
+    def __init__(self, source: Union[str, np.ndarray]) -> None:
+        super().__init__(source)
 
     def __getattr__(self, attr: str) -> Any:
         # _data and _meta have to be handled by super() to avoid recursion
@@ -768,7 +879,7 @@ class Line(DataObject):
         else:
             return super().__setattr__(attr, value)
 
-    def parse(self, source: Union(str, np.ndarray)) -> dict[str, Any]:
+    def parse(self, source: Union[str, np.ndarray]) -> dict[str, Any]:
         if isinstance(source, np.ndarray):
             if source.ndim == 2:
                 if source.shape[0] == 2:
@@ -814,11 +925,11 @@ class Line(DataObject):
     def length(self) -> int:
         """Length of the x and y data."""
         return len(self.x)
-    
+
     @property
     def area(self) -> float:
         "Area under the line integrated by simpson rule"
-        return scipy.integrate.simpson(self.y,self.x)
+        return scipy.integrate.simpson(self.y, self.x)
 
     @property
     def dataframe(self) -> pd.DataFrame:
@@ -830,8 +941,14 @@ class Line(DataObject):
                 f"{self.ydim} in {self._units['y']}",
             ],
         )
-    
-    def interpolate(self, x_data: Union[Number, list[Number], np.ndarray, None] = None, order: Union[str, int] = "cubic", **kwargs) -> Union[np.ndarray, function]:
+
+    def interpolate(
+        self,
+        x_data: Union[Number, list[Number], np.ndarray, None] = None,
+        order: Union[str, int] = "cubic",
+        **kwargs,
+    ) -> Union[np.ndarray, Callable]:
+
         """
         Interpolates the x,y data of the Line with a spline of order 'order'
 
@@ -843,7 +960,7 @@ class Line(DataObject):
             When a string must be either "linear", "quad" or "cubic".
             When an int must be 1 <= order <= 5
         kwargs:
-            Additional keyword arguments are passed through to 
+            Additional keyword arguments are passed through to
             scipy.interpolate.InterpolatedUnivariateSpline
 
         Returns
@@ -854,15 +971,13 @@ class Line(DataObject):
             the interpolation function itself
         """
 
-        k = {
-            "linear": 1,
-            "quad": 2,
-            "cubic": 3
-        }
+        k = {"linear": 1, "quad": 2, "cubic": 3}
         if order not in k.keys():
             k[order] = order
 
-        f = scipy.interpolate.InterpolatedUnivariateSpline(self.x, self.y, k=k[order], **kwargs)
+        f = scipy.interpolate.InterpolatedUnivariateSpline(
+            self.x, self.y, k=k[order], **kwargs
+        )
         if x_data is None:
             return f
         return f(x_data)
@@ -871,18 +986,59 @@ class Line(DataObject):
         """Returns the integrated values of a cubic spline evaluated at the x values of the line"""
         f = self.interpolate()
         y = np.array([f.integral(self.x[0], x) for x in self.x])
-        return Line(np.array([self.x,y]))
+        return Line(np.array([self.x, y]))
 
     def derivative(self) -> Line:
         """Returns the derivative of a cubic spline evaluated at the x values of the line"""
         f = self.interpolate()
         y = np.array([f.derivative()(x) for x in self.x[1:]])
-        return Line(np.array([self.x[1:],y]))
+        return Line(np.array([self.x[1:], y]))
+
+    def smooth(self, kernel: Union[int, np.ndarray]) -> Line:
+        """
+        Recieves a kernel and convolves the values of the line
+
+        Parameters
+        ----------
+        kernel : np.ndarray, int
+            Kernel that will be convolved with the line data.
+            If ``int`` an equaly distributed kernel of size ``kernel`` will be applied.
+
+        Returns
+        -------
+        Line
+            smoothed line
+
+        Examples
+        --------
+        Rolling average over three data points of line. Note that sum(kernel) should be 1.
+
+        >>> kernel = np.array([1,1,1])/3
+        >>> smoothed = line.smooth(kernel)
+
+        Above code is equivalent to:
+
+        >>> smoothed = line.smooth(3)
+
+        The weights do not have to be the same. To put more weigh on the current point than on
+        adjecent points:
+
+        >>> kernel = np.array([1,2,1])/4
+        >>> smoothed = line.smooth(kernel)
+        """
+
+        if isinstance(kernel, int):
+            kernel = np.ones(kernel) / kernel
+
+        line = self.copy()
+        # pylint: disable=atribute-definded-outside-init
+        line.x, line.y = self.x, np.convolve(self.y, kernel, mode="same")
+        return line
 
     def save(self, fname: str) -> None:
         """
         Saves the line as .csv
-        
+
         Parameters
         ----------
         fname: str
@@ -898,3 +1054,315 @@ class Line(DataObject):
             self.dataframe.to_csv(fname, index=False, header=True)
         else:
             super().save(fname)
+
+    def is_compatible(self, other: Line) -> bool:
+        try:
+            assert super().is_compatible(other)
+            assert self.length == other.length
+            return True
+        except AssertionError:
+            return False
+
+    def __iadd__(self, other: Union[Line, Number, np.ndarray]) -> Line:
+        if isinstance(other, Line):
+            self.y += other.y
+        elif isinstance(other, (Number, np.ndarray)):
+            self.y += other
+        else:
+            raise TypeError(
+                f"Unsupported Operation '+' for types {type(self)} and {type(other)}"
+            )
+
+        return self
+
+    def __isub__(self, other: Union[Line, Number, np.ndarray]) -> Line:
+        if isinstance(other, Line):
+            self.y -= other.y
+        elif isinstance(other, (Number, np.ndarray)):
+            self.y -= other
+        else:
+            raise TypeError(
+                f"Unsupported Operation '-' for types {type(self)} and {type(other)}"
+            )
+
+        return self
+
+    def __imul__(self, other: Union[Line, Number, np.ndarray]) -> Line:
+        if isinstance(other, Line):
+            self.y *= other.y
+        elif isinstance(other, (Number, np.ndarray)):
+            self.y *= other
+        else:
+            raise TypeError(
+                f"Unsupported Operation '*' for types {type(self)} and {type(other)}"
+            )
+
+        return self
+
+    def __itruediv__(self, other: Union[Line, Number, np.ndarray]) -> Line:
+        if isinstance(other, Line):
+            self.y /= other.y
+        elif isinstance(other, (Number, np.ndarray)):
+            self.y /= other
+        else:
+            raise TypeError(
+                f"Unsupported Operation '/' for types {type(self)} and {type(other)}"
+            )
+
+        return self
+
+    def __add__(self, other: Union[Line, Number, np.ndarray]) -> Line:
+        result = self.copy()
+        result += other
+        return result
+
+    def __radd__(self, other: Union[Line, Number, np.ndarray]) -> Line:
+        if other == 0:
+            return self
+        return self.__add__(other)
+
+    def __sub__(self, other: Union[Line, Number, np.ndarray]) -> Line:
+        result = self.copy()
+        result -= other
+        return result
+
+    def __mul__(self, other: Union[Line, Number, np.ndarray]) -> Line:
+        result = self.copy()
+        result *= other
+        return result
+
+    def __rmul__(self, other: Union[Line, Number, np.ndarray]) -> Line:
+        return self.__mul__(other)
+
+    def __truediv__(self, other: Union[Line, Number, np.ndarray]) -> Line:
+        result = self.copy()
+        result /= other
+        return result
+
+
+class IntensityLine(Line):
+    """
+    A Class to extract Intensities from an ImageStack
+
+    Unlike Line from which it inherits it takes an ImagseStack, a ROI and a String representing the
+    dimension along which the itensities in the stack should be extracted, e.g. time, energy ...
+    For each image the the mean value of intensites inside the ROI is extracted as y-values together
+    with the dimensional value of the image (time, energy, ...) as the lines x-axes.
+    """
+
+    def __init__(self, stack: ImageStack, roi_: roi.ROI, xaxis: str) -> None:
+        """
+        Parameters
+        ----------
+        stack : ImageStack
+            ImageStack from which the intensities will be extracted
+        roi_ : roi.ROI
+            ROI from within the intensities will be extracted in each image,
+        xaxis : str
+            a string indicates the axis of the dimension along the intensites shall be extracted,
+            e.g. time, energy ...
+        """
+        super().__init__((stack, roi_, xaxis))
+
+    def parse(self, source: tuple[ImageStack, roi.ROI, str]) -> dict[str, Any]:
+        """Applies a ROI to an Imagestack and extracts mean of ROI from each image
+
+        Parameters
+        ----------
+        source : tuple[ImageStack, roi.ROI, str]
+            Must be a Tuple of
+            
+            1. an ImageStack from which the intensities will be extracted,
+            2. a ROI from within the intensities will be extracted in each image,
+            3. a string indicates the axis of the dimension along the intensites shall be extracted,\
+            e.g. time, energy ...
+
+        Returns
+        -------
+        dict
+            a dict containing the x,y-values of the line, the stack, the ROI, the x- and 
+            y-dimensions and the unit of the x axis extracted from the images. The y-dimension is 
+            "intensity" by default with unit "a.u."
+        """
+
+        stack, roi_, xaxis = source
+        self._source = source
+        y = []
+        x = []
+        for img in stack:
+            masked_img = roi_.apply(img)
+            y.append(np.mean(masked_img.image))
+            x.append(getattr(img, xaxis))
+
+        return {
+            "x": np.array(x),
+            "y": np.array(y),
+            "stack": stack,
+            "roi": roi_,
+            "xdim": xaxis,
+            "ydim": "intensity",
+            "x_unit": stack[0].unit[xaxis],
+        }
+
+
+class StitchedLine(Line):
+    """
+    Class for combining IntensityLines from multiple ImageStacks.
+
+    Works like IntensityLine, but accepts multiple ImageStacks and the same amount of ROIs. Every
+    stack is mapped to a ROI (in the order that they are given, e.g. first stack to first ROI) and
+    the intensity profile is extracted. If the x-values of the extracted Lines are overlapping, the
+    Lines are scaled to matched each other. The stacks may be sorted by their first xaxis value
+    before extraction.
+
+    Attributes
+    ----------
+    x, y : np.ndarray
+        x and y values of stitched lines
+    lines : list[IntensityLine]
+        list of single IntensityLines that are used for stitching
+    xdim, ydim : str
+        string representing the dimension of the x and y values, default for y is "intensity"
+    """
+
+    def __init__(
+        self,
+        stacks: Union[Sequence[ImageStack], ImageStack],
+        rois: Union[Sequence[roi.ROI], roi.ROI],
+        xaxis: str,
+    ) -> None:
+        """
+        Parameters
+        ----------
+        stacks : Sequence[ImageStack] or ImageStack
+            ImageStacks, which will be used for Line extraction
+        rois : Sequence[roi.ROI] or roi.ROI
+            ROIs used for Line extraction. Must be of the same length as ``stacks``. If stacks is a
+            single stack, ROI has to be a single ROI
+        xaxis:
+            a string indicates the axis of the dimension along the intensites shall be extracted,
+            e.g. time, energy ...
+
+        Raises
+        ------
+        ValueError
+            When len(stacks) != len(rois)
+        """
+        if isinstance(stacks, ImageStack):
+            stacks = [stacks]
+            rois = [rois]
+
+        super().__init__((stacks, rois, xaxis))
+
+    def parse(self, source: Sequence[Sequence, Sequence, str]) -> dict[str, Any]:
+        """Extract IntensityLines from Stacks and handle their stitching.
+
+        Parameters
+        ----------
+        source : Sequence[Sequence, Sequence, str]
+            List or tuple containing
+
+            1. A list or tuple of ImageStacks
+            2. A list or tuple of ROIs with the same length as the tuple of ImageStacks
+            3. A str representing the xaxis along which the intensity is extracted
+
+        Returns
+        -------
+        dict[str, Any]
+            dict containing all metadata and data, including rois and stacks
+
+        Raises
+        ------
+        ValueError
+            When len(stacks) != len(rois)
+        """
+
+        stacks, rois, xaxis = source
+
+        if len(stacks) != len(rois):
+            raise ValueError(f"Cannot map {len(rois)} to {len(stacks)}")
+
+        lines = [
+            IntensityLine(stack, roi, xaxis)
+            for stack, roi in sorted(
+                zip(stacks, rois), key=lambda x: getattr(x[0][0], xaxis)
+            )
+        ]
+
+        if len(lines) == 1:
+            x, y = lines[0].x, lines[0].y
+        else:
+            x, y = self._stitch_curves(lines)
+
+        self._source = source
+
+        return {
+            "x": x,
+            "y": y,
+            "lines": lines,
+            "xdim": xaxis,
+            "ydim": "intensity",
+            "x_unit": stacks[0][0].unit[xaxis],
+        }
+
+    def _stitch_curves(
+        self, lines: Sequence[IntensityLine]
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Combine x,y values to mulitple lines to one pair of x,y values
+
+        Parameters
+        ----------
+        lines : Sequence[IntensityLine]
+            List or tuple of Lines to be stitched together
+
+        Returns
+        -------
+        tuple[np.ndarray, np.ndarray]
+            tuple containing the x and y values of the stitched curve
+        """
+        coeffs = [1]
+
+        for curr_line, next_line in zip(lines, lines[1:]):
+            # calculate overlap in x values between lines, assuming ordered values:
+
+            start_x = next_line.x[0]
+            end_x = curr_line.x[-1]
+
+            if start_x > end_x:
+                print("No Overlap detected.")
+                coeffs.append(1)
+            elif start_x == end_x:
+                print("One Point overlap")
+                coeffs.append(next_line.y[0] / curr_line.y[-1])
+            else:
+                curr_line_points = np.array(
+                    [
+                        (x, y)
+                        for x, y in zip(curr_line.x, curr_line.y)
+                        if start_x <= x <= end_x
+                    ]
+                )
+                next_spline = next_line.interpolate(order="cubic")
+
+                func = lambda x, a: a * next_spline(x)
+                popt, _ = scipy.optimize.curve_fit(
+                    func, curr_line_points[:, 0], curr_line_points[:, 1]
+                )
+
+                coeffs.append(popt)
+
+        x_data = np.array([])
+        y_data = np.array([])
+
+        for coeff, line in zip(coeffs, lines):
+            x_data = np.append(x_data, line.x)
+            y_data = np.append(y_data, coeff * line.y)
+
+        # sort values and average over same x values
+        data = np.array([x_data, y_data]).T
+        df = pd.DataFrame(data).groupby(0).mean()
+
+        x = df.index.values
+        y = df.values.flatten()
+
+        return x, y

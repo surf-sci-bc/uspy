@@ -1,12 +1,11 @@
 """Tests the agfalta.base module."""
 
 from __future__ import annotations
-from typing import Any, Optional
 import numbers
 
 import numpy as np
 import pandas as pd
-from numpy.testing import assert_array_equal
+from numpy.testing import assert_almost_equal, assert_array_equal
 import pytest
 from agfalta.dataobject import DataObject, DataObjectStack, Image, ImageStack, Line
 from deepdiff.diff import DeepDiff
@@ -27,6 +26,7 @@ from .conftest import (
     TESTIMAGE_NAME,
     ARRAY_1D,
     ARRAY_2D,
+    quad_line,
 )
 
 
@@ -421,14 +421,12 @@ def test_stack_addsub_stack():
 # Further Tests have to be done with a Stack of a Class that implements calc itself
 
 
-#@pytest.mark.parametrize("x", [Image(TESTDATA_DIR + TESTIMAGE_NAME + ".png"), 10, 10.0])
-#@pytest.mark.parametrize(
+# @pytest.mark.parametrize("x", [Image(TESTDATA_DIR + TESTIMAGE_NAME + ".png"), 10, 10.0])
+# @pytest.mark.parametrize(
 #    "virtual", [False, pytest.param(True, marks=pytest.mark.xfail(raises=ValueError))]
-#)
+# )
 @pytest.mark.parametrize("x", [Image(TESTDATA_DIR + TESTIMAGE_NAME + ".png"), 10, 10.0])
-@pytest.mark.parametrize(
-    "virtual", [False, True]
-)
+@pytest.mark.parametrize("virtual", [False, True])
 @pytest.mark.filterwarnings("ignore::RuntimeWarning")
 @pytest.mark.filterwarnings("ignore::UserWarning")
 def test_stack_calc_imgNumber(x, virtual, testimgpng):
@@ -515,11 +513,14 @@ def test_image_save_json(testimgpng):
 @pytest.mark.parametrize("fileext", [".pickle", ".pickle.bz2", ".json"])
 def test_imagestack_save_full(fileext, testimgpng):
     stack = ImageStack([testimgpng, testimgpng])
-    stack.save(TESTDATA_DIR + "test_image"+ fileext)
-    load_stack = Image.load(TESTDATA_DIR + "test_image"+ fileext)
-    os.remove(TESTDATA_DIR + "test_image"+ fileext)
+    stack.save(TESTDATA_DIR + "test_image" + fileext)
+    load_stack = Image.load(TESTDATA_DIR + "test_image" + fileext)
+    os.remove(TESTDATA_DIR + "test_image" + fileext)
     assert len(stack) == len(load_stack)
-    assert all([(img1.image == img2.image).all for img1, img2 in zip(stack, load_stack)])
+    assert all(
+        [(img1.image == img2.image).all for img1, img2 in zip(stack, load_stack)]
+    )
+
 
 @pytest.mark.parametrize("fileext", [".png", ".tiff"])
 def test_image_save(testimgpng, fileext):
@@ -538,35 +539,79 @@ def test_stack_save():
     os.remove(TESTDATA_DIR + "test_image.tiff")
     assert all([(img1.image == img2).all() for img1, img2 in zip(load_stack, array)])
 
+
 @pytest.mark.parametrize("source", ARRAY_2D)
 def test_line_generation(source):
     line = Line(source)
-    assert (line.dataframe.to_numpy() == source.T).all()
+    assert_array_equal(line.dataframe.to_numpy(), source.T)
     assert line.xdim == "x"
     assert line.ydim == "y"
 
-#@pytest.mark.xfail(raises = ValueError, strict = True)
+
+# @pytest.mark.xfail(raises = ValueError, strict = True)
 @pytest.mark.parametrize("source", ARRAY_1D)
 def test_line_incompatible_generation(source):
     with pytest.raises(ValueError):
         Line(source)
+
 
 @pytest.mark.parametrize("source", ARRAY_2D)
 def test_line_xy_alias(source):
     line = Line(source)
     line.xdim = "a"
     line.ydim = "b"
-    #assert (line.a == source[0,:]).all()
-    #assert (line.b == source[1,:]).all()
-    assert_array_equal(line.a, source[0,:])
-    assert_array_equal(line.b, source[1,:])
+    # assert (line.a == source[0,:]).all()
+    # assert (line.b == source[1,:]).all()
+    assert_array_equal(line.a, source[0, :])
+    assert_array_equal(line.b, source[1, :])
+
 
 @pytest.mark.parametrize("source", ARRAY_2D)
 def test_line_saveload_csv(source):
     line = Line(source)
     line.xdim = "a"
     line.ydim = "b"
-    line.save(TESTDATA_DIR+"test.csv")
-    line2 = Line(TESTDATA_DIR+"test.csv")
-    #assert line.dataframe.equals(line2.dataframe)
+    line.save(TESTDATA_DIR + "test.csv")
+    line2 = Line(TESTDATA_DIR + "test.csv")
+    # assert line.dataframe.equals(line2.dataframe)
     pd.testing.assert_frame_equal(line.dataframe, line2.dataframe)
+
+
+def test_line_interpolate(quad_line):
+    line = quad_line
+    np.testing.assert_almost_equal(line.interpolate(line.x), line.y)
+    assert line.interpolate(1.0).size == 1
+
+
+def test_line_integration(quad_line):
+    integral = quad_line.integral()
+    assert 10 ** 3 / 3 - 10 ** -5 < integral.interpolate(10) < 10 ** 3 / 3 + 10 ** -5
+
+
+def test_line_area(quad_line):
+    assert quad_line.area == 1000 / 3
+
+
+def test_line_derivative(quad_line):
+    diff = quad_line.derivative()
+    assert diff.length == quad_line.length - 1
+    assert_array_equal(diff.x, quad_line.x[1:])
+
+    # derivative of x^2 is 2x
+    dydx = 2 * quad_line.x[1:]
+    assert_almost_equal(dydx, diff.y)
+
+
+def test_line_calc(quad_line):
+    # calc with Numbers
+    assert_array_equal((2 * quad_line).y, 2 * quad_line.y)
+    assert_array_equal((quad_line / 2).y, quad_line.y / 2)
+    assert_array_equal((quad_line + 2).y, quad_line.y + 2)
+    assert_array_equal((quad_line - 2).y, quad_line.y - 2)
+    # calc with Lines
+    assert_array_equal((quad_line + quad_line).y, 2 * quad_line.y)
+    assert_array_equal((quad_line - quad_line).y, np.zeros(quad_line.length))
+    assert_array_equal((quad_line * quad_line).y, quad_line.y ** 2)
+    assert_array_equal(
+        np.nan_to_num((quad_line / quad_line).y, nan=1), np.ones(quad_line.length)
+    )
