@@ -766,8 +766,8 @@ class ImageStack(DataObjectStack):
         >>> stack = ImageStack("testdata/test_stack_IV_RuO2_normed_aligned_80-140.tif")[0:60]
         >>> len(stack)
         60
-        >>> avg = stack.average(4)
-        >>> len(avg)
+        >>> avg_stack = stack.average(4)
+        >>> len(avg_stack)
         15
 
         """
@@ -1031,7 +1031,7 @@ class Line(DataObject):
             kernel = np.ones(kernel) / kernel
 
         line = self.copy()
-        # pylint: disable=atribute-definded-outside-init
+        # pylint: disable=attribute-defined-outside-init
         line.x, line.y = self.x, np.convolve(self.y, kernel, mode="same")
         return line
 
