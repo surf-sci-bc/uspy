@@ -43,7 +43,7 @@ class LEEMImg(Image):
     _meta_defaults = {
         "energy": np.nan,
         "temperature": np.nan,
-        "fov": np.nan,
+        "fov": "Unknown FoV",
         "timestamp": np.nan,
         "mcp": None,
         "dark_counts": 0,
@@ -54,7 +54,6 @@ class LEEMImg(Image):
         "temperature": "°C",
         "pressure": "Torr",
         "objective": "mA",
-        "fov": "µm",
         "timestamp": "s",
         "exposure": "s",
         "rel_time": "s",
@@ -186,31 +185,12 @@ class LEEMImg(Image):
     def pressure(self, value: Number) -> None:
         self._meta["pressure"] = value
 
-    @property
-    def fov(self) -> Union[Number, str]:
-        fov_ = self._meta.get("fov", np.nan)
-        if fov_ < 0:
-            self._units["fov"] = ""
-            return "LEED"
-        else:
-            self._units["fov"] = "µm"
-        return fov_
-
-    @fov.setter
-    def fov(self, value: Union[Number, str]) -> None:
-        if isinstance(value, str):
-            assert value == "LEED"
-            self._units["fov"] = ""
-        else:
-            self._units["fov"] = "µm"
-        self._meta["FoV"] = value
-
-    @property
-    def resolution(self) -> Number:
-        fov_ = self._meta.get("fov", np.nan)
-        if fov_ < 0:
-            fov_ = np.nan
-        return fov_ / self._meta.get("fov_cal", np.nan)
+    # @property
+    # def resolution(self) -> Number:
+    #     fov_ = self._meta.get("fov", np.nan)
+    #     if fov_ < 0:
+    #         fov_ = np.nan
+    #     return fov_ / self._meta.get("fov_cal", np.nan)
 
     @property
     def time_origin(self) -> Number:
@@ -520,14 +500,13 @@ def parse_dat(fname: str, debug: bool = False) -> dict[str, Any]:
                     print(f"\tknown: pressure {key} -> {data[key]}")
             elif bit in (110, 238):  # field of view
                 fov_str = parse_cp1252_until_null(uk_file, debug)
-                #TODO make this a string: fov_str = "setup_str\tpreset_str"
-                if "LEED" in fov_str:
-                    data["fov"] = -1
-                else:
-                    data["fov"] = int(fov_str.split("\t")[0].replace("µm", "").strip())
+                try:
+                    data["fov"], data["preset"] = fov_str.split("\t")
+                except ValueError:
+                    data["fov"], data["preset"] = fov_str, ""
                 data["fov_cal"] = parse_bytes(uk_file.read(4), 0, "float")
                 if debug:
-                    print(f"\tfov: {fov_str}")
+                    print(f"\tfov: {fov_str}\n\tfov_cal: {data['fov_cal']}")
             elif bit in (0, 1, 63, 66, 113, 128, 176, 216, 240, 232, 233):
                 if debug:
                     print(f"unknown byte {bit}")
