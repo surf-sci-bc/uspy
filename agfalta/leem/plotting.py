@@ -22,42 +22,23 @@ from agfalta.leem.processing import roify, get_max_variance_idx, ROI, RSM
 from agfalta.leem.driftnorm import normalize_image
 
 
-
-def info(obj):
-    """Prints info about a LEEM image or stack."""
-    try:
-        img = imgify(obj)
-        print("Image attributes:")
-        for attr in img.attrs:
-            print(f"\t{attr}: {img.get_field_string(attr)}")
-        return
-    except FileNotFoundError:
-        pass
-    try:
-        stack = stackify(obj)
-        print("Stack attributes:")
-        for attr in stack.unique_attrs:
-            if attr.startswith("_"):
-                continue
-            val = str(getattr(stack, attr))
-            if len(val) > 100:
-                val = val[:80] + "..."
-            print(f"\t{attr}: {val}")
-        if len(stack) == 0:
-            print("\tStack object is empty")
-            return
-        print("Stack attributes from its images (only value of first "
-              "image is given):")
-        for attr in stack[0].attrs:
-            print(f"\t{attr}, {stack[0].get_field_string(attr)}")
-    except FileNotFoundError:
-        print("Object is not valid (maybe wrong path?)")
-
-
-def plot_img(img, fields=("temperature", "pressure", "energy", "fov"), field_color=None,
-             mcp=None, dark_counts=100, contrast=None, invert=False, log=False,
-             ax=None, title=True, figsize=None, dpi=100, ticks=False,
-             cutout_diameter=None, **kwargs):
+def plot_img(
+    img,
+    fields=("temperature", "pressure", "energy", "fov"),
+    field_color=None,
+    mcp=None,
+    dark_counts=100,
+    contrast=None,
+    invert=False,
+    log=False,
+    ax=None,
+    title=True,
+    figsize=None,
+    dpi=100,
+    ticks=False,
+    cutout_diameter=None,
+    **kwargs,
+):
     """Plots a single LEEM image with some metadata. Takes either a file name
     or a LEEMImg object. Metadata fields given are shown in the corners of the
     image.
@@ -113,10 +94,7 @@ def plot_img(img, fields=("temperature", "pressure", "energy", "fov"), field_col
     if isinstance(fields, str):
         fields = [fields]
 
-    ax = _get_ax(
-        ax, figsize=figsize, dpi=dpi,
-        ticks=ticks, title=title, axis_off=True
-    )
+    ax = _get_ax(ax, figsize=figsize, dpi=dpi, ticks=ticks, title=title, axis_off=True)
 
     data = np.nan_to_num(img.image)
     if log:
@@ -127,9 +105,8 @@ def plot_img(img, fields=("temperature", "pressure", "energy", "fov"), field_col
         radius = min(h, w) / 2 * cutout_diameter
         y, x = np.arange(0, h), np.arange(0, w)
         y, x = y[:, np.newaxis], x[np.newaxis, :]
-        mask = (x - w/2)**2 + (y - h/2)**2 > radius**2
+        mask = (x - w / 2) ** 2 + (y - h / 2) ** 2 > radius ** 2
         data = np.ma.masked_where(mask, data)
-
 
     if contrast in ("auto", "maximum"):
         contrast = data.min(), data.max()
@@ -149,11 +126,7 @@ def plot_img(img, fields=("temperature", "pressure", "energy", "fov"), field_col
 
     cmap = kwargs.pop("cmap", "gray")
     ax.imshow(
-        data,
-        cmap=cmap,
-        clim=(np.nanmin(data), np.nanmax(data)),
-        aspect=1,
-        **kwargs
+        data, cmap=cmap, clim=(np.nanmin(data), np.nanmax(data)), aspect=1, **kwargs
     )
 
     if fields is None:
@@ -170,12 +143,17 @@ def plot_img(img, fields=("temperature", "pressure", "energy", "fov"), field_col
         if field is None:
             continue
         ax.text(
-            x=_MPL_IMG_POS[i][2], y=_MPL_IMG_POS[i][3],
+            x=_MPL_IMG_POS[i][2],
+            y=_MPL_IMG_POS[i][3],
             s=img.get_field_string(field),
-            va=_MPL_IMG_POS[i][0], ha=_MPL_IMG_POS[i][1],
-            transform=ax.transAxes, color=field_color, fontsize=14,
+            va=_MPL_IMG_POS[i][0],
+            ha=_MPL_IMG_POS[i][1],
+            transform=ax.transAxes,
+            color=field_color,
+            fontsize=14,
         )
     return ax
+
 
 def plot_image(*args, **kwargs):
     """Alias for agfalta.leem.plotting.plot_img()."""
@@ -183,12 +161,22 @@ def plot_image(*args, **kwargs):
     return plot_img(*args, **kwargs)
 
 
-
-def make_video(stack, ofile, skip=None,
-               fields=None, field_color=None,
-               mcp=None, dark_counts=100, contrast="auto", invert=False, log=False,
-               fps=24, overwrite=True, scale=0.5,
-               **kwargs):
+def make_video(
+    stack,
+    ofile,
+    skip=None,
+    fields=None,
+    field_color=None,
+    mcp=None,
+    dark_counts=100,
+    contrast="auto",
+    invert=False,
+    log=False,
+    fps=24,
+    overwrite=True,
+    scale=0.5,
+    **kwargs,
+):
     """
     Save a movie as an mp4 file and display it.
     - stack:
@@ -284,7 +272,7 @@ def make_video(stack, ofile, skip=None,
         "-profile:v": "high",
     }
     writer = skvideo.io.FFmpegWriter(
-        ofile, inputdict=ffmpeg_indict, outputdict=ffmpeg_outdict#, verbosity=1
+        ofile, inputdict=ffmpeg_indict, outputdict=ffmpeg_outdict  # , verbosity=1
     )
 
     # loop through the images
@@ -312,7 +300,9 @@ def make_video(stack, ofile, skip=None,
         data = cv2.normalize(
             np.clip(data, contrast[0], contrast[1]),
             np.ones_like(data, dtype=np.uint8),
-            0, 255, norm_type=cv2.NORM_MINMAX
+            0,
+            255,
+            norm_type=cv2.NORM_MINMAX,
         )
 
         if invert:
@@ -323,16 +313,20 @@ def make_video(stack, ofile, skip=None,
             for i, field in enumerate(fields):
                 if field is None:
                     continue
-                text = img.get_field_string(field).replace("µ","u")
+                text = img.get_field_string(field).replace("µ", "u")
                 text = text.encode("ascii", errors="ignore").decode()
 
                 for pos, char in enumerate(text):
                     xy = _CV2_IMG_POS(i, height, width, text, pos=pos)
                     data = cv2.putText(
-                        data, char,
-                        org=xy, fontFace=cv2.FONT_HERSHEY_SIMPLEX,
-                        fontScale=1, color=color, thickness=2,
-                        lineType=cv2.LINE_AA
+                        data,
+                        char,
+                        org=xy,
+                        fontFace=cv2.FONT_HERSHEY_SIMPLEX,
+                        fontScale=1,
+                        color=color,
+                        thickness=2,
+                        lineType=cv2.LINE_AA,
                     )
         writer.writeFrame(data)
     writer.close()
@@ -378,6 +372,7 @@ def plot_mov(stack, skip=None, ncols=4, virtual=True, dpi=100, **kwargs):
 
     return axes.flatten()
 
+
 def plot_movie(*args, **kwargs):
     """Alias for agfalta.leem.plotting.plot_mov()."""
     print("plot_movie() is DEPRECATED, use plot_mov() instead")
@@ -402,21 +397,35 @@ def plot_meta(stack, fields="temperature"):
         if field == "temperature":
             axes[i].plot(time[val < 2000], val[val < 2000])
             if len(time[val < 2000]) < len(time):
-                print("Points have been excluded from plot because of unreasonably "
-                      "high temperature")
+                print(
+                    "Points have been excluded from plot because of unreasonably "
+                    "high temperature"
+                )
         else:
             axes[i].plot(time, val)
         if field in ("pressure", "pressure1", "pressure2"):
-            axes[i].set_yscale('log')
+            axes[i].set_yscale("log")
         axes[i].set_ylabel(f"{field} in {stack[0].get_unit(field)}")
         axes[i].set_xlabel("Time in s")
 
     return axes
 
 
-def print_meta(stack, fields=("energy", "temperature", "pressure1",
-                              "pressure2", "objective", "fov",
-                              "exposure", "averaging", "width", "height")):
+def print_meta(
+    stack,
+    fields=(
+        "energy",
+        "temperature",
+        "pressure1",
+        "pressure2",
+        "objective",
+        "fov",
+        "exposure",
+        "averaging",
+        "width",
+        "height",
+    ),
+):
     """Prints metadata of a stack as a table."""
     if isinstance(fields, str):
         fields = [fields]
@@ -431,7 +440,7 @@ def print_meta(stack, fields=("energy", "temperature", "pressure1",
         for field in fields:
             row.append(img.get_field_string(field))
         table.append(row)
-    pd.set_option('display.expand_frame_repr', False)
+    pd.set_option("display.expand_frame_repr", False)
     df = pd.DataFrame(table)
     df.columns = ("Name", *fields)
     display(df)
@@ -469,6 +478,7 @@ def plot_intensity(stack, *args, xaxis="rel_time", ax=None, **kwargs):
             ax.plot(x, intensity)
     return ax
 
+
 def plot_intensity_curve(curves, ax=None):
     # if isinstance(curves, IntensityCurve):
     #     curves = [curves]
@@ -483,6 +493,7 @@ def plot_intensity_curve(curves, ax=None):
         else:
             ax.plot(curve.x, curve.y)
     return ax
+
 
 def get_intensity(stack, *args, xaxis="rel_time", ofile=None, **kwargs):
     """Calculate intensity profile along a stack in a given ROI (or multiple ROIs).
@@ -506,10 +517,10 @@ def get_intensity(stack, *args, xaxis="rel_time", ofile=None, **kwargs):
 
     if ofile is not None:
         np.savetxt(
-            ofile, data.T,
-            header=f"{xaxis} | " + " | ".join(str(roi) for roi in rois)
+            ofile, data.T, header=f"{xaxis} | " + " | ".join(str(roi) for roi in rois)
         )
     return data
+
 
 def plot_iv(*args, **kwargs):
     """Alias for agfalta.leem.plotting.plot_intensity() with xaxis set
@@ -539,10 +550,12 @@ def plot_intensity_img(stack, *args, xaxis="rel_time", img_idx=None, **kwargs):
 
     return ax1, ax2
 
+
 def plot_iv_img(*args, **kwargs):
     """Alias for agfalta.leem.plotting.plot_intensity_img() with xaxis set
     to "energy"."""
     return plot_intensity_img(*args, xaxis="energy", **kwargs)
+
 
 def plot_rois(*args, img=None, ax=None, **kwargs):
     """Plot rois onto a given axes object. The ROI can either be given like in
@@ -560,10 +573,21 @@ def plot_rois(*args, img=None, ax=None, **kwargs):
         ax.add_artist(roi.artist)
     return ax
 
-def plot_rsm(stack=None, profile=None, rsm=None, log=True,
-             figsize=(5, 8), rasterized=True, dpi=150,  ax=None,
-             cmap="gray", vmin=None, vmax=None,
-             **kwargs):
+
+def plot_rsm(
+    stack=None,
+    profile=None,
+    rsm=None,
+    log=True,
+    figsize=(5, 8),
+    rasterized=True,
+    dpi=150,
+    ax=None,
+    cmap="gray",
+    vmin=None,
+    vmax=None,
+    **kwargs,
+):
     """Plot an RSM along a cut specified by profile.
     Arguments:
         - stack     the LEED stack
@@ -595,8 +619,10 @@ def plot_rsm(stack=None, profile=None, rsm=None, log=True,
         ax.set_ylabel("ky in A^-1")
         secax = ax.secondary_xaxis(
             "top",
-            functions=(lambda x: x * 100 / (rsm.k_BZ * 1e-10),
-                       lambda x: x / 100 * (rsm.k_BZ * 1e-10))
+            functions=(
+                lambda x: x * 100 / (rsm.k_BZ * 1e-10),
+                lambda x: x / 100 * (rsm.k_BZ * 1e-10),
+            ),
         )
         secax.set_xlabel("BZ in %")
     ax.pcolormesh(kx, ky, z, cmap=cmap, rasterized=rasterized, vmin=vmin, vmax=vmax)
@@ -604,10 +630,9 @@ def plot_rsm(stack=None, profile=None, rsm=None, log=True,
     return rsm, ax
 
 
-
 # Utility:
 
-_MPL_IMG_POS = {    # (verticalalignment, horizontalalignment, x, y)
+_MPL_IMG_POS = {  # (verticalalignment, horizontalalignment, x, y)
     0: ("top", "left", 0.01, 1),
     1: ("top", "right", 1, 1),
     2: ("bottom", "left", 0.01, 0.01),
@@ -618,6 +643,8 @@ _MPL_IMG_POS = {    # (verticalalignment, horizontalalignment, x, y)
 _CV2_CONTRASTS = {
     "auto": cv2.NORM_MINMAX,
 }
+
+
 def _CV2_IMG_POS(idx, height, width, text="", pos=0):
     """Applies only for FONT_HERSHEY_SIMPLEX (~20px wide chars)"""
     margin = 0.01
@@ -640,8 +667,7 @@ def _get_ax(ax, **kwargs):
     """Helper for preparing an axis object"""
     if ax is None:
         _, ax = plt.subplots(
-            figsize=kwargs.get("figsize", None),
-            dpi=kwargs.get("dpi", 100)
+            figsize=kwargs.get("figsize", None), dpi=kwargs.get("dpi", 100)
         )
     if not kwargs.get("ticks", True):
         ax.set_xticks([])

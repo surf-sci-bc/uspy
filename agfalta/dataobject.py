@@ -306,6 +306,18 @@ class DataObject(Loadable):
         """Accepts attributes from .json file and initilizes new object."""
         self.__init__(**attrs)
 
+    def __str__(self) -> str:
+        prettystring = ""
+        prettystring += f"Source: {self.source}\n"
+        prettystring += "Metadata:\n"
+        for k, v in self.meta.items():
+            unit = self.get(f"{k}_unit", "")
+            prettystring += f"\t{k}:\t{v} (unit: {unit})\n"
+        prettystring += "Data:\n"
+        for k, v in self.data.items():
+            prettystring += f"\t{k}:\t{v}\n"
+        return prettystring
+
 
 class DataObjectStack(Loadable):
     """Contains multiple DataObjects. E.g., for an image stack."""

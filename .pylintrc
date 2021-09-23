@@ -391,6 +391,8 @@ function-naming-style=snake_case
 good-names=i,
            j,
            k,
+           v,
+           f,
            ex,
            Run,
            _,
