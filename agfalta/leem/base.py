@@ -599,8 +599,9 @@ def do_ecc_align(
 
         , by default "translation"
     mask : Union[np.ndarray, None], optional
-        The mask must be a 2D numpy array of dtype=np.uint8 containing '0' where pixels in the images
-        will not be taken into account during registration and '1' when they are, by default 'None'
+        The mask must be a 2D numpy array of dtype=np.uint8 containing '0' where pixels in the
+        images will not be taken into account during registration and '1' when they are, by
+        default 'None'
 
     Returns
     -------

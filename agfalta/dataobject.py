@@ -7,8 +7,6 @@ from typing import Any, Callable, Sequence, Union, Optional
 from collections.abc import Iterable
 from numbers import Number
 from pathlib import Path
-import scipy.interpolate
-import scipy.integrate
 import bz2
 import copy
 import pickle
@@ -16,6 +14,8 @@ import warnings
 
 from deepdiff import DeepDiff
 import numpy as np
+import scipy.interpolate
+import scipy.integrate
 import pandas as pd
 import imageio
 import json_tricks
@@ -169,7 +169,7 @@ class DataObject(Loadable):
     _unit_defaults = {}
     _meta_defaults = {}
 
-    def __new__(cls, *args, **kwargs):
+    def __new__(cls, *_args, **_kwargs):
         obj = super().__new__(cls)  # really not forward args and kwargs?
         obj._data = {}
         obj._meta = obj._meta_defaults.copy()
@@ -799,7 +799,7 @@ class Line(DataObject):
     Parameters
     ----------
     source : Union[str, np.ndarray]
-        When a str: path to .csv file with x y data as columns. The delimiter is guessed from the file
+        When a str: path to .csv file with x y data as columns. Delimiter is guessed from the file
         When np.ndarray: 2d numpy array containing the x and y values either als rows or cols
 
     Attributes
@@ -975,23 +975,23 @@ class Line(DataObject):
         if order not in k.keys():
             k[order] = order
 
-        f = scipy.interpolate.InterpolatedUnivariateSpline(
+        func = scipy.interpolate.InterpolatedUnivariateSpline(
             self.x, self.y, k=k[order], **kwargs
         )
         if x_data is None:
-            return f
-        return f(x_data)
+            return func
+        return func(x_data)
 
     def integral(self) -> Line:
         """Returns the integrated values of a cubic spline evaluated at the x values of the line"""
-        f = self.interpolate()
-        y = np.array([f.integral(self.x[0], x) for x in self.x])
+        func = self.interpolate()
+        y = np.array([func.integral(self.x[0], x) for x in self.x])
         return Line(np.array([self.x, y]))
 
     def derivative(self) -> Line:
         """Returns the derivative of a cubic spline evaluated at the x values of the line"""
-        f = self.interpolate()
-        y = np.array([f.derivative()(x) for x in self.x[1:]])
+        func = self.interpolate()
+        y = np.array([func.derivative()(x) for x in self.x[1:]])
         return Line(np.array([self.x[1:], y]))
 
     def smooth(self, kernel: Union[int, np.ndarray]) -> Line:
@@ -1171,17 +1171,17 @@ class IntensityLine(Line):
         ----------
         source : tuple[ImageStack, roi.ROI, str]
             Must be a Tuple of
-            
+
             1. an ImageStack from which the intensities will be extracted,
             2. a ROI from within the intensities will be extracted in each image,
-            3. a string indicates the axis of the dimension along the intensites shall be extracted,\
-            e.g. time, energy ...
+            3. a string indicates the axis of the dimension along the intensites shall be \
+                extracted, e.g. time, energy ...
 
         Returns
         -------
         dict
-            a dict containing the x,y-values of the line, the stack, the ROI, the x- and 
-            y-dimensions and the unit of the x axis extracted from the images. The y-dimension is 
+            a dict containing the x,y-values of the line, the stack, the ROI, the x- and
+            y-dimensions and the unit of the x axis extracted from the images. The y-dimension is
             "intensity" by default with unit "a.u."
         """
 

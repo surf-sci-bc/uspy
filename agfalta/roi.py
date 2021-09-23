@@ -11,10 +11,10 @@ import cv2
 import numpy as np
 import matplotlib as mpl
 
-from agfalta.dataobject import Loadable, Image
+import agfalta.dataobject as do
 
 
-class StyledObject(Loadable):
+class StyledObject():#do.Loadable):
     """Contains a style dictionary that can have class-wise defaults. The dictionary
     is intended for matplotlib keyword arguments."""
     _idx = 0
@@ -276,7 +276,7 @@ class ROI(StyledObject):
         """Construct a polygonic ROI from a list of corners. Seems Superfluous?????"""
         return cls(x0, y0, source=array, **kwargs)
 
-    def apply(self, obj: Image, return_array: bool = False) -> Union[Image,np.ndarray]:
+    def apply(self, obj: do.Image, return_array: bool = False) -> Union[do.Image,np.ndarray]:
         """Apply the MaskLike to a Dataobject and either return the masked
         DataObject or the raw masked data."""
         full_mask = self.pad_to(*obj.image.shape).astype(np.bool)
@@ -449,7 +449,7 @@ class Profile:
 #         """Return a bool array."""
 #         return self.array.astype(np.bool)
 
-#     def apply(self, obj: Image, return_array: bool = False) -> Union[Image,np.ndarray]:
+#     def apply(self, obj: do.Image, return_array: bool = False) -> Union[do.Image,np.ndarray]:
 #         """Apply the MaskLike to a Dataobject and either return the masked
 #         DataObject or the raw masked data."""
 #         full_mask = self.pad_to(*obj.image.shape).astype(np.bool)
