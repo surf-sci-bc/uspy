@@ -49,7 +49,6 @@ class StyledObject(Loadable):
 
 class Contour(StyledObject):
     """Define a contour in two dimensions thorugh a list of 2D coordinates."""
-    _shapes = ("polygon",)
     _default_style = {"fill": False, "linewidth": 3}
 
     def __init__(self, corners: Optional[Iterable[Iterable]] = None,
@@ -160,143 +159,84 @@ class Contour(StyledObject):
         return art
 
 
-# class SimpleContour(Contour):
-#     """Define a contour from simple parametrized geometric objects."""
-#     _shapes = ("circle", "ellipse", "square", "rectangle")
-#     _param_keys = ("radius", "width", "height", "rotation")
-
-#     def __init__(self,
-#                  shape: Optional[str] = "circle", ref_point: Optional[tuple] = None,
-#                  style: dict[str, Any] = None, color: Optional[str] = None,
-#                  **kwargs):
-#         self.params = kwargs
-#         corners = self.shape2corners(shape)
-#         super().__init__(corners=corners, shape=shape, ref_point=ref_point, style=style, color=color)
-
-#     def shape2corners(self, shape: str) -> np.ndarray:
-#         """Convert a geometric rectangular or elliptic description to polygon contour.
-#         Arguments belonging to the shapes:
-#             - circle: radius
-#             - ellipse: width, height, rotation
-#             - square: width, rotation
-#             - rectangle: width, height, rotation
-#         where radius, width and height are in pixels; rotation is in degrees (anti-clockwise).
-#         """
-#         if "radius" in self.params:
-#             if "width" in self.params:
-#                 raise ValueError("Both radius and width were given for a shape-ROI")
-#             self.params["width"] = self.params.pop("radius") * 2
-#         self.params["height"] = self.params.get("height", self.params["width"])
-#         self.params["rotation"] = self.params.get("rotation", 0)
-
-#         width, height = self.params["width"], self.params["height"]
-#         rotation = -self.params["rotation"]
-
-#         if shape in ("circle", "ellipse"):
-#             corners = cv2.ellipse2Poly(
-#                 center=(0, 0), axes=(width // 2, height // 2),
-#                 angle=int(rotation), arcStart=0, arcEnd=360, delta=1
-#             )
-#         elif shape in ("square", "rectangle"):
-#             rot_c, rot_s = np.cos(-rotation * np.pi / 180), np.sin(-rotation * np.pi / 180)
-#             rot_matrix = np.array([[rot_c, -rot_s], [rot_s, rot_c]])
-#             corners = np.array([[0, 0], [width, 0], [width, height], [0, height]])
-#             corners = np.rint(np.dot(corners, rot_matrix)).astype(np.int32)
-#             corners = corners - corners.min(axis=0)
+# class Mask(StyledObject):
+#     """Filled contour."""
+#     def __init__(self, contour_or_array: Union[Contour,Iterable],
+#                  style: dict[str, Any] = None, color: Optional[str] = None) -> None:
+#         if isinstance(contour_or_array, Iterable):
+#             self.contour = None
+#             self.array = np.array(contour_or_array)
+#             if len(self.array.shape) != 2:
+#                 raise ValueError("Array is not two-dimensional.")
 #         else:
-#             raise ValueError(f"Unknown shape {shape}")
-#         return corners
+#             self.contour = contour_or_array
+#             self.array = self._make_polygon(self.contour)
+#             if style is None:
+#                 style = self.contour.style
+#         super().__init__(style=style, color=color)
 
-#     def get_artist(self, position: Iterable) -> mpl.artist.Artist:
-#         width, height, rotation = (self.params[key] for key in ("width", "height", "rotation"))
-#         if self.shape in ("circle", "ellipse"):
-#             art = mpl.patches.Ellipse(
-#                 self.center_of_mass - self.ref_point + position,
-#                 width, height,
-#                 angle=rotation,
-#                 **self.style,
-#             )
-#         elif self.shape in ("square", "rectangle"):
-#             rot_c, rot_s = np.cos(-rotation * np.pi / 180), np.sin(-rotation * np.pi / 180)
-#             rot_matrix = np.array([[rot_c, -rot_s], [rot_s, rot_c]])
-#             lower_left = np.rint(np.dot([-width / 2, -height / 2], rot_matrix))
-#             art = mpl.patches.Rectangle(
-#                 lower_left + self.center_of_mass - self.ref_point + position,
-#                 self.params["width"],
-#                 self.params["height"],
-#                 angle=self.params["rotation"],
-#                 **self.style,
-#             )
-#         else:
-#             raise ValueError(f"Unknown shape {self.shape}")
-#         return art
+#     @staticmethod
+#     def _make_polygon(contour: Contour) -> np.ndarray:
+#         """Create a polygon mask."""
+#         corners = contour.corners - contour.corners.min(axis=0)
+#         array = np.zeros(corners.max(axis=0)[::-1] + 1)
+#         return cv2.fillConvexPoly(array, corners, color=1).astype(np.bool)
 
+#     @property
+#     def area(self) -> int:
+#         """Total area in pixels. Is only valid when the mask is not cut off at the sides!"""
+#         return self.array.astype(np.bool).sum()
 
-class Mask(StyledObject):
-    """Filled contour."""
-    def __init__(self, contour_or_array: Union[Contour,Iterable],
-                 style: dict[str, Any] = None, color: Optional[str] = None) -> None:
-        if isinstance(contour_or_array, Iterable):
-            self.contour = None
-            self.array = np.array(contour_or_array)
-            if len(self.array.shape) != 2:
-                raise ValueError("Array is not two-dimensional.")
-        else:
-            self.contour = contour_or_array
-            self.array = self._make_polygon(self.contour)
-            if style is None:
-                style = self.contour.style
-        super().__init__(style=style, color=color)
+#     @property
+#     def ref_point(self) -> np.ndarray:
+#         """Reference point for the mask."""
+#         return self.contour.ref_point
 
-    @staticmethod
-    def _make_polygon(contour: Contour) -> np.ndarray:
-        """Create a polygon mask."""
-        corners = contour.corners - contour.corners.min(axis=0)
-        array = np.zeros(corners.max(axis=0)[::-1] + 1)
-        return cv2.fillConvexPoly(array, corners, color=1).astype(np.bool)
-
-    @property
-    def area(self) -> int:
-        """Total area in pixels. Is only valid when the mask is not cut off at the sides!"""
-        return self.array.astype(np.bool).sum()
-
-    @property
-    def ref_point(self) -> np.ndarray:
-        """Reference point for the mask."""
-        return self.contour.ref_point
-
-    @property
-    def center_of_mass(self) -> np.ndarray:
-        """The center of mass position of the mask array."""
-        x_i, y_i = np.nonzero(self.array)
-        return np.array([x_i.mean(), y_i.mean()])
+#     @property
+#     def center_of_mass(self) -> np.ndarray:
+#         """The center of mass position of the mask array."""
+#         x_i, y_i = np.nonzero(self.array)
+#         return np.array([x_i.mean(), y_i.mean()])
 
 
 class ROI(StyledObject):
     """An image region represented as a boolean 2D array."""
     # take care: OpenCV-points are given as (x, y),
     # but numpy 2d image arrays are in (y, x)-coordinates
-    def __init__(self, x0: int, y0: int, mask: Mask,
+    def __init__(self, x0: int, y0: int, source: Union[Contour,Iterable],
                  style: dict[str, Any] = None, color: Optional[str] = None) -> None:
-        if style is None:
-            style = mask.style
+        if isinstance(source, Iterable):
+            self.contour = None
+            self.array = np.array(source)
+            if len(self.array.shape) != 2:
+                raise ValueError("Array is not two-dimensional.")
+        else:
+            self.contour = source
+            self.array = self.contour2array(self.contour)
+            if style is None:
+                style = self.contour.style
+
         super().__init__(style=style, color=color)
         self.position = np.array([x0, y0])
-        self.mask = mask
         self._mask_buffer = np.array([[]])
         self._center_buffer = True
 
+    @staticmethod
+    def contour2array(contour: Contour) -> np.ndarray:
+        """Create a polygon mask."""
+        corners = contour.corners - contour.corners.min(axis=0)
+        array = np.zeros(corners.max(axis=0)[::-1] + 1)
+        return cv2.fillConvexPoly(array, corners, color=1).astype(np.bool)
+
     @classmethod
-    def circle(cls, x0: int, y0: int,
-               radius: Number, rotation: Number = 0,
+    def circle(cls, x0: int, y0: int, radius: Number, rotation: Number = 0,
                style: dict[str, Any] = None, color: Optional[str] = None, **kwargs) -> ROI:
         """Construct a circular ROI."""
         contour = Contour.from_params(
             shape="circle", radius=radius, rotation=rotation,
             style=style, color=color
         )
-        mask = Mask(contour)
-        return cls(x0, y0, mask=mask, **kwargs)
+        return cls(x0, y0, source=contour, **kwargs)
 
     @classmethod
     def ellipse(cls, x0: int, y0: int, width: int, height: int, rotation: Number = 0,
@@ -306,8 +246,7 @@ class ROI(StyledObject):
             shape="ellipse", width=width, height=height, rotation=rotation,
             style=style, color=color
         )
-        mask = Mask(contour)
-        return cls(x0, y0,mask=mask, **kwargs)
+        return cls(x0, y0, source=contour, **kwargs)
 
     @classmethod
     def rectangle(cls, x0: int, y0: int, width: int, height: int, rotation: Number = 0,
@@ -317,32 +256,25 @@ class ROI(StyledObject):
             shape="rectangle", width=width, height=height, rotation=rotation,
             style=style, color=color
         )
-        mask = Mask(contour)
-        return cls(x0, y0,mask=mask, **kwargs)
+        return cls(x0, y0, source=contour, **kwargs)
 
     @classmethod
     def polygon(cls, x0: int, y0: int, corners: Iterable,
                 style: dict[str, Any] = None, color: Optional[str] = None, **kwargs) -> ROI:
         """Construct a polygonic ROI from a list of corners."""
         contour = Contour(corners=np.array(corners), style=style, color=color)
-        mask = Mask(contour)
-        return cls(x0, y0,mask=mask, **kwargs)
+        return cls(x0, y0, source=contour, **kwargs)
 
     @classmethod
-    def point(cls, x0: int, y0: int,
-              style: dict[str, Any] = None, color: Optional[str] = None, **kwargs) -> ROI:
+    def point(cls, x0: int, y0: int, **kwargs) -> ROI:
         """Construct a point ROI."""
         array = np.array([[True]])
-        mask = Mask(array, style=style, color=color)
-        return cls(x0, y0, mask=mask, **kwargs)
+        return cls(x0, y0, source=array, **kwargs)
 
     @classmethod
-    def from_array(cls, x0: int, y0: int, array: Iterable,
-                   style: dict[str, Any] = None, color: Optional[str] = None, **kwargs) -> ROI:
-        """Construct a polygonic ROI from a list of corners."""
-        array = np.array(array)
-        mask = Mask(array, style=style, color=color)
-        return cls(x0, y0, mask=mask, **kwargs)
+    def from_array(cls, x0: int, y0: int, array: Iterable, **kwargs) -> ROI:
+        """Construct a polygonic ROI from a list of corners. Seems Superfluous?????"""
+        return cls(x0, y0, source=array, **kwargs)
 
     def apply(self, obj: Image, return_array: bool = False) -> Union[Image,np.ndarray]:
         """Apply the MaskLike to a Dataobject and either return the masked
@@ -361,10 +293,10 @@ class ROI(StyledObject):
         # find sizes and corners. The low corner is the difference between the mask's
         # center of mass and the position:
         if center:
-            mask_ref = self.mask.center_of_mass
+            mask_ref = self.center_of_mass
         else:
-            mask_ref = self.mask.ref_point
-        mask_size = self.mask.array.shape
+            mask_ref = self.ref_point
+        mask_size = self.array.shape
         pad_size = np.array((width, height))
         low_corner = (self.position[::-1] - mask_ref[::-1]).astype(int)
         high_corner = (pad_size - mask_size - low_corner).astype(int)
@@ -375,7 +307,7 @@ class ROI(StyledObject):
         crop_high = mask_size - np.clip(-high_corner, 0, None)
         if any(crop_low > mask_size) or any(crop_high < 0):
             return result
-        mask = self.mask.array[crop_low[0]:crop_high[0], crop_low[1]:crop_high[1]]
+        mask = self.array[crop_low[0]:crop_high[0], crop_low[1]:crop_high[1]]
 
         # pad the mask until it matches the pad_size:
         pad_low = np.clip(low_corner, 0, None)
@@ -387,15 +319,28 @@ class ROI(StyledObject):
         return result
 
     @property
-    def contour(self) -> Contour:
-        """Redirect to mask's contour."""
-        return self.mask.contour
+    def area(self) -> int:
+        """Total area in pixels. Is only valid when the mask is not cut off at the sides!"""
+        return self.array.astype(np.bool).sum()
+
+    @property
+    def ref_point(self) -> np.ndarray:
+        """Reference point for the mask."""
+        if self.contour is None:
+            return np.array([0, 0])
+        return self.contour.ref_point
+
+    @property
+    def center_of_mass(self) -> np.ndarray:
+        """The center of mass position of the mask array."""
+        x_i, y_i = np.nonzero(self.array)
+        return np.array([x_i.mean(), y_i.mean()])
 
     @property
     def artist(self) -> mpl.artist.Artist:
         if isinstance(self.contour, Contour):
             return self.contour.get_artist(self.position)
-        if self.mask.array.shape == (1, 1):
+        if self.array.shape == (1, 1):
             self.style["markersize"] = self.style.get("markersize", 10)
             self.style["marker"] = self.style.get("marker", "x")        # "X" is also good
             art = mpl.lines.Line2D([self.position[0]], [self.position[1]], **self.style)
@@ -413,135 +358,135 @@ class Profile:
 
 
 
-class ROIold:
-    """An image region represented as a boolean 2D array."""
-    # take care: OpenCV-points are given as (x, y),
-    # but numpy 2d image arrays are in (y, x)-coordinates
-    _shapes = ("circle", "ellipse", "square", "rectangle", "polygon", "custom")
-    _param_keys = ("radius", "width", "height", "rotation")
+# class ROIold:
+#     """An image region represented as a boolean 2D array."""
+#     # take care: OpenCV-points are given as (x, y),
+#     # but numpy 2d image arrays are in (y, x)-coordinates
+#     _shapes = ("circle", "ellipse", "square", "rectangle", "polygon", "custom")
+#     _param_keys = ("radius", "width", "height", "rotation")
 
-    def __init__(self, x0: int, y0: int,
-                 shape: Optional[str] = None,
-                 corners: Optional[Iterable[Iterable]] = None,
-                 array: Optional[np.ndarray] = None,
-                 style: Optional[dict] = None, **params):
-        self.position = np.array([y0, x0])
-        self.params = params
-        self._style = style
+#     def __init__(self, x0: int, y0: int,
+#                  shape: Optional[str] = None,
+#                  corners: Optional[Iterable[Iterable]] = None,
+#                  array: Optional[np.ndarray] = None,
+#                  style: Optional[dict] = None, **params):
+#         self.position = np.array([y0, x0])
+#         self.params = params
+#         self._style = style
 
-        self.shape = shape
-        self.corners = corners
-        self.array = array
-        try:
-            if self.corners is not None:
-                assert self.shape is None and self.array is None
-                self.corners = np.array(self.corners)
-                assert self.corners.shape[1] == 2
-                self.shape = "polygon"
-                self._make_polygon()
-            elif self.array is not None:
-                assert self.corners is None and self.shape is None
-                assert isinstance(self.array, np.ndarray) and len(self.array.shape) == 2
-                self.shape = "custom"
-                self.corners = np.array([self.array.shape[::-1]]) // 2
-            else:
-                assert self.corners is None and self.array is None
-                if self.shape is None:
-                    self.shape = "circle"
-                assert self.shape in self._shapes
-                self._make_shape()
-            assert isinstance(self.array, np.ndarray) and len(self.array.shape) == 2
-        except AssertionError as exc:
-            raise ValueError(f"Either more than one of {shape=}|{corners=}|{array=} "
-                              "were given or their type is not compatible") from exc
+#         self.shape = shape
+#         self.corners = corners
+#         self.array = array
+#         try:
+#             if self.corners is not None:
+#                 assert self.shape is None and self.array is None
+#                 self.corners = np.array(self.corners)
+#                 assert self.corners.shape[1] == 2
+#                 self.shape = "polygon"
+#                 self._make_polygon()
+#             elif self.array is not None:
+#                 assert self.corners is None and self.shape is None
+#                 assert isinstance(self.array, np.ndarray) and len(self.array.shape) == 2
+#                 self.shape = "custom"
+#                 self.corners = np.array([self.array.shape[::-1]]) // 2
+#             else:
+#                 assert self.corners is None and self.array is None
+#                 if self.shape is None:
+#                     self.shape = "circle"
+#                 assert self.shape in self._shapes
+#                 self._make_shape()
+#             assert isinstance(self.array, np.ndarray) and len(self.array.shape) == 2
+#         except AssertionError as exc:
+#             raise ValueError(f"Either more than one of {shape=}|{corners=}|{array=} "
+#                               "were given or their type is not compatible") from exc
 
-    def _make_polygon(self) -> None:
-        """Create a polygon mask."""
-        self.corners -= self.corners.min(axis=0)
-        self.array = np.zeros(self.corners.max(axis=0)[::-1] + 1)
-        self.array = cv2.fillConvexPoly(self.array, self.corners, color=1).astype(np.bool)
+#     def _make_polygon(self) -> None:
+#         """Create a polygon mask."""
+#         self.corners -= self.corners.min(axis=0)
+#         self.array = np.zeros(self.corners.max(axis=0)[::-1] + 1)
+#         self.array = cv2.fillConvexPoly(self.array, self.corners, color=1).astype(np.bool)
 
-    def _make_shape(self) -> None:
-        """Create a rectangular or elliptic mask. Arguments belonging to the shapes:
-            - circle: radius
-            - ellipse: width, height, rotation
-            - square: width, rotation
-            - rectangle: width, height, rotation
-        where radius, width and height are in pixels; rotation is in degrees (anti-clockwise).
-        """
-        if "radius" in self.params:
-            if "width" in self.params:
-                raise ValueError("Both radius and width were given for a shape-ROI")
-            self.params["width"] = self.params.pop("radius") * 2
-        self.params["height"] = self.params.get("height", self.params["width"])
-        self.params["rotation"] = self.params.get("rotation", 0)
+#     def _make_shape(self) -> None:
+#         """Create a rectangular or elliptic mask. Arguments belonging to the shapes:
+#             - circle: radius
+#             - ellipse: width, height, rotation
+#             - square: width, rotation
+#             - rectangle: width, height, rotation
+#         where radius, width and height are in pixels; rotation is in degrees (anti-clockwise).
+#         """
+#         if "radius" in self.params:
+#             if "width" in self.params:
+#                 raise ValueError("Both radius and width were given for a shape-ROI")
+#             self.params["width"] = self.params.pop("radius") * 2
+#         self.params["height"] = self.params.get("height", self.params["width"])
+#         self.params["rotation"] = self.params.get("rotation", 0)
 
-        width, height = self.params["width"], self.params["height"]
-        rotation = -self.params["rotation"]
+#         width, height = self.params["width"], self.params["height"]
+#         rotation = -self.params["rotation"]
 
-        if self.shape in ("circle", "ellipse"):
-            self.corners = cv2.ellipse2Poly(
-                center=(0, 0), axes=(width // 2, height // 2),
-                angle=int(rotation), arcStart=0, arcEnd=360, delta=1
-            )
-        elif self.shape in ("square", "rectangle"):
-            rot_c, rot_s = np.cos(-rotation * np.pi / 180), np.sin(-rotation * np.pi / 180)
-            rot_matrix = np.array([[rot_c, -rot_s], [rot_s, rot_c]])
-            corners = np.array([[0, 0], [width, 0], [width, height], [0, height]])
-            corners = np.rint(np.dot(corners, rot_matrix)).astype(np.int32)
-            self.corners = corners - corners.min(axis=0)
-        else:
-            raise ValueError(f"Unknown shape {self.shape}")
-        self._make_polygon()
+#         if self.shape in ("circle", "ellipse"):
+#             self.corners = cv2.ellipse2Poly(
+#                 center=(0, 0), axes=(width // 2, height // 2),
+#                 angle=int(rotation), arcStart=0, arcEnd=360, delta=1
+#             )
+#         elif self.shape in ("square", "rectangle"):
+#             rot_c, rot_s = np.cos(-rotation * np.pi / 180), np.sin(-rotation * np.pi / 180)
+#             rot_matrix = np.array([[rot_c, -rot_s], [rot_s, rot_c]])
+#             corners = np.array([[0, 0], [width, 0], [width, height], [0, height]])
+#             corners = np.rint(np.dot(corners, rot_matrix)).astype(np.int32)
+#             self.corners = corners - corners.min(axis=0)
+#         else:
+#             raise ValueError(f"Unknown shape {self.shape}")
+#         self._make_polygon()
 
-    @property
-    def style(self) -> dict[str, Any]:
-        """Return a style dictionary."""
-        return self._style
+#     @property
+#     def style(self) -> dict[str, Any]:
+#         """Return a style dictionary."""
+#         return self._style
 
-    @property
-    def mask(self) -> np.ndarray:
-        """Return a bool array."""
-        return self.array.astype(np.bool)
+#     @property
+#     def mask(self) -> np.ndarray:
+#         """Return a bool array."""
+#         return self.array.astype(np.bool)
 
-    def apply(self, obj: Image, return_array: bool = False) -> Union[Image,np.ndarray]:
-        """Apply the MaskLike to a Dataobject and either return the masked
-        DataObject or the raw masked data."""
-        full_mask = self.pad_to(*obj.image.shape).astype(np.bool)
-        if return_array:
-            return full_mask * obj.image
-        result = obj.copy()
-        result.image = np.ma.masked_array(result.image, mask=full_mask)
-        return result
+#     def apply(self, obj: Image, return_array: bool = False) -> Union[Image,np.ndarray]:
+#         """Apply the MaskLike to a Dataobject and either return the masked
+#         DataObject or the raw masked data."""
+#         full_mask = self.pad_to(*obj.image.shape).astype(np.bool)
+#         if return_array:
+#             return full_mask * obj.image
+#         result = obj.copy()
+#         result.image = np.ma.masked_array(result.image, mask=full_mask)
+#         return result
 
-    @property
-    def area(self) -> int:
-        """Total area in pixels. Is only valid when the mask is not cut off at the sides!"""
-        return self.mask.sum()
+#     @property
+#     def area(self) -> int:
+#         """Total area in pixels. Is only valid when the mask is not cut off at the sides!"""
+#         return self.mask.sum()
 
-    def pad_to(self, width: int, height: int):
-        """Return the the mask padded to a given extent."""
-        # find sizes and corners. The low corner is the difference between the mask's
-        # center of mass and the position:
-        mask_size = self.mask.shape
-        pad_size = np.array((height, width))
-        low_corner = (self.position - self.corners.mean(axis=0)).astype(int)
-        high_corner = (pad_size - mask_size - low_corner).astype(int)
+#     def pad_to(self, width: int, height: int):
+#         """Return the the mask padded to a given extent."""
+#         # find sizes and corners. The low corner is the difference between the mask's
+#         # center of mass and the position:
+#         mask_size = self.mask.shape
+#         pad_size = np.array((height, width))
+#         low_corner = (self.position - self.corners.mean(axis=0)).astype(int)
+#         high_corner = (pad_size - mask_size - low_corner).astype(int)
 
-        result = np.zeros(pad_size)
-        # crop the mask, if need be (i.e., if corners have negative components):
-        crop_low = np.clip(-low_corner, 0, None)
-        crop_high = mask_size - np.clip(-high_corner, 0, None)
-        if any(crop_low > mask_size) or any(crop_high < 0):
-            return result
-        mask = self.mask[crop_low[0]:crop_high[0], crop_low[1]:crop_high[1]]
+#         result = np.zeros(pad_size)
+#         # crop the mask, if need be (i.e., if corners have negative components):
+#         crop_low = np.clip(-low_corner, 0, None)
+#         crop_high = mask_size - np.clip(-high_corner, 0, None)
+#         if any(crop_low > mask_size) or any(crop_high < 0):
+#             return result
+#         mask = self.mask[crop_low[0]:crop_high[0], crop_low[1]:crop_high[1]]
 
-        # pad the mask until it matches the pad_size:
-        pad_low = np.clip(low_corner, 0, None)
-        pad_high = pad_size - np.clip(high_corner, 0, None)
-        result[pad_low[0]:pad_high[0], pad_low[1]:pad_high[1]] = mask
-        return result
+#         # pad the mask until it matches the pad_size:
+#         pad_low = np.clip(low_corner, 0, None)
+#         pad_high = pad_size - np.clip(high_corner, 0, None)
+#         result[pad_low[0]:pad_high[0], pad_low[1]:pad_high[1]] = mask
+#         return result
 
-    @property
-    def artist(self) -> mpl.artist.Artist:
-        """ROI Representation in matplotlib."""
+#     @property
+#     def artist(self) -> mpl.artist.Artist:
+#         """ROI Representation in matplotlib."""
