@@ -18,7 +18,9 @@ import numpy as np
 import cv2 as cv
 
 from agfalta.utility import parse_bytes, parse_cp1252_until_null
-from agfalta.dataobject import Image, ImageStack, IntensityLine, Line, StitchedLine
+from agfalta.dataobject import Image, ImageStack, StitchedLine
+from agfalta.leem.utility import imgify
+from agfalta.roi import ROI
 
 
 class TimeOrigin:
