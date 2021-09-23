@@ -26,6 +26,7 @@ setup(
         "deepdiff",
         "matplotlib",
         "pandas",
+        "scikit-image",
         "scikit-learn",
         "scikit-video",
         "imageio",
@@ -42,5 +43,7 @@ setup(
     ],
     package_data={"agfalta.xps": ["rsf.db"]},
     python_requires="~=3.6",
-    tests_require=["pytest"]
+    tests_require=["pytest", "pytest-cov"]
 )
+
+# dev suggestions: black, pylint
