@@ -867,6 +867,7 @@ class Line(DataObject):
     _meta_defaults = {
         "ydim": "y",
         "xdim": "x",
+        "color": "k",
     }
     _unit_defaults = {"x": "a.u.", "y": "a.u."}
 

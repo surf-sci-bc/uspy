@@ -4,7 +4,7 @@
 
 
 from __future__ import annotations
-from typing import Union, Optional
+from typing import Sequence, Union, Optional
 from collections.abc import Iterable
 from numbers import Number
 import os.path
@@ -21,6 +21,7 @@ import skvideo.io
 from IPython.display import display, Video
 
 import agfalta.dataobject as do
+import agfalta.roi as rois
 from agfalta.leem.utility import stackify, imgify
 from agfalta.leem.processing import roify, get_max_variance_idx, ROI, RSM
 from agfalta.leem.driftnorm import normalize_image
@@ -445,80 +446,154 @@ def print_meta(
     display(df)
 
 
-def plot_intensity(stack, *args, xaxis="rel_time", ax=None, **kwargs):
-    """Plots the image intensity in a specified ROI over a specified
-    x axis. The x axis can be any attribute of the stack.
-    Either you give:
-    - The ROI object itself (from leem.ROI())
-    - A list of ROI objects
-    - The parameters for a ROI:
-        x0=XX, y0=XX and one of these:
-        * type_="circle", radius=XX                 (default if omitted)
-        * type_="rectangle", width=XX, height=XX
-        * type_="ellipse", xradius=XX, yradius=XX
-    Examples:
-        plot_intensity(stack, x0=300, y0=200, radius=3)
-        plot_intensity(stack, x0=300, y0=100, width=15, height=20)  # makes rectangle
-        roi = leem.ROI(300, 200, radius=10)
-        plot_intensity(stack, roi)
-        plot_intensity(stack, x0=100, y0=50, type_="ellipse", xradius=5, xradius=4)
-        roi2 = leem.ROI(200, 100, radius=5)
-        plot_intensity(stack, (roi, roi2))
-    Returns the axes object
-    """
-    rois = roify(*args, **kwargs)
-    ax = _get_ax(ax, xlabel=xaxis, ylabel="Intensity in a.u.")
-    data = get_intensity(stack, rois, xaxis=xaxis)
-    x = data[0]
-    for roi, intensity in zip(rois, data[1:]):
-        if roi.color is not None:
-            ax.plot(x, intensity, color=roi.color)
-        else:
-            ax.plot(x, intensity)
+def plot_line(
+    line: Union[do.Line, Sequence[do.Line]],
+    ax: Union[mpl.axes.Axes, None] = None,
+    **kwargs,
+) -> mpl.axes.Axes:
+
+    line = line if isinstance(line, Sequence) else [line]
+
+    ax = _get_ax(ax, xlabel=line[0].xdim, ylabel=line[0].ydim)
+    for line in line:
+        ax.plot(line.x, line.y, color=line.color, **kwargs)
+
     return ax
 
 
-def plot_intensity_curve(curves, ax=None):
-    # if isinstance(curves, IntensityCurve):
-    #     curves = [curves]
-    ax = _get_ax(ax, xlabel=curves[0].xaxis, ylabel="Intensity in a.u.")
-    for curve in curves:
-        try:
-            color = curve.roi.color
-        except AttributeError:
-            color = curve.roi[0].color
-        if color is not None:
-            ax.plot(curve.x, curve.y, color=color)
-        else:
-            ax.plot(curve.x, curve.y)
+def plot_intensity(
+    stack: Union[do.ImageStack, Sequence[do.ImageStack]],
+    roi: Union[rois.ROI, Sequence[rois.ROI]],
+    xaxis: str,
+    ax: Union[mpl.axes.Axes, None] = None,
+    return_line=False,
+    **kwargs,
+) -> mpl.axes.Axes:
+
+    if isinstance(stack, Sequence):
+        line = do.StitchedLine(stack, roi, xaxis)
+        line.color = roi[0].color
+    elif isinstance(roi, Sequence):
+        line = [do.IntensityLine(stack, roi, xaxis) for roi in roi]
+        for li,ro in zip(line,roi):
+            li.color = ro.color
+    else:
+        line = do.IntensityLine(stack, roi, xaxis)
+        line.color = roi.color
+
+    ax = plot_line(line, ax, **kwargs)
+    if return_line:
+        return ax, line
     return ax
 
 
-def get_intensity(stack, *args, xaxis="rel_time", ofile=None, **kwargs):
-    """Calculate intensity profile along a stack in a given ROI (or multiple ROIs).
-    ROIs are supplied in the same way as for plot_intensity().
-    Returns a 2D-numpy array: The first row contains the value of "xaxis",
-    every following row contains the intensity along one of the ROIs.
-    If ofile is given, the result is saved in csv format under the given file name.
-    """
-    stack = stackify(stack)
-    rois = roify(*args, **kwargs)
-    x = getattr(stack, xaxis)
-    cols = [x]
-    for roi in rois:
-        cols.append(np.zeros(len(stack)))
+def plot_intensity_img(
+    stack: Union[do.ImageStack, Sequence[do.ImageStack]],
+    roi: Union[rois.ROI, Sequence[rois.ROI]],
+    xaxis: str,
+    img_idx: int = None,
+    stack_idx: int = 0,
+    return_line=False,
+    **kwargs,
+) -> tuple[mpl.Axes.Axes]:
 
-    for i, img in enumerate(stack):
-        for j, roi in enumerate(rois):
-            cols[j + 1][i] = roi.apply(img.image).sum() / roi.area
+    _, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
 
-    data = np.stack(cols)
+    if isinstance(stack, Sequence):
+        img_stack = stack[stack_idx]
+    else:
+        img_stack = stack
 
-    if ofile is not None:
-        np.savetxt(
-            ofile, data.T, header=f"{xaxis} | " + " | ".join(str(roi) for roi in rois)
-        )
-    return data
+    if img_idx is None:
+        img_idx = get_max_variance_idx(img_stack)
+
+    plot_img(
+        img_stack[img_idx], ax=ax2, ticks=True, contrast=kwargs.pop("contrast", "auto")
+    )
+
+    ax1 = plot_intensity(stack, roi, xaxis, ax1, return_line=return_line, **kwargs)
+
+    roi = [roi] if isinstance(roi, rois.ROI) else roi
+    for ro in roi:
+        ax2.add_artist(ro.artist)
+
+    return ax1, ax2
+
+
+# def plot_intensity(stack, *args, xaxis="rel_time", ax=None, **kwargs):
+#     """Plots the image intensity in a specified ROI over a specified
+#     x axis. The x axis can be any attribute of the stack.
+#     Either you give:
+#     - The ROI object itself (from leem.ROI())
+#     - A list of ROI objects
+#     - The parameters for a ROI:
+#         x0=XX, y0=XX and one of these:
+#         * type_="circle", radius=XX                 (default if omitted)
+#         * type_="rectangle", width=XX, height=XX
+#         * type_="ellipse", xradius=XX, yradius=XX
+#     Examples:
+#         plot_intensity(stack, x0=300, y0=200, radius=3)
+#         plot_intensity(stack, x0=300, y0=100, width=15, height=20)  # makes rectangle
+#         roi = leem.ROI(300, 200, radius=10)
+#         plot_intensity(stack, roi)
+#         plot_intensity(stack, x0=100, y0=50, type_="ellipse", xradius=5, xradius=4)
+#         roi2 = leem.ROI(200, 100, radius=5)
+#         plot_intensity(stack, (roi, roi2))
+#     Returns the axes object
+#     """
+#     rois = roify(*args, **kwargs)
+#     ax = _get_ax(ax, xlabel=xaxis, ylabel="Intensity in a.u.")
+#     data = get_intensity(stack, rois, xaxis=xaxis)
+#     x = data[0]
+#     for roi, intensity in zip(rois, data[1:]):
+#         if roi.color is not None:
+#             ax.plot(x, intensity, color=roi.color)
+#         else:
+#             ax.plot(x, intensity)
+#     return ax
+
+
+# def plot_intensity_curve(curves, ax=None):
+#     # if isinstance(curves, IntensityCurve):
+#     #     curves = [curves]
+#     ax = _get_ax(ax, xlabel=curves[0].xaxis, ylabel="Intensity in a.u.")
+#     for curve in curves:
+#         try:
+#             color = curve.roi.color
+#         except AttributeError:
+#             color = curve.roi[0].color
+#         if color is not None:
+#             ax.plot(curve.x, curve.y, color=color)
+#         else:
+#             ax.plot(curve.x, curve.y)
+#     return ax
+
+
+# def get_intensity(stack, *args, xaxis="rel_time", ofile=None, **kwargs):
+#     """Calculate intensity profile along a stack in a given ROI (or multiple ROIs).
+#     ROIs are supplied in the same way as for plot_intensity().
+#     Returns a 2D-numpy array: The first row contains the value of "xaxis",
+#     every following row contains the intensity along one of the ROIs.
+#     If ofile is given, the result is saved in csv format under the given file name.
+#     """
+#     stack = stackify(stack)
+#     rois = roify(*args, **kwargs)
+#     x = getattr(stack, xaxis)
+#     cols = [x]
+#     for roi in rois:
+#         cols.append(np.zeros(len(stack)))
+
+#     for i, img in enumerate(stack):
+#         for j, roi in enumerate(rois):
+#             cols[j + 1][i] = roi.apply(img.image).sum() / roi.area
+
+#     data = np.stack(cols)
+
+#     if ofile is not None:
+#         np.savetxt(
+#             ofile, data.T, header=f"{xaxis} | " + " | ".join(str(roi) for roi in rois)
+#         )
+#     return data
 
 
 def plot_iv(*args, **kwargs):
@@ -527,27 +602,27 @@ def plot_iv(*args, **kwargs):
     return plot_intensity(*args, xaxis="energy", **kwargs)
 
 
-def plot_intensity_img(stack, *args, xaxis="rel_time", img_idx=None, **kwargs):
-    """Does the same thing as agfalta.leem.plotting.plot_intensity()
-    but also shows an image of the stack and the ROI on it on the right.
-    Returns 2 axes objects: The first one contains the plot, the second one the image.
-    """
-    stack = stackify(stack)
-    rois = roify(*args, **kwargs)
-    for kwarg in ROI.kwargs:
-        kwargs.pop(kwarg, None)
+# def plot_intensity_img(stack, *args, xaxis="rel_time", img_idx=None, **kwargs):
+#     """Does the same thing as agfalta.leem.plotting.plot_intensity()
+#     but also shows an image of the stack and the ROI on it on the right.
+#     Returns 2 axes objects: The first one contains the plot, the second one the image.
+#     """
+#     stack = stackify(stack)
+#     rois = roify(*args, **kwargs)
+#     for kwarg in ROI.kwargs:
+#         kwargs.pop(kwarg, None)
 
-    _, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
+#     _, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
 
-    if img_idx is None:
-        img_idx = get_max_variance_idx(stack)
-    plot_img(stack[img_idx], ax=ax2, ticks=True, **kwargs)
-    plot_rois(rois, ax=ax2)
+#     if img_idx is None:
+#         img_idx = get_max_variance_idx(stack)
+#     plot_img(stack[img_idx], ax=ax2, ticks=True)
+#     plot_rois(rois, ax=ax2)
 
-    for roi in rois:
-        plot_intensity(stack, roi, ax=ax1, xaxis=xaxis)
+#     for roi in rois:
+#         plot_intensity(stack, roi, ax=ax1, xaxis=xaxis)
 
-    return ax1, ax2
+#     return ax1, ax2
 
 
 def plot_iv_img(*args, **kwargs):
@@ -680,3 +755,18 @@ def _get_ax(ax, **kwargs):
     if kwargs.get("ylabel", False):
         ax.set_ylabel(kwargs["ylabel"])
     return ax
+
+
+def get_max_variance_idx(stack):
+    # stack = stackify(stack)
+    max_var = 0
+    max_index = 0
+    for i, img in enumerate(stack):
+        var = np.var(
+            (img.image.flatten() - np.amin(img.image))
+            / (np.amax(img.image) - np.amin(img.image))
+        )
+        if var > max_var:
+            max_var = var
+            max_index = i
+    return max_index
