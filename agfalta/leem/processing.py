@@ -15,9 +15,9 @@ import scipy.optimize
 import scipy.constants as sc
 import scipy.signal
 import skimage.measure
-import agfalta.leem.driftnorm as driftnorm
+# import agfalta.leem.driftnorm as driftnorm
 
-from agfalta.leem.base import LEEMStack, Loadable
+# from agfalta.leem.base import LEEMStack#, Loadable
 from agfalta.leem.utility import stackify
 from agfalta.utility import progress_bar
 
@@ -373,170 +373,173 @@ class RSM:
         return np.nan_to_num(kperp, 0)
 
 
-class LEEMCurve(Loadable):
+# class LEEMCurve(Loadable):
 
-    """
-    Intensitiy curve of LEEM stack.
-    It receives a stack, ROI and xaxis.
-    The Intensity of ROI is extracted along the given xaxis and presented
-    as attributes afterwards
-        - save()/load is inherited from Loadable and saves/loads as pickle object
-        - savecsv saves the x,y data as .csv file
-    """
+#     """
+#     Intensitiy curve of LEEM stack.
+#     It receives a stack, ROI and xaxis.
+#     The Intensity of ROI is extracted along the given xaxis and presented
+#     as attributes afterwards
+#         - save()/load is inherited from Loadable and saves/loads as pickle object
+#         - savecsv saves the x,y data as .csv file
+#     """
 
-    _pickle_extension = ".lc"
+#     _pickle_extension = ".lc"
 
-    def __init__(self, stacks, xaxis, rois):
+#     def __init__(self, stacks, xaxis, rois):
 
-        stacks = [stacks] if not isinstance(stacks, abc.Iterable) else stacks
-        rois = roify(rois)
+#         stacks = [stacks] if not isinstance(stacks, abc.Iterable) else stacks
+#         rois = roify(rois)
 
-        if len(rois) != len(stacks):
-            raise ValueError(
-                "Number of Stacks and ROIs does not match. "
-                f"Expected {len(stacks)} list of ROIs, got {len(rois)} instead."
-            )
+#         if len(rois) != len(stacks):
+#             raise ValueError(
+#                 "Number of Stacks and ROIs does not match. "
+#                 f"Expected {len(stacks)} list of ROIs, got {len(rois)} instead."
+#             )
 
-        self._fullstack = None
+#         self._fullstack = None
 
-        self._roi = rois
+#         self._roi = rois
 
-        self._fnames = [stack.fnames for stack in stacks]
-        try:
-            self._dark_counts = [stack.dark_counts for stack in stacks]
-            self._mcp = [stack.mcp for stack in stacks]
-        except AttributeError:
-            pass
-        try:
-            self._alignment = [stack.alignment for stack in stacks]
-        except AttributeError:
-            pass
+#         self._fnames = [stack.fnames for stack in stacks]
+#         try:
+#             self._dark_counts = [stack.dark_counts for stack in stacks]
+#             self._mcp = [stack.mcp for stack in stacks]
+#         except AttributeError:
+#             pass
+#         try:
+#             self._alignment = [stack.alignment for stack in stacks]
+#         except AttributeError:
+#             pass
 
-        self._xaxis = xaxis
-        if len(stacks) == 1:
-            self._x, self._y = self._get_intensity(
-                self.simplify(stacks), self.simplify(rois)
-            )
-        else:
-            print(
-                f"Received {len(stacks)} Stacks. Trying to stitch the curves togeher."
-            )
-            self._x, self._y = self._stitch_curves(stacks, rois)
+#         self._xaxis = xaxis
+#         if len(stacks) == 1:
+#             self._x, self._y = self._get_intensity(
+#                 self.simplify(stacks), self.simplify(rois)
+#             )
+#         else:
+#             print(
+#                 f"Received {len(stacks)} Stacks. Trying to stitch the curves togeher."
+#             )
+#             self._x, self._y = self._stitch_curves(stacks, rois)
 
-    def _get_intensity(self, stack, roi):
-        x = getattr(stack, self._xaxis)
-        y = [roi.apply(img.data).sum() / roi.area for img in stack]
-        return np.array(x), np.array(y)
+#     def _get_intensity(self, stack, roi):
+#         x = getattr(stack, self._xaxis)
+#         y = [roi.apply(img.data).sum() / roi.area for img in stack]
+#         return np.array(x), np.array(y)
 
-    def _stitch_curves(self, stacks, rois):
-        """
-        Acquire intensity curves sitched together from different stacks.
-        - stacks: A list of stacks, e.g. (stack1, stack2, ...).
-            Stacks have to be in the right order and need an overlapping region, that will be fitted.
-        - rois: List of ROIs, e.g. (roi1, roi2, ..)
-            The Number of ROIs has to match the number of stacks given. The first list of ROIs is applied
-            to the first stack, the second to the second stack. The intensity curves of the ROIs are stitched together.
-        """
+#     def _stitch_curves(self, stacks, rois):
+#         """
+#         Acquire intensity curves sitched together from different stacks.
+#         - stacks: A list of stacks, e.g. (stack1, stack2, ...).
+#             Stacks have to be in the right order and need an overlapping region,
+#             that will be fitted.
+#         - rois: List of ROIs, e.g. (roi1, roi2, ..)
+#             The Number of ROIs has to match the number of stacks
+#             given. The first list of ROIs is applied
+#             to the first stack, the second to the second stack. The
+#             intensity curves of the ROIs are stitched together.
+#         """
 
-        x_data = []
-        y_data = []
-        for stack, rois in zip(stacks, rois):
-            x, y = self._get_intensity(stack, rois)
-            x_data.append(x)
-            y_data.append(y)
+#         x_data = []
+#         y_data = []
+#         for stack, rois in zip(stacks, rois):
+#             x, y = self._get_intensity(stack, rois)
+#             x_data.append(x)
+#             y_data.append(y)
 
-        new_y_data = [curve for curve in y_data]
+#         new_y_data = [curve for curve in y_data]
 
-        for jj, line in enumerate(y_data[1:]):
+#         for jj, line in enumerate(y_data[1:]):
 
-            # Overlap assuming ordered x values
-            # jj+1 because the first line remains unmodified. y_data[1] corresponds to jj=0
-            _, x1_ind, x2_ind = np.intersect1d(
-                x_data[jj], x_data[jj + 1], return_indices=True
-            )
-            fit_y, fit_x = (
-                line[x2_ind[0] : x2_ind[-1]],
-                x_data[jj + 1][x2_ind[0] : x2_ind[-1]],
-            )
-            int_y, int_x = (
-                new_y_data[jj][x1_ind[0] : x1_ind[-1]],
-                x_data[jj][x1_ind[0] : x1_ind[-1]],
-            )
+#             # Overlap assuming ordered x values
+#             # jj+1 because the first line remains unmodified. y_data[1] corresponds to jj=0
+#             _, x1_ind, x2_ind = np.intersect1d(
+#                 x_data[jj], x_data[jj + 1], return_indices=True
+#             )
+#             fit_y, fit_x = (
+#                 line[x2_ind[0] : x2_ind[-1]],
+#                 x_data[jj + 1][x2_ind[0] : x2_ind[-1]],
+#             )
+#             int_y, int_x = (
+#                 new_y_data[jj][x1_ind[0] : x1_ind[-1]],
+#                 x_data[jj][x1_ind[0] : x1_ind[-1]],
+#             )
 
-            # Interpolate previous line and fit new line
+#             # Interpolate previous line and fit new line
 
-            # pylint: disable=unbalanced-tuple-unpacking, cell-var-from-loop
+#             # pylint: disable=unbalanced-tuple-unpacking, cell-var-from-loop
 
-            spline = scipy.interpolate.interp1d(int_x, int_y, kind="cubic")
-            f = lambda x, a: a * spline(x)
-            popt, _ = scipy.optimize.curve_fit(f, fit_x, fit_y)
+#             spline = scipy.interpolate.interp1d(int_x, int_y, kind="cubic")
+#             f = lambda x, a: a * spline(x)
+#             popt, _ = scipy.optimize.curve_fit(f, fit_x, fit_y)
 
-            new_y_data[jj + 1] *= 1 / popt
+#             new_y_data[jj + 1] *= 1 / popt
 
-        # Sort everything to new stitched x,y data
+#         # Sort everything to new stitched x,y data
 
-        stitched_x_data = x_data[0]
-        stitched_y_data = new_y_data[0]
+#         stitched_x_data = x_data[0]
+#         stitched_y_data = new_y_data[0]
 
-        for x, y in zip(x_data[1:], new_y_data[1:]):
-            _, _, ind = np.intersect1d(stitched_x_data, x, return_indices=True)
-            stitched_x_data = np.append(stitched_x_data, x[ind[-1] + 1 :])
-            stitched_y_data = np.append(stitched_y_data, y[ind[-1] + 1 :])
+#         for x, y in zip(x_data[1:], new_y_data[1:]):
+#             _, _, ind = np.intersect1d(stitched_x_data, x, return_indices=True)
+#             stitched_x_data = np.append(stitched_x_data, x[ind[-1] + 1 :])
+#             stitched_y_data = np.append(stitched_y_data, y[ind[-1] + 1 :])
 
-        return stitched_x_data, stitched_y_data
+#         return stitched_x_data, stitched_y_data
 
-    @property
-    def x(self):
-        return self._x
+#     @property
+#     def x(self):
+#         return self._x
 
-    @property
-    def y(self):
-        return self._y
+#     @property
+#     def y(self):
+#         return self._y
 
-    @property
-    def roi(self):
-        return self.simplify(self._roi)
+#     @property
+#     def roi(self):
+#         return self.simplify(self._roi)
 
-    @property
-    def xaxis(self):
-        return self._xaxis
+#     @property
+#     def xaxis(self):
+#         return self._xaxis
 
-    @property
-    def stack(self):
-        if self._fullstack is not None:
-            return self.simplify(self._fullstack)
-        return self.simplify(self.reconstruct())
+#     @property
+#     def stack(self):
+#         if self._fullstack is not None:
+#             return self.simplify(self._fullstack)
+#         return self.simplify(self.reconstruct())
 
-    def reconstruct(self):
-        stacks = [LEEMStack(fnames) for fnames in self._fnames]
-        for ii, _ in enumerate(stacks):
-            try:
-                stacks[ii] = driftnorm.normalize(
-                    stacks[ii], mcp=self._mcp[ii], dark_counts=self._dark_counts[ii]
-                )
-            except AttributeError:
-                pass
-            try:
-                stacks[ii] = driftnorm.apply_alignment_matrices(
-                    stacks[ii], self._alignment[ii]
-                )
-            except AttributeError:
-                pass
+#     def reconstruct(self):
+#         stacks = [LEEMStack(fnames) for fnames in self._fnames]
+#         for ii, _ in enumerate(stacks):
+#             try:
+#                 stacks[ii] = driftnorm.normalize(
+#                     stacks[ii], mcp=self._mcp[ii], dark_counts=self._dark_counts[ii]
+#                 )
+#             except AttributeError:
+#                 pass
+#             try:
+#                 stacks[ii] = driftnorm.apply_alignment_matrices(
+#                     stacks[ii], self._alignment[ii]
+#                 )
+#             except AttributeError:
+#                 pass
 
-        return stacks
+#         return stacks
 
-    def simplify(self, value):
-        if len(value) == 1:
-            return value[0]
-        return value
+#     def simplify(self, value):
+#         if len(value) == 1:
+#             return value[0]
+#         return value
 
-    def full_save(self, path):
-        fullstack = self._fullstack is None
-        self._fullstack = self.stack  # Add stack to the object
-        super().save(path)  # Save the Object
-        if fullstack:
-            self._fullstack = None  # Delete stack again if it was None before
+#     def full_save(self, path):
+#         fullstack = self._fullstack is None
+#         self._fullstack = self.stack  # Add stack to the object
+#         super().save(path)  # Save the Object
+#         if fullstack:
+#             self._fullstack = None  # Delete stack again if it was None before
 
-    def save_csv(self, ofile):
-        data = np.vstack((self._x, self._y))
-        np.savetxt(ofile, data, delimiter=",")
+#     def save_csv(self, ofile):
+#         data = np.vstack((self._x, self._y))
+#         np.savetxt(ofile, data, delimiter=",")

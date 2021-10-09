@@ -23,11 +23,14 @@ setup(
     setup_requires=["setuptools_scm"],
     install_requires=[
         "numpy",
+        "deepdiff",
         "matplotlib",
         "pandas",
-        "scikit-learn",
         "scikit-image",
+        "scikit-learn",
         "scikit-video",
+        "imageio",
+        "tifffile",
         "pyclustering",
         "nltk",
         "opencv-python-headless",
@@ -35,9 +38,12 @@ setup(
         "lmfit",
         "ipython",
         "netCDF4",
+        "json_tricks",
         "setuptools_scm",       # see agfalta/version.py
     ],
     package_data={"agfalta.xps": ["rsf.db"]},
     python_requires="~=3.6",
-    tests_require=["pytest"]
+    tests_require=["pytest", "pytest-cov"]
 )
+
+# dev suggestions: black, pylint

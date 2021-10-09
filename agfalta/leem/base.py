@@ -2,778 +2,633 @@
 Basic classes for Elmitec LEEM ".dat"-file parsing and data visualization.
 """
 # pylint: disable=missing-docstring
-# pylint: disable=invalid-name
 # pylint: disable=attribute-defined-outside-init
+# plyint: disable=access-member-before-definition
 
-import bz2
-import copy
+from __future__ import annotations
+from typing import Any, Union, Optional
+from collections.abc import Iterable
+from numbers import Number
+from datetime import datetime
 import glob
-import numbers
-import pickle
-import struct
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from tqdm.auto import tqdm
 
 import numpy as np
-from agfalta.utility import progress_bar
-from skimage.io import imread
+import cv2 as cv
+
+from agfalta.utility import parse_bytes, parse_cp1252_until_null
+from agfalta.dataobject import Image, ImageStack, StitchedLine
+from agfalta.leem.utility import imgify
+from agfalta.roi import ROI
 
 
-class Loadable:
-    _pickle_extension = ".unknown"
-    _compression_extension = ".bz2"
-
-    def load_pickle(self, path, *args, **kwargs):
-        instance = self.unpickle(path, *args, **kwargs)
-        self.__dict__.update(instance.__dict__)
-
-    def __setstate__(self, state):
-        """Make sure that the path is inserted first."""
-        try: ## Is try/except really neccessary?
-            self.path = state.pop("path")
-        except:
-            pass
-        if "fnames" in state:
-            self.fnames = state.pop("fnames")
-        self.__dict__.update(state)
-
-    @classmethod
-    def unpickle(cls, path, *_args, **kwargs):
-        # pylint: disable=protected-access
-        if path.endswith(cls._compression_extension):
-            print("Uncompressing data...")
-            instance = bz2.BZ2File(path, 'rb')
-            instance = pickle.load(instance)
-            return instance
-        if path.endswith(cls._pickle_extension):
-            with Path(path).open("rb") as pfile:
-                # print(f"Loading stack from '{path}'")
-                instance = pickle.load(pfile)
-                if "time_origin" in kwargs:
-                    instance._time_origin = kwargs["time_origin"]
-                return instance
-        raise ValueError("File not compatible")
-    
-    @classmethod
-    def load(cls, path, *_args, **kwargs):
-        return cls.unpickle(path, _args, kwargs)
-
-    def save(self, path, overwrite=True):
-        if Path(path).exists and not overwrite:
-            raise FileExistsError(f"File {path} already exists and overwrite=False")
-
-        _pickle_compression_extension = self._pickle_extension + self._compression_extension
-        if path.endswith(self._pickle_extension):
-            pass
-        elif path.endswith(_pickle_compression_extension):
-            pass
-        elif path.endswith(self._compression_extension):
-            # If we reach here, path has form file.bz2
-            # injecting pickle extension
-            i = len(self._compression_extension)
-            path = path[:-i] + self._pickle_extension + path[-i:]
-        else:
-            # If we reach here, the file has no meaningfull ending at all
-            path += self._pickle_extension
-
-        if path.endswith(self._compression_extension):
-            print("Compressing data...")
-            with bz2.BZ2File(path, 'w') as f:
-                try:
-                    pickle.dump(self, f, protocol=4)
-                except RecursionError:
-                    print("WARING: Did not save due to recursion error.")
-                    raise
-                return
-        with Path(path).open("wb") as pfile:
-            try:
-                pickle.dump(self, pfile, protocol=4)
-            except RecursionError:
-                print("WARING: Did not save due to recursion error.")
-                raise
+class TimeOrigin:
+    def __init__(self, value: Optional[Union[Number, TimeOrigin]] = None):
+        if isinstance(value, TimeOrigin):
+            value = value.value
+        elif value is None:
+            value = np.nan
+        self.value = float(value)
 
 
-
-class LEEMImg(Loadable):
+class LEEMImg(Image):
     """
-    LEEM image that exposes metadata as attributes. Usage:
-        >>> img = LEEMImgBase(fname)
-        >>> print(img.energy)
-        >>> print(img.height)
-        >>> data = img.data
-    and so on.
-    Possible attributes are:
-        - data              numpy array containing the image
-        - energy            in eV
-        - temperature
-        - fov               0: LEED, nan: unknown FoV
-        - pressure1         in Torr
-        - pressure2
-        - width             in pixels
-        - height
-        - time              as string
-        - timestamp         as UNIX timestamp
-        - rel_time          seconds since start of stack (fallback: timestamp)
-        - exposure          camera exposure in s
-        - averaging         0: sliding average
-        - objective         lens current in mA
-        - emission          emission current (usually in µA)
+    LEEM image that exposes metadata as attributes.
+    Default attributes are:
+    - image: numpy array containing the image
+    - energy (in eV), temperature (in °C), fov (in µm), timestamp (in s)
     """
-    attrs = {
-        "width": "width",
-        "height": "height",
-        "_timestamp": "time",
-        "energy": "Start Voltage",
-        "temperature": "Sample Temp.",
-        "pressure1": "Gauge #1",
-        "pressure2": "Gauge #2",
-        "MCH": "MCH",
-        "PCH": "PCH",
-        "objective": "Objective",
-        "exposure": "Camera Exposure",
-        "averaging": "Average Images",
-        "fov": "fov",
-        "emission": "Emission Cur.",
+
+    _meta_defaults = {
+        "temperature": np.nan,
+        "pressure": np.nan,
+        "energy": np.nan,
+        "fov": "Unknown FoV",
+        "timestamp": np.nan,
+        "mcp": None,
+        "dark_counts": 0,
+        "warp_matrix": np.eye(3),
     }
-    _fallback_units = {
-        "energy": "V",
+    _unit_defaults = {
+        "energy": "eV",
         "temperature": "°C",
         "pressure": "Torr",
-        "pressure1": "Torr",
-        "pressure2": "Torr",
         "objective": "mA",
-        "fov": "µm",
         "timestamp": "s",
         "exposure": "s",
         "rel_time": "s",
         "dose": "L",
+        "emission": "µA",
+        "resolution": "µm/px",
+        "x_position": "µm",
+        "y_position": "µm",
     }
-    _pickle_extension = ".limg"
+    default_fields = ("temperature", "pressure", "energy", "fov")
 
-    def __init__(self, path, time_origin=0, nolazy=False):
-        self.path = path
-        self.time_origin = time_origin
-        self._meta = None
-        self._meta_units = None
-        self._data = None
+    def __init__(
+        self, *args, time_origin: Union[TimeOrigin, Number] = None, **kwargs
+    ) -> None:
+        if not isinstance(time_origin, TimeOrigin):
+            time_origin = TimeOrigin(time_origin)
+        super().__init__(*args, **kwargs)
+        self._time_origin = time_origin  # is a list so it can be mutable
 
-        try:                        # assume datfile or pickle
-            if path.endswith(".dat"):
-                if nolazy:
-                    _ = self.meta
-                    _ = self.data
-            elif path.endswith(self._pickle_extension):
-                super().load_pickle(path)
+    def get_field_string(self, field: str, fmt: Optional[str] = None) -> str:
+        """Get a string that contains the value and its unit. Some LEEM-specific fields
+        have different default formats than the pure DataObject method."""
+        if fmt is None:
+            if field == "temperature":
+                fmt = ".0f"
+            elif field == "energy":
+                fmt = ".3g"
+        return super().get_field_string(field, fmt)
+
+    def warp(self, warp_matrix=None, inplace: bool = False):
+
+        if warp_matrix is None:
+            warp_matrix = self.warp_matrix
+
+        image = cv.warpPerspective(
+            self.image,
+            warp_matrix,
+            self.image.shape[::-1],
+            flags=cv.INTER_LINEAR + cv.WARP_INVERSE_MAP,
+        )
+        if inplace:
+            self.image = image
+            self.warp_matrix = warp_matrix
+            return self
+
+        result = self.copy()
+        result.image = image
+        result.warp_matrix = warp_matrix
+        return result
+
+    def normalize(
+        self,
+        mcp: Image = None,
+        dark_counts: Union[int, float, Image] = 100,
+        inplace: bool = False,
+    ) -> LEEMImg:
+        """Normalization of LEEM Images
+
+        Parameters
+        ----------
+        mcp : Image, optional
+            [description], by default None
+        dark_counts : Union[int, float, Image], optional
+            [description], by default 100
+        inplace : bool, optional
+            [description], by default False
+
+        Returns
+        -------
+        LEEMImg
+            [description]
+        """
+        if mcp is None:
+            mcp = self.mcp   # pylint: disable=access-member-before-definition
+        mcp = imgify(mcp)
+        if not isinstance(dark_counts, (int, float, complex)):
+            dark_counts = imgify(dark_counts)
+
+        result = np.nan_to_num((self - dark_counts) / (mcp - dark_counts))
+
+        if inplace:
+            self.image = result.image
+            self.mcp = mcp
+            self.dark_counts = dark_counts
+            return self
+
+        result.mcp = mcp
+        result.dark_counts = dark_counts
+        return result
+
+    def find_warp_matrix(
+        self, template: Image, algorithm="ecc", **kwargs
+    ) -> np.ndarray:
+        if algorithm == "ecc":
+            return do_ecc_align(self, template, **kwargs)
+
+        raise ValueError("Unknown Algorithm")
+
+    def parse(self, source: str) -> dict[str, Any]:
+        if isinstance(source, Image):
+            self._source = None
+            return dict(source.meta, **source.data)
+        try:
+            if source.endswith(".dat"):
+                self._source = source
+                idict = parse_dat(source)
             else:
                 raise AttributeError
-        except AttributeError:      # assume other readable file or numpy array
+        except AttributeError:
             try:
-                self.parse_nondat(path)
-            except (ValueError, TypeError, AttributeError):
-                raise FileNotFoundError(f"{path} does not exist or can't read.") from None
+                idict = super().parse(source)
+            except:
+                raise FileNotFoundError(
+                    f"{source} does not exist or can't read."
+                ) from None
+        if idict.get("temperature", 0) > 3000:
+            idict["temperature"] = np.nan
+        return idict
 
-    def parse_nondat(self, path):
-        """Use this for other formats than pickle (which is already
-        implemented by Loadable)."""
-        try:
-            data = np.float32(imread(path))
-        except IOError:
-            # if the object given already is a numpy array:
-            data = path
-            path = "NO_PATH"
-        if len(data.shape) != 2:
-            raise ValueError(f"File '{path}' is not a single image")
-        self.path = path
-        self._data = data
-        self._meta = {
-            "height": data.shape[0],
-            "width": data.shape[1],
-            "time": 0
+    def __json_encode__(self) -> dict:
+        return {
+            "source": self.source,
+            "mcp": self.mcp,
+            "warp_matrix": self.warp_matrix,
+            "dark_counts": self.dark_counts,
         }
-        self._meta_units = {}
 
-    def copy(self):
-        return copy.deepcopy(self)
-
-    def __eq__(self, other):
-        try:
-            assert self.path == other.path
-            assert self.meta == other.meta
-            assert (self.data == other.data).all()
-            return True
-        except (AssertionError, AttributeError):
-            return False
-
-    def __getattr__(self, attr):
-        # if these don't exist, there is a problem:
-        if attr in ("path", "_meta", "_data", "time_origin"):
-            raise AttributeError
-        try:
-            if attr == "pressure":
-                for pfield in ("pressure1", "pressure2", "MCH", "PCH"):
-                    if self.attrs[pfield] in self.meta:
-                        return self.meta.get(self.attrs[pfield])
-                return np.nan
-            return self.meta.get(self.attrs[attr], np.nan)
-        except KeyError as e:
-            raise AttributeError(f"No attribute named {attr}") from e
-
-    def __setattr__(self, attr, value):
-        if attr in self.attrs:
-            self.meta[self.attrs[attr]] = value
-        else:
-            super().__setattr__(attr, value)
-
-    def __add__(self, other):
-        return_val = copy.deepcopy(self)
-
-        if isinstance(other, (numbers.Number, np.ndarray)):
-            return_val.data = self.data + other
-        elif isinstance(other, LEEMImg):
-            return_val.data = self.data + other.data
-        else:
-            raise TypeError(f"Unsupported Operation '+' for types {type(self)} and {type(other)}")
-        return return_val
-
-    def __radd__(self, other):
-        if other == 0:
-            return self
-        return self.__add__(other)
-
-    def __mul__(self, other):
-        return_val = copy.deepcopy(self)
-        if isinstance(other, (numbers.Number, np.ndarray)):
-            return_val.data = np.multiply(self.data, other)
-        elif isinstance(other, LEEMImg):
-            return_val.data = np.multiply(self.data, other.data)
-        else:
-            raise TypeError(f"Unsupported Operation '*' for types {type(self)} and {type(other)}")
-        return return_val
-
-    def __rmul__(self, other):
-        return self.__mul__(other)
-
-    def __truediv__(self, other):
-        return_val = copy.deepcopy(self)
-        if isinstance(other, (numbers.Number, np.ndarray)):
-            return_val.data = np.divide(self.data, other)
-        elif isinstance(other, LEEMImg):
-            return_val.data = np.divide(self.data, other.data)
-        else:
-            raise TypeError(f"Unsupported Operation '/' for types {type(self)} and {type(other)}")
-        return return_val
-
-    def __sub__(self, other):
-        return self.__add__(-1*other)
-
+    def __json_decode__(self, **attrs) -> None:
+        self.__init__(source=attrs["source"])
+        if attrs["mcp"]:
+            self.normalize(
+                mcp=attrs["mcp"], dark_counts=attrs["dark_counts"], inplace=True
+            )
 
     @property
-    def meta(self):
-        """Dictionary containing all header attributes."""
-        if self._meta is None:
-            self._meta, self._meta_units = parse_header(self.path)
-        return self._meta
+    def pressure(self) -> Number:
+        for k in ("pressure", "pressure1", "pressure2", "MCH", "PCH"):
+            pressure_ = self._meta.get(k, np.nan)
+            if not np.isnan(pressure_):
+                return pressure_
+        return np.nan
+
+    @pressure.setter
+    def pressure(self, value: Number) -> None:
+        self._meta["pressure"] = value
+
+    # @property
+    # def resolution(self) -> Number:
+    #     fov_ = self._meta.get("fov", np.nan)
+    #     if fov_ < 0:
+    #         fov_ = np.nan
+    #     return fov_ / self._meta.get("fov_cal", np.nan)
 
     @property
-    def meta_units(self):
-        """Dictionary containing all header attribute units."""
-        if self._meta_units is None:
-            self._meta, self._meta_units = parse_header(self.path)
-        return self._meta_units
+    def time_origin(self) -> Number:
+        return self._time_origin.value
+
+    @time_origin.setter
+    def time_origin(self, value: Number) -> None:
+        self._time_origin.value = value
 
     @property
-    def additional_meta(self):
-        add_meta = dict([
-            (key, self.meta[key])
-            for key in self.meta
-            if key not in self.attrs.values()
-            and key not in ("FoV", )
-        ])
-        return add_meta
+    def rel_time(self) -> Number:
+        return self.timestamp - self._time_origin.value
 
     @property
-    def data(self):
-        """Numpy array containing the image data."""
-        if self._data is None:
-            self._data = parse_data(self.path)
-        return self._data
-    @data.setter
-    def data(self, value):
-        if value.shape != (self.height, self.width):
-            raise ValueError("Image has wrong dimensions")
-        self._data = value
-
-    def get_unit(self, field):
-        """Unit string for the specified field."""
-        try:
-            return self.meta_units[self.attrs[field]]
-        except KeyError:
-            if hasattr(self, field) or self.attrs[field] in self.meta:
-                return self._fallback_units.get(field, "")
-            return ""
-
-    def get_field_string(self, field):
-        """Returns a string with the field value and unit."""
-        value = getattr(self, field)
-        if value == np.nan:
-            return "NaN"
-        if field == "rel_time":
-            return f"{value:5.0f} {self.get_unit(field)}"
-        if field == "energy":
-            return f"{value:4.1f} {self.get_unit(field)}"
-        if "pressure" in field:
-            return f"{value:.2g} {self.get_unit(field)}"
-        if field == "fov" and self.fov == 0:
-            return "LEED"
-        if not isinstance(value, (int, float)):
-            return f"{value} {self.get_unit(field)}".strip()
-        return f"{value:.5g} {self.get_unit(field)}".strip()
-
-    @property
-    def timestamp(self):
-        if self._timestamp == 0:
-            return np.nan
-        return self._timestamp
-
-    @property
-    def time(self):
+    def isotime(self) -> str:
         if np.isnan(self.timestamp):
             return "??-??-?? ??:??:??"
         return datetime.fromtimestamp(self.timestamp).strftime("%Y-%m-%d %H:%M:%S")
 
-    @property
-    def rel_time(self):
-        """Relative time in s (see set_time_origin()). Only makes sense for a stack."""
-        return self.timestamp - self.time_origin
+
+class LEEMStack(ImageStack):
+    _type = LEEMImg
+
+    def __init__(
+        self, *args, time_origin: Optional[Union[TimeOrigin, Number]] = None, **kwargs
+    ) -> None:
+        # initialize with np.nan for the first calls to self._single_construct
+        self._time_origin = TimeOrigin(time_origin)
+        super().__init__(*args, **kwargs)
+        # now we can access the 0th element and set the value
+        if time_origin is None:
+            self._time_origin.value = self[0].timestamp
+
+    def _split_source(self, source: Union[str, Iterable]) -> list:
+        if isinstance(source, str):
+            fnames = []
+            if source.endswith(".dat"):  # .../path/*.dat
+                fnames = sorted(glob.glob(f"{source}"))
+            if not fnames:  # .../path/
+                fnames = sorted(glob.glob(f"{source}*.dat"))
+            if not fnames:  # .../path
+                fnames = sorted(glob.glob(f"{source}/*.dat"))
+            if not fnames:  # if nothing works it might just be a list of filenames
+                return super()._split_source(source)
+            return fnames
+        return source
+
+    def _single_construct(self, source: Any) -> LEEMImg:
+        """Construct a single DataObject."""
+        return LEEMImg(source, time_origin=self._time_origin)
 
     @property
-    def fov(self):
-        """Either a positive number in µm, 0 for LEED, or NaN for unknown FoV."""
-        fov_str = self.meta.get("FoV", "")
-        if "LEED" in fov_str:
-            return 0
-        try:
-            return float(fov_str.split("µ")[0])
-        except ValueError:      # when the string does not contain a number
-            return np.nan
+    def time_origin(self) -> Number:
+        return self._time_origin.value
 
-    @property
-    def averaging(self):
-        """Number of images that are averaged. 0 means sliding average."""
-        avg = self.meta.get("Average Images", np.nan)
-        if avg == 255:
-            return 0
-        elif avg == 0:
-            return 1
-        return avg
+    @time_origin.setter
+    def time_origin(self, value: Number) -> None:
+        self._time_origin.value = value
+
+    def __getitem__(self, index: Union[int, slice]) -> Union[LEEMImg, LEEMStack]:
+        elements = self._elements[index]
+        if isinstance(index, int):
+            if (
+                self.virtual
+            ):  # if virtual elements contains just sources not DataObjects
+                return self._single_construct(elements)
+            return elements
+        return type(self)(elements, virtual=self.virtual, time_origin=self._time_origin)
+
+    def align(
+        self,
+        inplace: bool = False,
+        mask: Union[bool, np.ndarray, None] = True,
+        **kwargs,
+    ) -> LEEMStack:
+        """
+        Image registration of the stack
+
+        The images of the stack are registered subsequently by calling Image.find_warp_matrix() for
+        each image and finally warping them using Image.warp()
+
+        Parameters
+        ----------
+        inplace : bool, default False
+            If 'True' the stack itself will be registered
+            If 'False' a copy of the stack will be registered
+        mask : bool, np.ndarray or None, default True
+            Mask that will be used during registration
+
+            - If 'True' a circular mask with a radius=0.9*Image.width is used as mask
+            - If 'False' or 'None' no mask is used during registration
+            - If np.ndarray the array must be of dtype=np.uint8 and contain the mask that should be
+              applied
+
+        **kwargs
+            Additional keyword arguments are passed through to Image.find_warp_matrix
+
+        Returns
+        -------
+        LEEMStack
+            LEEMStack with aligned images. The stack itself is returned when 'inplace' = True
+
+        See Also
+        --------
+        find_warp_matrix
+        LEEMImg.warp
+        """
+
+        if inplace:
+            stack = self
+        else:
+            stack = self.copy()
+
+        if mask:
+            roi = ROI.circle(
+                x0=stack[0].width // 2,
+                y0=stack[0].height // 2,
+                radius=stack[0].width // 2 * 9 // 10
+            )
+            mask = (~np.ma.getmaskarray(roi.apply(stack[0]).image)).astype(np.uint8)
+        else:
+            mask = None
+        # List of all warp matrices
+        warp_matrices = [np.eye(3, dtype=np.float32)]
+
+        # find warp matrices between subsequent images
+        for img1, img2 in zip(tqdm(stack[1:]), stack):
+            warp_matrix = img1.find_warp_matrix(img2, mask=mask, **kwargs)
+            # img1.warp(warp_matrix, inplace = True)
+            warp_matrices.append(warp_matrix)
+
+        # calculate the warp matrices with respect to the position of first image
+        for index, matrix in enumerate(warp_matrices[1:]):
+            warp_matrices[index + 1] = matrix @ warp_matrices[index]
+
+        # apply warp matrices to image
+        for warp_matrix, img in zip(warp_matrices, stack):
+            img.warp(warp_matrix=warp_matrix, inplace=True)
+
+        return stack
+
+    def normalize(
+        self, mcp: Union[Image, str, None] = None, inplace: bool = False, **kwargs
+    ) -> LEEMStack:
+        """
+        Normalization of images in stack
+
+        The images in the stack are normalized by appling Image.normalize(mcp) to each image
+
+        Parameters
+        ----------
+        mcp : Image, str or None
+            Image or filename of image if str. If 'None' the mcp attribute of the images will be
+            used
+        inplace : bool, default False
+            If 'True' the stack itself will be normalized
+            If 'False' a copy of the stack will be normalized
+        **kwargs
+            Additional keyword arguments are passed through to Image.normalize
 
 
-class LEEMStack(Loadable):
-    """Container object for LEEMImg instances. It has the same attributes as LEEMImgBase
-    and returns them as numpy arrays.
-    It can be used like this:
-        stack = LEEMStack("path/to/imagestack")
-        img8 = stack[8]
-        for img in stack:
-            print(img.energy)
-        print(stack.energy)     # same as above
-        if img5 in stack:
-            print("yes")
+        .. note:: Consider passing 'dark_counts' as a keyword argument, to specify non-default
+            dark counts of the images
+
+        Returns
+        -------
+        LEEMStack
+            LEEMStack with registered images. The stack itself is returned when 'inplace'=True
+
+        See Also
+        --------
+        LEEMImg.normalize
+
+        """
+        # if not a copy funny things might happen when mcp is part of stack
+        mcp = imgify(mcp).copy()
+        if inplace:
+            stack = self
+        else:
+            stack = self.copy()
+
+        for img in tqdm(stack):
+            # if an image is multiple times in a stack and inplace is True, it should not be
+            # normalized twice, so if the mcp is already the current mcp, it will not be processed
+            if img.mcp is None or not img.mcp == mcp:
+                img.normalize(mcp=mcp, inplace=True, **kwargs)
+
+        return stack
+
+
+class IVCurve(StitchedLine):
     """
-    _pickle_extension = ".lstk"
-    unique_attrs = ("fnames", "path", "_images", "_virtual", "virtual",
-                    "_time_origin", "time_origin", "_silent")
+    Convenience Class for generating LEEM IV-Curves.
+    """
 
-    def __init__(self, path, virtual=False, nolazy=False, time_origin=-1,
-                 verbose=False):
-        # pylint: disable=too-many-branches, too-many-arguments
-        self.path = path
-        self._virtual = virtual
-        self._images = None
-        self.fnames = None
+    def __init__(self, *args, **kwargs):
+        """
+        It is called and behaves exactly like StitchedLine but is called with *xaxis* = "energy" by
+        default.
 
-        self._time_origin = time_origin
-        self._silent = not verbose
+        See Also
+        --------
+        dataobject.StitchedLine
+        """
+        print(*args)
+        print(**kwargs)
+        super().__init__(*args, **kwargs, xaxis="energy")
 
-        try:                # first, assume a string that yields fnames or a pickle
-            if path.endswith(".dat"):
-                self.fnames = sorted(glob.glob(f"{path}*"))
-            elif path.endswith(self._pickle_extension):
-                super().load_pickle(path)
-            else:
-                self.fnames = sorted(glob.glob(f"{path}/*.dat"))
-            if not self.fnames:
-                raise AttributeError
-        except AttributeError:
-            try:            # now, assume a list that yields fnames in some way
-                if isinstance(path[0], LEEMImg):
-                    self.fnames = [img.path for img in path]
-                    if not [img.data.shape == path[0].data.shape for img in path]:
-                        raise ValueError("Incompatible image dimensions") from None
-                    self._images = [img for img in path]
-                    self._virtual = False
-                else:
-                    self.fnames = [fname for fname in path if fname.endswith(".dat")]
-                if not self.fnames:
-                    raise AttributeError from None
-                self.path = "NO_PATH"
-            except (TypeError, AttributeError):
-                try:        # now, try everything else
-                    self.parse_nondat(path)
-                    self._virtual = False
-                except (AttributeError, ValueError):
-                    raise FileNotFoundError(
-                        f"'{self.path}' does not exist, cannot be read"
-                        " successfully or contains no *.dat files") from None
-        if nolazy:
-            for img in self:
-                _ = img.meta
-                _ = img.data
-
-    def parse_nondat(self, path):
-        """Use this for other formats than pickle (which is already
-        implemented by Loadable)."""
-        try:
-            data = np.float32(imread(path))
-        except IOError:
-            # if the object given already is a numpy array:
-            data = path
-            path = "NO_PATH"
-        if len(data.shape) != 3:
-            raise ValueError(f"File {path} is not an image stack")
-        self.path = path
-        self._images = [LEEMImg(data[i, :, :]) for i in range(data.shape[0])]
-        self.fnames = ["NO_PATH"] * data.shape[0]
-
-    def _load_images(self):
-        self._virtual = False
-        if self._images is None:
-            self._images = [LEEMImg(self.fnames[0], self.time_origin)]
-            if len(self.fnames) < 2:
-                return
-            for fname in progress_bar(self.fnames[1:], "Loading images...", silent=self._silent):
-                img = LEEMImg(fname, self.time_origin)
-                if img.data.shape != self._images[0].data.shape:
-                    raise ValueError("Image has the wrong dimensions")
-                self._images.append(img)
-
-    def copy(self):
-        if not self._silent:
-            print("Copying stack...")
-        return copy.deepcopy(self)
-
-    def __eq__(self, other):
-        try:
-            assert self.path == other.path
-            assert self.fnames == other.fnames
-            for self_img, other_img in zip(self, other):
-                assert self_img == other_img
-            return True
-        except (AssertionError, AttributeError):
-            return False
-
-    def __getitem__(self, indexes):
-        if isinstance(indexes, int):
-            if self.virtual:
-                return LEEMImg(self.fnames[indexes], time_origin=self.time_origin)
-            self._load_images()
-            return self._images[indexes]
-        else:
-            if self.virtual:
-                return LEEMStack(self.fnames.__getitem__(indexes),
-                                 time_origin=self.time_origin, virtual=True,
-                                 verbose=self.verbose)
-            self._load_images()
-            return LEEMStack(self._images.__getitem__(indexes),
-                             time_origin=self.time_origin, verbose=self.verbose)
-
-    def get_at(self, attr, value):
-        for img in self:
-            if getattr(img, attr) == value:
-                return img
-        vec = getattr(self, attr)
-        idx = np.abs(vec - value).argmin()
-        return self[int(idx)]
-
-    def __setitem__(self, indexes, imges):
-        if isinstance(indexes, int) and isinstance(imges, LEEMImg):
-            if imges.data.shape != self[0].data.shape:
-                raise ValueError("Incompatible image dimensions")
-            self.fnames[indexes] = imges.path
-            if self.virtual:
-                if imges.path != "NO_PATH":
-                    return
-                self._load_images()
-            self._images[indexes] = imges
-        else:
-            fnames = [img.path for img in imges]
-            self.fnames.__setitem__(indexes, fnames)
-            if self.virtual:
-                if "NO_PATH" not in fnames:
-                    return
-                self._load_images()
-            if isinstance(imges, LEEMStack):
-                self._images.__setitem__(indexes, [img for img in imges])
-            if all([isinstance(img, LEEMImg) for img in imges]):
-                if not [img.data.shape == imges[0].data.shape for img in imges[1:]]:
-                    raise ValueError("Incompatible image dimensions")
-                self._images.__setitem__(indexes, imges)
-            else:
-                raise TypeError("LEEMStack only takes LEEMImg elements")
-
-    def __delitem__(self, indexes):
-        self.fnames.__delitem__(indexes)
-        if not self._virtual:
-            self._images.__delitem__(indexes)
-
-    def __len__(self):
-        return len(self.fnames)
-
-    def __getattr__(self, attr):
-        if attr in self.unique_attrs:
-            raise AttributeError
-        try:
-            if self.virtual:
-                iterator = progress_bar(self, f"Collecting attr '{attr}'...", silent=self._silent)
-            else:
-                iterator = self
-            return np.array([getattr(img, attr) for img in iterator])
-        except AttributeError as e:
-            raise AttributeError(f"Unknown attribute {attr}") from e
-
-    def __setattr__(self, attr, value):
-        if attr in self.unique_attrs:
-            super().__setattr__(attr, value)
-        elif hasattr(value, "__len__") and len(self) == len(value):
-            if not self.virtual:
-                for img, single_value in zip(self, value):
-                    setattr(img, attr, single_value)
-            else:
-                super().__setattr__(attr, value)
-        elif not hasattr(self[0], attr):
-            super().__setattr__(attr, value)
-        else:
-            raise ValueError(f"Value '{value}' for '{attr}' has wrong shape")
-
-    def __add__(self, other):
-        return_val = self.copy()
-        return_val.virtual = False
-        for i, img in enumerate(return_val):
-            return_val[i] = img + other
-        return return_val
-
-    def __radd__(self, other):
-        if other == 0:
-            return self
-        return self.__add__(other)
-
-    def __mul__(self, other):
-        return_val = self.copy()
-        return_val.virtual = False
-        for i, img in enumerate(return_val):
-            return_val[i] = img * other
-        return return_val
-
-    def __rmul__(self, other):
-        return self.__mul__(other)
-
-    def __truediv__(self, other):
-        return_val = self.copy()
-        return_val.virtual = False
-        for i, img in enumerate(return_val):
-            return_val[i] = img / other
-        return return_val
-
-    def __sub__(self, other):
-        return self.__add__(-1*other)
-
-    @property
-    def virtual(self):
-        return self._virtual
-    @virtual.setter
-    def virtual(self, value):
-        if not value:
-            self._virtual = False
-            self._load_images()
-        else:
-            if "NO_PATH" in self.fnames:
-                raise ValueError("Stack can't be virtual retroactively")
-            self._virtual = True
-            self._images = None
-
-    @property
-    def verbose(self):
-        return not self._silent
-    @verbose.setter
-    def verbose(self, value):
-        self._silent = not value
-
-    @property
-    def time_origin(self):
-        if self._time_origin <= 0:
-            try:
-                self._time_origin = self._images[0].timestamp
-            except (IndexError, TypeError):
-                try:
-                    self._time_origin = LEEMImg(self.fnames[0]).timestamp
-                except (IndexError, TypeError):
-                    pass
-        return self._time_origin
-
-    @property
-    def data(self):
-        raise NotImplementedError("stack.data is no longer supported")
-    #     print("WARNING: Using stack.data is deprecated! Sane behaviour is not guaranteed")
-    #     if self._data is None:
-    #         self._load_images()
-    #         self._data = np.stack([img.data for img in self._images], axis=0)
-    #     return self._data
-
-
-
-def _parse_string_until_null(fd, debug=False):
-    buffer = b""
-    while b"\x00" not in buffer:
-        buffer += fd.read(1)
-    if debug:
-        print("\t" + str(buffer))
-    try:
-        return buffer[:-1].decode("cp1252")
-    except UnicodeDecodeError:
-        val = buffer[:-1].decode("cp1252", errors="ignore")
-        print(f"WARNING: Decoding error in string '{val}'")
-        return val
-
-def _parse_bytes(buffer, pos, encoding):
-    if encoding == "cp1252":
-        return buffer[pos:].split(b"\x00")[0].decode("cp1252")
-    elif encoding == "short":
-        return struct.unpack("<h", buffer[pos:pos + 2])[0]
-    elif encoding == "float":
-        return struct.unpack("<f", buffer[pos:pos + 4])[0]
-    elif encoding == "time":
-        epoch_start = datetime(year=1601, month=1, day=1, tzinfo=timezone.utc) # WIN epoch
-        win_timestamp = struct.unpack("<Q", buffer[pos:pos + 8])[0] / 1e7 # convert 100ns -> s
-        utc_time = epoch_start + timedelta(seconds=win_timestamp)
-        return utc_time.timestamp()
-    elif encoding == "bool":
-        return struct.unpack("<?", buffer[pos:pos + 1])[0]
-    else:
-        raise ValueError("Unknown encoding")
 
 # Format: meta_key: (byte_position, encoding)
 HEADER_ONE = {
-    "id":               (0, "cp1252"),
-    "size":             (20, "short"),
-    "version":          (22, "short"),
-    "bitsperpix":       (24, "short"),
-    "width":            (40, "short"),
-    "height":           (42, "short"),
-    "_noimg":           (44, "short"),
-    "_recipe_size":     (46, "short"),
+    "_id": (0, "cp1252"),
+    "_size": (20, "short"),
+    "_version": (22, "short"),
+    "_bitsperpix": (24, "short"),
+    "width": (40, "short"),
+    "height": (42, "short"),
+    "_noimg": (44, "short"),
+    "_recipe_size": (46, "short"),
 }
 HEADER_TWO = {
-    "isize":            (0, "short"),
-    "iversion":         (2, "short"),
-    "colorscale_low":   (4, "short"),
-    "colorscale_high":  (6, "short"),
-    "time":             (8, "time"),
-    "mask_xshift":      (16, "short"),
-    "mask_yshift":      (18, "short"),
-    "usemask":          (20, "bool"),
-    "att_markupsize":   (22, "short"),
-    "spin":             (24, "short")
+    "_isize": (0, "short"),
+    "_iversion": (2, "short"),
+    "_colorscale_low": (4, "short"),
+    "_colorscale_high": (6, "short"),
+    "time": (8, "time"),
+    "_mask_xshift": (16, "short"),
+    "_mask_yshift": (18, "short"),
+    "_usemask": (20, "bool"),
+    "_att_markupsize": (22, "short"),
+    "_spin": (24, "short"),
+}
+ATTR_NAMES = {
+    "timestamp": "time",
+    "energy": "Start Voltage",
+    "temperature": "Sample Temp.",
+    "pressure1": "Gauge #1",
+    "pressure2": "Gauge #2",
+    "objective": "Objective",
+    "emission": "Emission Cur.",
 }
 # Format: byte_position: (block_length, field_dict)
 # where field_dict is formatted like the above HEADER_ONE and HEADER_TWO
 VARIABLE_HEADER = {
-    255: (0, None),      # stop byte
-    100: (8, {"Mitutoyo X":         (0, "float"),
-              "Mitutoyo Y":         (4, "float")}),
+    255: (0, None),  # stop byte
+    100: (8, {"x_position": (0, "float"), "y_position": (4, "float")}),
     # Average Images: 0 means no averaging, 255 means sliding average
-    104: (6, {"Camera Exposure":    (0, "float"),
-              "Average Images":     (4, "short")}),
-    105: (0, {"Image Title":        (0, "cp1252")}),
-    242: (2, {"MirrorState":        (0, "bool")}),
-    243: (4, {"MCPScreen":          (0, "float")}),
-    244: (4, {"MCPChanneplate":     (0, "float")})
+    104: (6, {"exposure": (0, "float"), "averaging": (4, "short")}),
+    105: (0, {"_img_title": (0, "cp1252")}),
+    242: (2, {"mirror_state": (0, "bool")}),
+    243: (4, {"screen_voltage": (0, "float")}),
+    244: (4, {"mcp_voltage": (0, "float")}),
 }
-UNIT_CODES = {"1": "V", "2": "mA", "3": "A", "4": "°C",
-              "5": "K", "6": "mV", "7": "pA", "8": "nA", "9": "\xb5A"}
+UNIT_CODES = {
+    "1": "V",
+    "2": "mA",
+    "3": "A",
+    "4": "°C",
+    "5": "K",
+    "6": "mV",
+    "7": "pA",
+    "8": "nA",
+    "9": "\xb5A",
+    "B": "µm"
+}
 
-def parse_header(fname, debug=False):
-    """Uncomment the print statements here and in _parse_string_until_null() for
-    easier debugging."""
-    meta = {}
-    meta_units = {}
+
+def parse_dat(fname: str, debug: bool = False) -> dict[str, Any]:
+    """Parse a UKSOFT2001 file."""
+    data = {}
+
     def parse_block(block, field_dict):
         for key, (pos, encoding) in field_dict.items():
-            meta[key] = _parse_bytes(block, pos, encoding)
-            meta_units[key] = ""
+            data[key] = parse_bytes(block, pos, encoding)
             if debug:
-                print(f"\t{key} -> {meta[key]}")
+                print(f"\t{key} -> {data[key]}")
 
-    with Path(fname).open("rb") as f:
-        parse_block(f.read(104), HEADER_ONE)                    # first fixed header
+    with Path(fname).open("rb") as uk_file:
+        parse_block(uk_file.read(104), HEADER_ONE)  # first fixed header
 
-        if meta["_recipe_size"] > 0:                            # optional recipe
-            meta["recipe"] = _parse_bytes(f.read(meta["_recipe_size"]), 0, "cp1252")
-            f.seek(128 - meta["_recipe_size"], 1)
+        if data["_recipe_size"] > 0:  # optional recipe
+            data["recipe"] = parse_bytes(
+                uk_file.read(data["_recipe_size"]), 0, "cp1252"
+            )
+            uk_file.seek(128 - data["_recipe_size"], 1)
 
-        parse_block(f.read(26), HEADER_TWO)                     # second fixed header
+        parse_block(uk_file.read(26), HEADER_TWO)  # second fixed header
 
-        leemdata_version = _parse_bytes(f.read(2), 0, "short")
+        leemdata_version = parse_bytes(uk_file.read(2), 0, "short")
         if leemdata_version != 2:
-            f.seek(388, 1)
-        b = f.read(1)[0]
-        while b != 255:
+            uk_file.seek(388, 1)
+        bit = uk_file.read(1)[0]
+        while bit != 255:
             if debug:
-                print(b)
-            if b in VARIABLE_HEADER:                            # fixed byte codes
-                block_length, field_dict = VARIABLE_HEADER[b]
-                buffer = f.read(block_length)
+                print(bit)
+            if bit in VARIABLE_HEADER:  # fixed byte codes
+                block_length, field_dict = VARIABLE_HEADER[bit]
+                buffer = uk_file.read(block_length)
                 parse_block(buffer, field_dict)
                 if debug:
                     print("\tknown")
-            elif b in (106, 107, 108, 109, 235, 236, 237):      # varian pressures
-                key = _parse_string_until_null(f, debug)
-                meta_units[key] = _parse_string_until_null(f, debug)
-                meta[key] = _parse_bytes(f.read(4), 0, "float")
+            elif bit in (106, 107, 108, 109, 235, 236, 237):  # varian pressures
+                key = parse_cp1252_until_null(uk_file, debug)
+                data[f"{key}_unit"] = parse_cp1252_until_null(uk_file, debug)
+                data[key] = parse_bytes(uk_file.read(4), 0, "float")
                 if debug:
-                    print(f"\tknown: pressure {key} -> {meta[key]}")
-            elif b in (110, 238):                               # field of view
-                fov_str = _parse_string_until_null(f, debug)
-                meta["LEED"] = "LEED" in fov_str
-                meta["FoV"] = fov_str.split("\t")[0].strip()
-                meta["FoV cal"] = _parse_bytes(f.read(4), 0, "float")
+                    print(f"\tknown: pressure {key} -> {data[key]}")
+            elif bit in (110, 238):  # field of view
+                fov_str = parse_cp1252_until_null(uk_file, debug)
+                try:
+                    data["fov"], data["preset"] = fov_str.split("\t")
+                except ValueError:
+                    data["fov"], data["preset"] = fov_str, ""
+                data["fov_cal"] = parse_bytes(uk_file.read(4), 0, "float")
                 if debug:
-                    print(f"\tfov: {fov_str}")
-            elif b in (0, 1, 63, 66, 113, 128, 176, 216, 240, 232, 233):
+                    print(f"\tfov: {fov_str}\n\tfov_cal: {data['fov_cal']}")
+            elif bit in (0, 1, 63, 66, 113, 128, 176, 216, 240, 232, 233):
                 if debug:
-                    print(f"unknown byte {b}")
-            elif b: # self-labelled stuff
-                keyunit = _parse_string_until_null(f, debug)
+                    print(f"unknown byte {bit}")
+            elif bit:  # self-labelled stuff
+                keyunit = parse_cp1252_until_null(uk_file, debug)
                 # For some b, the string is empty. They should go in the tuple above.
                 if not keyunit:
-                    b = f.read(1)[0]
+                    bit = uk_file.read(1)[0]
                     continue
-                meta_units[keyunit[:-1]] = UNIT_CODES.get(keyunit[-1], "")
-                meta[keyunit[:-1]] = _parse_bytes(f.read(4), 0, "float")
+                data[f"{keyunit[:-1]}_unit"] = UNIT_CODES.get(keyunit[-1], "")
+                data[keyunit[:-1]] = parse_bytes(uk_file.read(4), 0, "float")
                 if debug:
-                    print(f"\tunknown: {keyunit[:-1]} -> {meta[keyunit[:-1]]}")
-            b = f.read(1)[0]
-    return meta, meta_units
+                    print(f"\tunknown: {keyunit[:-1]} -> {data[keyunit[:-1]]}")
+            bit = uk_file.read(1)[0]
 
+        size = data["width"] * data["height"]
+        uk_file.seek(-2 * size, 2)
+        image = np.fromfile(uk_file, dtype=np.uint16, sep="", count=size)
+        image = np.array(image, dtype=np.float32)
+        image = np.flipud(image.reshape((data["height"], data["width"])))
+        data["image"] = image
 
-def parse_data(fname, width=None, height=None):
-    with Path(fname).open("rb") as f:
-        if None in (width, height):
-            block = f.read(104)
-            width = _parse_bytes(block, *HEADER_ONE["width"])
-            height = _parse_bytes(block, *HEADER_ONE["height"])
-        size = width * height
-        f.seek(-2 * size, 2)
-        data = np.fromfile(f, dtype=np.uint16, sep='', count=size)
-        data = np.array(data, dtype=np.float32)
-        data = np.flipud(data.reshape((height, width)))
+    for new, old in ATTR_NAMES.items():
+        data[new] = data.pop(old, np.nan)
+        data[f"{new}_unit"] = data.pop(f"{old}_unit", "")
+    try:
+        if data["averaging"] == 0:
+            data["averaging"] = 1
+        elif data["averaging"] == 255:
+            data["averaging"] = 0
+    except KeyError:
+        pass
+    data["energy_unit"] = "eV"
+
     return data
+
+
+def do_ecc_align(
+    input_img: Image,
+    template_img: Image,
+    max_iter: int = 500,
+    eps: float = 1e-4,
+    trafo: str = "translation",
+    mask: Union[np.ndarray, None] = None,
+) -> np.ndarray:
+    """Finds warp matrix between two Images using ECC
+
+    Takes two images and calculates the warp matrix between both applying the transformation
+    specified by 'trafo' using the ECC Algorithm. A optional mask can be given to masked areas of
+    the images that are not taken into account during registration
+
+    Parameters
+    ----------
+    input_img : Image
+        Image that will be warped to match the tempalate image
+    template_img : Image
+        The template image
+    max_iter : int, optional
+        Number of iterations to find the warp matrix. Regstration fails if max_iter is
+        exceeded, by default 500
+    eps : float, optional
+        Abortion criterion to determine successfull registration, by default 1e-4
+    trafo : str, optional
+        The transformation that is applied to the images. 'trafo' must be either
+
+        * "translation" for only x,y shifting of images
+        * "rigid" or "euclidean" for translation, rotation and scaling
+        * "affine" for translation, rotation, scaling and shearing
+
+        , by default "translation"
+    mask : Union[np.ndarray, None], optional
+        The mask must be a 2D numpy array of dtype=np.uint8 containing '0' where pixels in the
+        images will not be taken into account during registration and '1' when they are, by
+        default 'None'
+
+    Returns
+    -------
+    np.ndarray
+        3x3 numpy array representing the warp matrix
+    """
+
+    criteria = (cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, max_iter, eps)
+    if trafo == "translation":
+        warp_mode = cv.MOTION_TRANSLATION
+    elif trafo in ("euclidean", "rigid"):
+        warp_mode = cv.MOTION_EUCLIDEAN
+    elif trafo == "affine":
+        warp_mode = cv.MOTION_AFFINE
+    else:
+        print("Unrecognized transformation. Using Translation.")
+        warp_mode = cv.MOTION_TRANSLATION
+
+    warp_matrix = np.eye(2, 3, dtype=np.float32)
+
+    for sigma in [5, 1]:
+
+        _, warp_matrix = cv.findTransformECC(  # template = warp_matrix * input
+            template_img.image,
+            input_img.image,
+            warp_matrix,
+            warp_mode,
+            criteria,
+            mask,  # hide everything that is not in ROI
+            sigma,  # gaussian blur to apply before
+        )
+    # Expand to 3x3 matrix
+    warp_matrix = np.append(warp_matrix, [[0, 0, 1]], axis=0)
+
+    return warp_matrix
