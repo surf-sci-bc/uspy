@@ -60,7 +60,7 @@ html_theme = 'furo'
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
 html_static_path = ['_static']
-html_logo = '_static/logo_uspy.jpg'
+html_logo = '_static/uspy_1024.png'
 
 def change_new_to_init(app, obj, bound_method):
     """
