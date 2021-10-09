@@ -7,8 +7,8 @@
 import pytest
 import numpy as np
 
-from agfalta.leem import cluster
-from agfalta.leem import base
+from uspy.leem import cluster
+from uspy.leem import base
 
 from .conftest import TESTDATA_DIR
 

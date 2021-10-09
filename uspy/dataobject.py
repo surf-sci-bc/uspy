@@ -22,7 +22,7 @@ import json_tricks
 import tifffile
 from tifffile.tifffile import TiffFileError
 
-import agfalta.roi as roi
+import uspy.roi as roi
 
 
 class Loadable:

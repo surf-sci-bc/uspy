@@ -3,7 +3,7 @@
 ==================
 
 
-.. currentmodule:: agfalta.dataobject
+.. currentmodule:: uspy.dataobject
 
 
 Module :mod:`dataobject`

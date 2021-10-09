@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
-from agfalta.utility import progress_bar
+from uspy.utility import progress_bar
 from skimage.io import imread
 
 

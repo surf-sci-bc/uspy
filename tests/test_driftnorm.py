@@ -1,4 +1,4 @@
-"""Tests the agfalta.leem.driftnorm module."""
+"""Tests the uspy.leem.driftnorm module."""
 # pylint: disable=invalid-name
 # pylint: disable=missing-docstring
 # pylint: disable=redefined-outer-name
@@ -7,7 +7,7 @@
 import numpy as np
 import pytest
 
-from agfalta.leem import driftnorm
+from uspy.leem import driftnorm
 
 
 ### Normalization

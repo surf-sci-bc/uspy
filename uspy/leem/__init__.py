@@ -13,10 +13,10 @@ And possibly others. Use help(function) to find out more
 about each function or look at the demo files.
 """
 
-from agfalta import LEEMDIR
+from uspy import LEEMDIR
 
-from agfalta.leem.base import LEEMImg#, LEEMStack
-#from agfalta.leem.plotting import (
+from uspy.leem.base import LEEMImg#, LEEMStack
+#from uspy.leem.plotting import (
 #     plot_img,
 #     plot_mov, plot_movie, plot_meta, make_video,
 #     print_meta,
@@ -24,4 +24,4 @@ from agfalta.leem.base import LEEMImg#, LEEMStack
 #     plot_intensity, plot_iv, plot_intensity_img, plot_iv_img,
 #     plot_rsm
 # )
-# from agfalta.leem.processing import calculate_dose, ROI, Profile
+# from uspy.leem.processing import calculate_dose, ROI, Profile

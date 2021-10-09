@@ -9,7 +9,7 @@ import numpy as np
 from lmfit import Parameters
 from lmfit.models import ConstantModel#, PseudoVoigtModel
 
-from agfalta.xps import processing, models, io
+from uspy.xps import processing, models, io
 
 
 class XPSSpectrum:

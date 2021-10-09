@@ -1,4 +1,4 @@
-"""Fixtures for testing the agfalta.xps.spectrum module."""
+"""Fixtures for testing the uspy.xps.spectrum module."""
 # pylint: disable=invalid-name
 # pylint: disable=missing-docstring
 # pylint: disable=redefined-outer-name
@@ -9,7 +9,7 @@ import os
 import pytest
 import numpy as np
 
-from agfalta.xps import spectrum
+from uspy.xps import spectrum
 
 TESTDATA_DIR = os.path.dirname(__file__) + "/../testdata/xps/"
 

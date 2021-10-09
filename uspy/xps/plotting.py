@@ -3,7 +3,7 @@
 
 import matplotlib.pyplot as plt
 
-from agfalta.xps import io
+from uspy.xps import io
 
 
 def plot_spectrum(fname, region=1):

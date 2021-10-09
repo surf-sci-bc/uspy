@@ -5,7 +5,7 @@ from setuptools import setup, find_packages
 
 
 setup(
-    name="agfalta",
+    name="uspy",
     use_scm_version={
         "root": ".",
         "relative_to": __file__,
@@ -13,7 +13,7 @@ setup(
     },
     author="Simon Fischer, Lars Buß, Jon-Olaf Krisponeit",
     description="LEEM data analysis (and more...?)",
-    packages=find_packages(include=["agfalta", "agfalta.*"]),
+    packages=find_packages(include=["uspy", "uspy.*"]),
     classifiers=(
         "Programming Language :: Python :: 3",
         "Topic :: Scientific/Engineering :: Physics"
@@ -39,9 +39,9 @@ setup(
         "ipython",
         "netCDF4",
         "json_tricks",
-        "setuptools_scm",       # see agfalta/version.py
+        "setuptools_scm",       # see uspy/version.py
     ],
-    package_data={"agfalta.xps": ["rsf.db"]},
+    package_data={"uspy.xps": ["rsf.db"]},
     python_requires="~=3.6",
     tests_require=["pytest", "pytest-cov"]
 )

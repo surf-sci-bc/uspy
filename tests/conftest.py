@@ -1,4 +1,4 @@
-"""Fixtures for testing the agfalta module."""
+"""Fixtures for testing the uspy module."""
 # pylint: disable=invalid-name
 # pylint: disable=missing-docstring
 # pylint: disable=redefined-outer-name
@@ -9,9 +9,9 @@ import os
 import pytest
 import numpy as np
 
-from agfalta.leem.base import LEEMImg, LEEMStack
-from agfalta.dataobject import Line
-from agfalta.dataobject import Image
+from uspy.leem.base import LEEMImg, LEEMStack
+from uspy.dataobject import Line
+from uspy.dataobject import Image
 
 
 ######### Utility

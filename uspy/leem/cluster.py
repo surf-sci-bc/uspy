@@ -33,9 +33,9 @@ from pyclustering.utils import metric as pc_metric
 from sklearn import metrics as sk_metrics     # pylint: disable=ungrouped-imports
 import kneed
 
-from agfalta.leem.base import LEEMStack
-from agfalta.leem.utility import stackify
-from agfalta.utility import timing_notification, progress_bar, silence
+from uspy.leem.base import LEEMStack
+from uspy.leem.utility import stackify
+from uspy.utility import timing_notification, progress_bar, silence
 
 
 def stack2vectors(stack, mask_outer=0.2):

@@ -9,9 +9,9 @@ Tools for drift alignment and normalization.
 import cv2 as cv
 import numpy as np
 
-from agfalta.leem.utility import imgify, stackify
-from agfalta.utility import progress_bar
-import agfalta.leem.processing as processing
+from uspy.leem.utility import imgify, stackify
+from uspy.utility import progress_bar
+import uspy.leem.processing as processing
 
 
 def normalize(img_or_stack, *args, **kwargs):

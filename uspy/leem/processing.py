@@ -15,11 +15,11 @@ import scipy.optimize
 import scipy.constants as sc
 import scipy.signal
 import skimage.measure
-# import agfalta.leem.driftnorm as driftnorm
+# import uspy.leem.driftnorm as driftnorm
 
-# from agfalta.leem.base import LEEMStack#, Loadable
-from agfalta.leem.utility import stackify
-from agfalta.utility import progress_bar
+# from uspy.leem.base import LEEMStack#, Loadable
+from uspy.leem.utility import stackify
+from uspy.utility import progress_bar
 
 
 def calculate_dose(stack, pressurefield="pressure1", approx=1):

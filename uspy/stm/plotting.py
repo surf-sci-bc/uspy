@@ -7,8 +7,8 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
-from agfalta.stm.base import STMImage
-from agfalta.stm import processing
+from uspy.stm.base import STMImage
+from uspy.stm import processing
 
 
 def plot_img(fname, background="planar"):

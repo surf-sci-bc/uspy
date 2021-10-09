@@ -8,8 +8,8 @@ import sys
 import contextlib
 from datetime import datetime, timedelta
 
-#from agfalta.leem.base import LEEMImg, LEEMStack
-import agfalta.leem.base as base
+#from uspy.leem.base import LEEMImg, LEEMStack
+import uspy.leem.base as base
 
 
 def imgify(img):
@@ -26,7 +26,7 @@ def stackify(stack, virtual=False):
     return base.LEEMStack(stack, virtual=virtual)
 
 def timing_notification(title=""):
-    print("agfalta.leem.utility.timing_notification moved to agfalta.utility")
+    print("uspy.leem.utility.timing_notification moved to uspy.utility")
     def timer(wrapped):
         def wrapper(*args, **kwargs):
             start = datetime.now()
@@ -45,7 +45,7 @@ class DummyFile(object):
         pass
 @contextlib.contextmanager
 def silence():
-    print("agfalta.leem.utility.silence moved to agfalta.utility")
+    print("uspy.leem.utility.silence moved to uspy.utility")
     save_stdout = sys.stdout
     sys.stdout = DummyFile()
     yield
@@ -54,7 +54,7 @@ def silence():
 
 def progress_bar(it, suffix="", total=None, size=25, fill="▇", empty="░", silent=False):
     # pylint: disable=too-many-arguments
-    print("agfalta.leem.utility.progress_bar moved to agfalta.utility")
+    print("uspy.leem.utility.progress_bar moved to uspy.utility")
     if silent:
         return it
     start_time = datetime.now()
@@ -96,7 +96,7 @@ class ProgressBar(object):
     """
     # pylint: disable=too-many-instance-attributes
     def __init__(self, total, suffix="", length=25, fill="▇"):
-        print("agfalta.leem.utility.ProgressBar moved to agfalta.utility")
+        print("uspy.leem.utility.ProgressBar moved to uspy.utility")
         self.total = total
         self.suffix = suffix
         self.length = length

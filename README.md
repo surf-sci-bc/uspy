@@ -1,6 +1,10 @@
-# agfalta_tools
+# µSPY
 
-If you just want to work with this on your local computer, just follow the first two sections [Get source](#Get-source) and [Installation](Installation). 
+<p align="center">
+<img src="docs/source/_static/logo_uspy_128x.jpg">
+</p>
+
+If you just want to work with this on your local computer, just follow the first two sections [Get source](#Get-source) and [Installation](Installation).
 
 For deployment information, refer to [this](deployment/README.md).
 
@@ -9,8 +13,8 @@ For deployment information, refer to [this](deployment/README.md).
 Simply clone the github repo (it is a private repo, so you need access). Use either the first or the second line. For the second, you need [ssh access to git](https://docs.github.com/en/free-pro-team@latest/github/authenticating-to-github/connecting-to-github-with-ssh).
 
 ```sh
-$ git clone https://github.com/surf-sci-bc/agfalta_tools.git
-$ git clone git@github.com:surf-sci-bc/agfalta_tools.git
+$ git clone https://github.com/surf-sci-bc/uspy.git
+$ git clone git@github.com:surf-sci-bc/uspy.git
 ```
 
 ## Installation
@@ -20,18 +24,18 @@ $ git clone git@github.com:surf-sci-bc/agfalta_tools.git
 To be able to run your code, you have to set up a python3 virtual environment. On Linux, do this:
 
 ```sh
-$ cd path/to/agfalta_tools
+$ cd path/to/uspy
 $ python3 -m venv venv
 ```
 
-On Windows, you can set up a venv in PyCharm. For anything where you want to run agfalta_tools code, you need to make sure you are in the venv (see next paragraph). In the Terminal, it says "(venv)" at the beginning of each line if you are in the venv.
+On Windows, you can set up a venv in PyCharm. For anything where you want to run uspy code, you need to make sure you are in the venv (see next paragraph). In the Terminal, it says "(venv)" at the beginning of each line if you are in the venv.
 
 ##### Enter venv
 
 On Linux, do
 
 ```sh
-$ cd path/to/agfalta_tools
+$ cd path/to/uspy
 $ source venv/bin/activate
 ```
 
@@ -49,26 +53,26 @@ Sometimes, the pip version of your new virtual environment will be too old to pr
 (venv) $ python3 -m pip install --upgrade pip
 ```
 
-And finally, install your local `agfalta` module in editable mode:
+And finally, install your local `uspy` module in editable mode:
 
 ```sh
 (venv) $ python3 -m pip install -e .
 ```
 
-Now everything should run and you can do `import agfalta` from your virtual environment.
+Now everything should run and you can do `import uspy` from your virtual environment.
 
 ## Contributing
 
 ### Testing
 
-The project and its `testdata` folder are two separate repositories because all the binary data in `testdata` makes the pushing and pulling too slow otherwise. If you don't do tests, you don't need `testdata`. If you do, do this in the agfalta_tools repo:
+The project and its `testdata` folder are two separate repositories because all the binary data in `testdata` makes the pushing and pulling too slow otherwise. If you don't do tests, you don't need `testdata`. If you do, do this in the uspy repo:
 
 ```sh
 $ git submodule init
 $ git submodule update
 ```
 
-For running the tests, just go into `agfalta_tools` venv and do
+For running the tests, just go into `uspy` venv and do
 
 ```sh
 (venv) $ pytest
@@ -91,4 +95,4 @@ $ git push all
 $ git push all --tags
 ```
 
-You can get the current version by `from agfalta.version import __version__`. This will either retrieve the version from git if `setuptools_scm` is installed and the install lives in a git repository. Otherwise, it will look in the package metadata which are from installation time and might thus be outdated on editable installs.
+You can get the current version by `from uspy.version import __version__`. This will either retrieve the version from git if `setuptools_scm` is installed and the install lives in a git repository. Otherwise, it will look in the package metadata which are from installation time and might thus be outdated on editable installs.

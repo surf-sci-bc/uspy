@@ -13,8 +13,8 @@
 import os
 import sys
 import inspect
-sys.path.insert(0, os.path.abspath('../../agfalta'))
-sys.path.insert(0, os.path.abspath('../../agfalta/leem'))
+sys.path.insert(0, os.path.abspath('../../uspy'))
+sys.path.insert(0, os.path.abspath('../../uspy/leem'))
 
 
 # -- Project information -----------------------------------------------------
@@ -61,16 +61,16 @@ html_theme = 'furo'
 # so a file named "default.css" will overwrite the builtin "default.css".
 html_static_path = ['_static']
 html_logo = '_static/logo_uspy.jpg'
-        
+
 def change_new_to_init(app, obj, bound_method):
     """
-    When a __new__ method is defined for a class, Sphinx automatically uses the Signature of the 
+    When a __new__ method is defined for a class, Sphinx automatically uses the Signature of the
     __new__ method as signature for the class. Because __new__ normally does not specify the
     contructor arguments, the signature of __new__ has to be replaced with the signature of __init__
     """
-    
+
     if obj.__qualname__ == "DataObject.__new__":
-        import agfalta.dataobject as dataobject
+        import uspy.dataobject as dataobject
         init = dataobject.DataObject.__init__
         new_sig = inspect.signature(init).replace(return_annotation=inspect.Signature.empty)
         obj.__text_signature__ = str(new_sig)

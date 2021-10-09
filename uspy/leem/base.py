@@ -17,10 +17,10 @@ from tqdm.auto import tqdm
 import numpy as np
 import cv2 as cv
 
-from agfalta.utility import parse_bytes, parse_cp1252_until_null
-from agfalta.dataobject import Image, ImageStack, StitchedLine
-from agfalta.leem.utility import imgify
-from agfalta.roi import ROI
+from uspy.utility import parse_bytes, parse_cp1252_until_null
+from uspy.dataobject import Image, ImageStack, StitchedLine
+from uspy.leem.utility import imgify
+from uspy.roi import ROI
 
 
 class TimeOrigin:

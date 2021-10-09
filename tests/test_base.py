@@ -1,4 +1,4 @@
-"""Tests the agfalta.base module."""
+"""Tests the uspy.base module."""
 
 from __future__ import annotations
 import numbers
@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 from numpy.testing import assert_almost_equal, assert_array_equal
 import pytest
-from agfalta.dataobject import DataObject, DataObjectStack, Image, ImageStack, Line
+from uspy.dataobject import DataObject, DataObjectStack, Image, ImageStack, Line
 from deepdiff.diff import DeepDiff
 import os
 
@@ -221,7 +221,7 @@ def test_stack_setattr(list1darrays, virtual):
         When a string is assigned to a stack and len(string) == len(stack)
         the chars are assigned to the elements not the stack. I am not sure if
         this is useful behaivor. It should be considered how Attributes are assigned
-        to stacks and are passed to elements. 
+        to stacks and are passed to elements.
         """
         assert stack.bogus is "Bogus"
         assert stack.array == [1, 2]

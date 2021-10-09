@@ -20,11 +20,11 @@ import matplotlib.colors
 import skvideo.io
 from IPython.display import display, Video
 
-import agfalta.dataobject as do
-import agfalta.roi as rois
-from agfalta.leem.utility import stackify, imgify
-from agfalta.leem.processing import roify, get_max_variance_idx, ROI, RSM
-from agfalta.leem.driftnorm import normalize_image
+import uspy.dataobject as do
+import uspy.roi as rois
+from uspy.leem.utility import stackify, imgify
+from uspy.leem.processing import roify, get_max_variance_idx, ROI, RSM
+from uspy.leem.driftnorm import normalize_image
 
 
 def plot_img(
@@ -597,13 +597,13 @@ def plot_intensity_img(
 
 
 def plot_iv(*args, **kwargs):
-    """Alias for agfalta.leem.plotting.plot_intensity() with xaxis set
+    """Alias for uspy.leem.plotting.plot_intensity() with xaxis set
     to "energy"."""
     return plot_intensity(*args, xaxis="energy", **kwargs)
 
 
 # def plot_intensity_img(stack, *args, xaxis="rel_time", img_idx=None, **kwargs):
-#     """Does the same thing as agfalta.leem.plotting.plot_intensity()
+#     """Does the same thing as uspy.leem.plotting.plot_intensity()
 #     but also shows an image of the stack and the ROI on it on the right.
 #     Returns 2 axes objects: The first one contains the plot, the second one the image.
 #     """
@@ -626,7 +626,7 @@ def plot_iv(*args, **kwargs):
 
 
 def plot_iv_img(*args, **kwargs):
-    """Alias for agfalta.leem.plotting.plot_intensity_img() with xaxis set
+    """Alias for uspy.leem.plotting.plot_intensity_img() with xaxis set
     to "energy"."""
     return plot_intensity_img(*args, xaxis="energy", **kwargs)
 

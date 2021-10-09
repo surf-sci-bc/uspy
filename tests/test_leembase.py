@@ -1,4 +1,4 @@
-"""Tests the agfalta.leem.base module."""
+"""Tests the uspy.leem.base module."""
 # pylint: disable=invalid-name
 # pylint: disable=missing-docstring
 # pylint: disable=redefined-outer-name
@@ -9,7 +9,7 @@ import pytest
 import numpy as np
 from numpy.testing import assert_array_equal
 
-from agfalta.leem import base
+from uspy.leem import base
 
 from .conftest import (
     MCP_IMG_FNAME,

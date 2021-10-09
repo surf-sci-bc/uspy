@@ -6,8 +6,8 @@ import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider
 import numpy as np
 
-from agfalta.leem import base
-from agfalta.leem import rsm
+from uspy.leem import base
+from uspy.leem import rsm
 
 
 def main():

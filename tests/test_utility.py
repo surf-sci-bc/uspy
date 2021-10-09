@@ -1,11 +1,11 @@
-"""Tests the agfalta.leem.driftnorm module."""
+"""Tests the uspy.leem.driftnorm module."""
 # pylint: disable=invalid-name
 # pylint: disable=missing-docstring
 # pylint: disable=redefined-outer-name
 # pylint: disable=protected-access
 
-from agfalta.leem import utility
-from agfalta.leem import base
+from uspy.leem import utility
+from uspy.leem import base
 
 
 def test_imgify(img, img_fname):

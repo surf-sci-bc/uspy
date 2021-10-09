@@ -11,7 +11,7 @@ import cv2
 import numpy as np
 import matplotlib as mpl
 
-import agfalta.dataobject as do
+import uspy.dataobject as do
 
 
 class StyledObject():#do.Loadable):
