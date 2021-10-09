@@ -23,7 +23,7 @@ from IPython.display import display, Video
 import uspy.dataobject as do
 import uspy.roi as rois
 from uspy.leem.utility import stackify, imgify
-from uspy.leem.processing import roify, get_max_variance_idx, ROI, RSM
+from uspy.leem.processing import roify, ROI, RSM #, get_max_variance_idx
 from uspy.leem.driftnorm import normalize_image
 
 
@@ -134,7 +134,7 @@ def plot_img(
     data = np.clip(data, 0, 255).astype(np.uint8)
 
     if invert:
-        data = -data + data.max()
+        data = data.max() - data
 
     ax.imshow(
         data, cmap=cmap, clim=(np.nanmin(data), np.nanmax(data)), aspect=1, **kwargs
@@ -495,7 +495,7 @@ def plot_intensity_img(
     stack_idx: int = 0,
     return_line=False,
     **kwargs,
-) -> tuple[mpl.Axes.Axes]:
+) -> tuple[mpl.axes.Axes]:
 
     _, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
 
