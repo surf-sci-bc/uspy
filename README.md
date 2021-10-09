@@ -1,7 +1,7 @@
 # µSPY
 
 <p align="center">
-<img src="docs/source/_static/logo_uspy_128x.jpg">
+<img src="docs/source/_static/uspy_128.jpg">
 </p>
 
 If you just want to work with this on your local computer, just follow the first two sections [Get source](#Get-source) and [Installation](Installation).
