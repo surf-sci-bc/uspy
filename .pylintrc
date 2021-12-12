@@ -390,6 +390,7 @@ function-naming-style=snake_case
 # Good variable names which should always be accepted, separated by a comma.
 good-names=i,
            j,
+           e,
            k,
            v,
            ex,
@@ -406,7 +407,8 @@ good-names=i,
            y1,
            y2,
            f,
-           df
+           df,
+           ax
 
 # Include a hint for the correct naming format with invalid-name.
 include-naming-hint=no

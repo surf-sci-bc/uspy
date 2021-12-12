@@ -451,6 +451,19 @@ def plot_line(
     ax: Union[mpl.axes.Axes, None] = None,
     **kwargs,
 ) -> mpl.axes.Axes:
+    """Plot a Line Dataobject
+
+    Parameters
+    ----------
+    line : Union[do.Line, Sequence[do.Line]]
+    ax : Union[mpl.axes.Axes, None], optional
+        mpl.Axes object to plot on, by default a new Axes is created (=None)
+
+    Returns
+    -------
+    mpl.axes.Axes
+        mpl.Axes object where the line is plotted on.
+    """
 
     line = line if isinstance(line, Sequence) else [line]
 
@@ -469,6 +482,26 @@ def plot_intensity(
     return_line=False,
     **kwargs,
 ) -> mpl.axes.Axes:
+    """Plots the intensity of a ROI for each image in a stack.
+
+    Parameters
+    ----------
+    stack : do.ImageStack | Sequence of do.ImageStack
+    roi : rois.ROI | Sequence of rois.ROI
+    xaxis : str
+        The name of the attribute that is used for the x
+    ax : mpl.axes.Axes | None, optional
+        Axes object to plot on. None (the default) means that a new Axes is created.
+    return_line : bool, optional
+        If True, return a tuple of the Axes and the line object, by default False.
+
+    Returns
+    -------
+    mpl.axes.Axes
+        Axes object that was used for plotting.
+    mpl.axes.Axes, mpl.lines.Line2D
+        If return_line is True.
+    """
 
     if isinstance(stack, Sequence):
         line = do.StitchedLine(stack, roi, xaxis)
@@ -634,7 +667,7 @@ def plot_iv_img(*args, **kwargs):
 def plot_rois(*args, img=None, ax=None, **kwargs):
     """Plot rois onto a given axes object. The ROI can either be given like in
     plot_intensity()."""
-    rois = roify(*args, **kwargs)
+    roi_list = roify(*args, **kwargs)
     for kwarg in ROI.kwargs:
         kwargs.pop(kwarg, None)
     if ax is None:
@@ -643,8 +676,9 @@ def plot_rois(*args, img=None, ax=None, **kwargs):
         img = imgify(img)
         ax = plot_img(img, ticks=True, ax=ax)
 
-    for roi in rois:
-        ax.add_artist(roi.artist)
+    for roi in roi_list:
+        roi.plot(ax=ax)
+        # ax.add_artist(roi.artist)
     return ax
 
 

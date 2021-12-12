@@ -631,6 +631,13 @@ class Image(DataObject):
         return return_val
 
     @property
+    def area(self) -> Number:
+        if isinstance(self._mask, np.ma.MaskedArray):
+            return self._mask.count()
+        else:
+            return self._mask.size
+
+    @property
     def mask(self) -> np.ndarray:
         """Set a mask onto the image. TODO"""
         return self._mask
@@ -1362,7 +1369,9 @@ class StitchedLine(Line):
                 )
                 next_spline = next_line.interpolate(order="cubic")
 
+                # pylint: disable=cell-var-from-loop
                 func = lambda x, a: a * next_spline(x)
+                # pylint: disable=unbalanced-tuple-unpacking
                 popt, _ = scipy.optimize.curve_fit(
                     func, curr_line_points[:, 0], curr_line_points[:, 1]
                 )
