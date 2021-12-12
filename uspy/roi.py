@@ -167,8 +167,7 @@ class ROI(StyledObject):
         # reference point and the position:
         mask_size = self.array.shape
         pad_size = np.array((width, height)).astype(int)
-        low_corner = (self.position[::-1] - self.ref_point[::-1]).astype(int)
-        low_corner = self.origin.astype(int)
+        low_corner = self.origin[::-1].astype(int)
         high_corner = pad_size - mask_size - low_corner
 
         result = np.zeros(pad_size)
