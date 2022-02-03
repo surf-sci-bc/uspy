@@ -112,8 +112,9 @@ def plot_img(
     data = np.nan_to_num(img.image)
     if mask is True:
         mask = img.default_mask
-    if isinstance(mask, ROI):
-        data = mask.apply(data, return_array=True)
+    
+    if isinstance(mask, rois.ROI):
+        data = mask.apply(img, return_array=True)
 
     if log:
         data = np.ma.log(data)
@@ -137,7 +138,7 @@ def plot_img(
         data = data.max() - data
 
     ax.imshow(
-        data, cmap=cmap, clim=(np.nanmin(data), np.nanmax(data)), aspect=1, **kwargs
+        data, cmap=cmap, clim=(np.nanmin(data), np.nanmax(data)), **kwargs
     )
 
     if fields is None:
@@ -548,7 +549,7 @@ def plot_intensity_img(
 
     roi = [roi] if isinstance(roi, rois.ROI) else roi
     for ro in roi:
-        ax2.add_artist(ro.artist)
+        ro.plot(ax2)
 
     return ax1, ax2
 

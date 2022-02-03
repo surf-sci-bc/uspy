@@ -603,7 +603,7 @@ class Image(DataObject):
     _data_keys = ("image",)
     _meta_keys = ("width", "height")
     # TODO make a sensible default
-    default_mask = None
+    #default_mask = None
 
     def __init__(self, *args, **kwargs) -> None:
         self._mask = None

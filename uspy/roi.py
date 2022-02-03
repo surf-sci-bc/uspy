@@ -145,6 +145,11 @@ class ROI(StyledObject):
         return cls(x0, y0, source=array, **kwargs)
 
     @classmethod
+    def circle(cls, x0: int, y0: int, **kwargs) -> ROI:
+        """Construct a point ROI."""
+        return cls(x0, y0, source="circle", **kwargs)
+
+    @classmethod
     def from_array(cls, x0: int, y0: int, array: Iterable, **kwargs) -> ROI:
         """Construct a polygonic ROI from a list of corners. Seems Superfluous?????"""
         return cls(x0, y0, source=array, **kwargs)

@@ -12,7 +12,9 @@ from numbers import Number
 from datetime import datetime
 import glob
 from pathlib import Path
+import warnings
 from tqdm.auto import tqdm
+from scipy.interpolate import UnivariateSpline
 
 import numpy as np
 import cv2 as cv
@@ -63,6 +65,7 @@ class LEEMImg(Image):
         "resolution": "µm/px",
         "x_position": "µm",
         "y_position": "µm",
+        "binding_energy": "eV",
     }
     default_fields = ("temperature", "pressure", "energy", "fov")
 
@@ -73,6 +76,9 @@ class LEEMImg(Image):
             time_origin = TimeOrigin(time_origin)
         super().__init__(*args, **kwargs)
         self._time_origin = time_origin  # is a list so it can be mutable
+        self.default_mask = ROI.circle(
+            x0=self.width // 2, y0=self.height // 2, radius=self.width // 2
+        )
 
     def get_field_string(self, field: str, fmt: Optional[str] = None) -> str:
         """Get a string that contains the value and its unit. Some LEEM-specific fields
@@ -108,7 +114,7 @@ class LEEMImg(Image):
     def normalize(
         self,
         mcp: Image = None,
-        dark_counts: Union[int, float, Image] = 100,
+        dark_counts: Union[int, float, Image] = 0,
         inplace: bool = False,
     ) -> LEEMImg:
         """Normalization of LEEM Images
@@ -128,12 +134,13 @@ class LEEMImg(Image):
             [description]
         """
         if mcp is None:
-            mcp = self.mcp   # pylint: disable=access-member-before-definition
+            mcp = self.mcp  # pylint: disable=access-member-before-definition
         mcp = imgify(mcp)
         if not isinstance(dark_counts, (int, float, complex)):
             dark_counts = imgify(dark_counts)
 
-        result = np.nan_to_num((self - dark_counts) / (mcp - dark_counts))
+        result = (self - dark_counts) / (mcp - dark_counts)
+        result.image = np.nan_to_num(result.image, posinf=0, neginf=0)
 
         if inplace:
             self.image = result.image
@@ -226,6 +233,10 @@ class LEEMImg(Image):
             return "??-??-?? ??:??:??"
         return datetime.fromtimestamp(self.timestamp).strftime("%Y-%m-%d %H:%M:%S")
 
+    @property
+    def unwarped(self) -> LEEMImg:
+        return self.warp(np.linalg.inv(self.warp_matrix))
+
 
 class LEEMStack(ImageStack):
     _type = LEEMImg
@@ -280,6 +291,7 @@ class LEEMStack(ImageStack):
         self,
         inplace: bool = False,
         mask: Union[bool, np.ndarray, None] = True,
+        template=None,
         **kwargs,
     ) -> LEEMStack:
         """
@@ -324,7 +336,7 @@ class LEEMStack(ImageStack):
             roi = ROI.circle(
                 x0=stack[0].width // 2,
                 y0=stack[0].height // 2,
-                radius=stack[0].width // 2 * 9 // 10
+                radius=stack[0].width // 2 * 9 // 10,
             )
             mask = (~np.ma.getmaskarray(roi.apply(stack[0]).image)).astype(np.uint8)
         else:
@@ -332,11 +344,105 @@ class LEEMStack(ImageStack):
         # List of all warp matrices
         warp_matrices = [np.eye(3, dtype=np.float32)]
 
-        # find warp matrices between subsequent images
-        for img1, img2 in zip(tqdm(stack[1:]), stack):
-            warp_matrix = img1.find_warp_matrix(img2, mask=mask, **kwargs)
-            # img1.warp(warp_matrix, inplace = True)
-            warp_matrices.append(warp_matrix)
+        if template is None:
+            warnings.warn("Aligning against template is considered unstable!")
+            for index, (img1, img2) in enumerate(zip(tqdm(stack[1:]), stack)):
+                try:
+                    warp_matrix = img1.find_warp_matrix(img2, mask=mask, **kwargs)
+                except:
+                    print(f"Alginment failed on Image {index}. Will interpolate later")
+                    # warp_matrix = warp_matrices[-1]
+                    warp_matrix = np.eye(3, 3)
+                    warp_matrix[0:2, 2] = np.nan
+
+                # img1.warp(warp_matrix, inplace = True)
+                warp_matrices.append(warp_matrix)
+        else:
+            try:
+                template = stack[template]
+            except:
+                pass
+            print(template.energy)
+            for index, img in enumerate(stack):
+                try:
+                    warp_matrix = img.find_warp_matrix(template, mask=mask, **kwargs)
+                except:
+                    print(f"Alginment failed on Image {index}. Will interpolate later")
+                    # warp_matrix = warp_matrices[-1]
+                    warp_matrix = np.eye(3, 3)
+                    warp_matrix[0:2, 2] = np.nan
+                if len(warp_matrices) > 0:
+                    warp_matrix = np.linalg.inv(warp_matrices[-1]) @ warp_matrix
+                else:
+                    warp_matrix = np.eye(3, 3)
+                warp_matrices.append(warp_matrix)
+
+            # When aligning against template the translations are absolute to the template, so
+            # they are relative to first image
+            # T = M_1 * img_1 => M_2*img2 = M_2*img2 => img2 = M_2^-1*M_1*img1
+
+        # Check sanity. Are some aligns outside 3 std dev, then they are most likely wrong.
+        # Outliners are replaced with np.nan
+        dx = np.array([matrix[0, 2] for matrix in warp_matrices])
+        dy = np.array([matrix[1, 2] for matrix in warp_matrices])
+        mask_dx = np.ma.masked_invalid(dx)
+        mask_dy = np.ma.masked_invalid(dy)
+
+        mean_x, std_x = np.mean(mask_dx), np.std(mask_dx)
+        mean_y, std_y = np.mean(mask_dy), np.std(mask_dy)
+
+        for index, (x, y) in enumerate(zip(dx, dy)):
+            # if values are NaN the if condition will be False, so this should not make a problem
+            if np.abs(x - mean_x) >= 3 * std_x or np.abs(y - mean_y) >= 3 * std_y:
+                print(f"Align of Image {index} to far out. (>3 std.dev.)")
+                # print(f"dx: {x}, mean: {mean_x}, std.dev: {std_x}")
+                # print(f"dy: {y}, mean: {mean_y}, std.dev: {std_y}")
+                # print("Replacing with mean value.")
+                dx[index] = np.nan
+                dy[index] = np.nan
+
+                # warp_matrices[index][0,2] = mean_x
+                # warp_matrices[index][1,2] = mean_y
+
+        # Interpolate over valid points and recalculate invalid points.
+        # Interpolation cannot handle nan, so first the nan values have to be converted to a
+        # numerical value and then the weight is set to zero.
+
+        # array used for interpolation
+        np.testing.assert_array_equal(np.isnan(dx), np.isnan(dy))
+        # return dx
+        w = np.isnan(dx)
+
+        dx[w] = 0.0
+        dy[w] = 0.0
+
+        ii = [x for x in range(len(stack))]
+
+        spl_x = UnivariateSpline(ii, dx, w=~w, s=0.1)
+        spl_y = UnivariateSpline(ii, dy, w=~w, s=0.1)
+
+        dx[w] = spl_x(np.where(w == True)[0])
+        dy[w] = spl_y(np.where(w == True)[0])
+
+        # import matplotlib.pyplot as plt
+
+        # plt.plot(dx, "+")
+        # plt.plot(np.linspace(0, len(dx), 1000), spl_x(np.linspace(0, len(dx), 1000)))
+        # return dx
+        # plt.plot(dy)
+
+        for index, (x, y) in enumerate(zip(dx, dy)):
+            # print(x, y)
+            warp_matrices[index][0, 2] = x
+            warp_matrices[index][1, 2] = y
+
+        # import matplotlib.pyplot as plt
+
+        # plt.plot(dx)
+        # plt.plot(spl_x(ii))
+        # plt.plot(spl_y(ii))
+        # print(spl_x(np.array([3, 4, 5])))
+        # plt.plot(np.linspace(0, len(dx), 1000), spl_x(np.linspace(0, len(dx), 1000)))
 
         # calculate the warp matrices with respect to the position of first image
         for index, matrix in enumerate(warp_matrices[1:]):
@@ -388,11 +494,11 @@ class LEEMStack(ImageStack):
         else:
             stack = self.copy()
 
-        for img in tqdm(stack):
+        for index, img in enumerate(tqdm(stack)):
             # if an image is multiple times in a stack and inplace is True, it should not be
             # normalized twice, so if the mcp is already the current mcp, it will not be processed
             if img.mcp is None or not img.mcp == mcp:
-                img.normalize(mcp=mcp, inplace=True, **kwargs)
+                stack[index] = img.normalize(mcp=mcp, **kwargs)
 
         return stack
 
@@ -470,7 +576,7 @@ UNIT_CODES = {
     "7": "pA",
     "8": "nA",
     "9": "\xb5A",
-    "B": "µm"
+    "B": "µm",
 }
 
 
@@ -617,7 +723,7 @@ def do_ecc_align(
 
     warp_matrix = np.eye(2, 3, dtype=np.float32)
 
-    for sigma in [5, 1]:
+    for sigma in [11, 5]:
 
         _, warp_matrix = cv.findTransformECC(  # template = warp_matrix * input
             template_img.image,
