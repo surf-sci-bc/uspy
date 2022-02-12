@@ -8,10 +8,11 @@ from typing import Any, Union
 
 import numpy as np
 import matplotlib.pyplot as plt
-from lmfit import Parameters
+from lmfit import Parameters, report_fit
 from lmfit.models import ConstantModel  # , PseudoVoigtModel
+import lmfit.models as lmmodels
 
-from uspy.xps import processing, models, io
+from uspy.xps import processing, models
 from uspy.dataobject import Line
 
 
@@ -156,24 +157,24 @@ class XPSSpectrum(Line):
         if norm_type is None:
             self._norm_divisor = 1.0
         elif norm_type == "highest":
-            self._norm_divisor = self._intensity.max()
+            self._norm_divisor = self.intensity.max()
         elif norm_type == "manual":
             self._norm_divisor = value
         elif norm_type == "energy":
             self._norm_divisor = 1.0
             self._norm_divisor = self.intensity_at_E(value)
         else:
-            span = self._intensity.max() - self._intensity.min()
+            span = self.intensity.max() - self.intensity.min()
             if norm_type == "low_energy":
                 idx = np.argmax(
-                    np.abs(self._intensity - self._intensity[0]) > span * 0.05
+                    np.abs(self.intensity - self.intensity[0]) > span * 0.05
                 )
-                self._norm_divisor = self._intensity[:idx:].mean()
+                self._norm_divisor = self.intensity[:idx:].mean()
             elif norm_type == "high_energy":
                 idx = np.argmax(
-                    np.abs(self._intensity[::-1] - self._intensity[-1]) > span * 0.05
+                    np.abs(self.intensity[::-1] - self.intensity[-1]) > span * 0.05
                 )
-                self._norm_divisor = self._intensity[-1:idx:-1].mean()
+                self._norm_divisor = self.intensity[-1:idx:-1].mean()
         self._norm_type = norm_type
 
     @property
@@ -201,7 +202,7 @@ class XPSSpectrum(Line):
     def background_type(self):
         return self._background_type
 
-    def calculate_background(self, type="shirley", bounds=None):
+    def calculate_background(self, type_="shirley", bounds=None):
         if bounds is None:
             self._background_bounds = np.array(
                 [np.amin(self.energy), np.amax(self.energy)]
@@ -216,10 +217,10 @@ class XPSSpectrum(Line):
         #    self._energy.min(), self._energy.max()
         # )
 
-        if type not in self.background_types:
-            raise ValueError(f"Background type {type} not valid")
+        if type_ not in self.background_types:
+            raise ValueError(f"Background type {type_} not valid")
         self._background = processing.calculate_background(
-            type, self._background_bounds, self.energy, self.intensity
+            type_, self._background_bounds, self.energy, self.intensity
         )
         # self._background_type = value
 
@@ -248,11 +249,17 @@ class ModeledSpectrum(XPSSpectrum):
         super().__init__(*args, **kwargs)
         self.params = Parameters()
         self._peaks = []
+        self._result = None
 
     @property
     def peaks(self):
         """Returns peaks."""
         return self._peaks.copy()
+
+    @property
+    def result(self):
+        """Returns peaks."""
+        return self._result
 
     @property
     def fit_intensity(self):
@@ -281,13 +288,21 @@ class ModeledSpectrum(XPSSpectrum):
     @property
     def model(self):
         """Returns the sum of all peak models."""
-        model = ConstantModel(prefix="BASE_")
-        model.set_param_hint("c", vary=False, value=0)
-        self.params += model.make_params()
+        # model = ConstantModel(prefix="BASE_")
+        # model.set_param_hint("c", vary=False, value=0)
+        # self.params += model.make_params()
+        # model = None
 
-        for peak in self._peaks:
+        model = self._peaks[0].model
+
+        for peak in self._peaks[1:]:
             model += peak.model
         return model
+
+    @property
+    def report(self):
+        """Returns the report of the fit"""
+        report_fit(self.params)
 
     def do_fit(self):
         """Returns the fitted cps values."""
@@ -298,6 +313,8 @@ class ModeledSpectrum(XPSSpectrum):
                 x=self.energy,
             )
         self.params.update(result.params)
+        self._result = result
+        return result
 
     def eval(self):
         return self.model.eval(
@@ -362,6 +379,74 @@ class ModeledSpectrum(XPSSpectrum):
         self._peaks.remove(peak)
         # self.params += peak.params
 
+    def set_constraints(self, param_alias, **new):
+        """Sets a constraint for param. Valid keys:
+        value, vary, min, max, expr"""
+        try:
+            param = self.get_param(param_alias)
+        except ValueError:
+            return
+
+        old = self.get_constraints(param_alias)
+        print(old)
+        # enforce min=0 for all parameters except position:
+        if (
+            "min" not in new
+            or old["min"] < 0
+            and (new["min"] is None or new["min"] < 0)
+            and param_alias != "position"
+        ):
+            new["min"] = 0
+        # return if only None values are new
+        if all(v is None for v in dict(set(new.items()) - set(old.items()))):
+            return
+
+        # if new["expr"]:
+        #    new["expr"] = self.relation2expr(new["expr"], param_alias)
+
+        try:
+            param.set(**new)
+            self.params.valuesdict()
+        except (SyntaxError, NameError, TypeError):
+            old["expr"] = ""
+            param.set(**old)
+            print(f"Invalid expression '{new['expr']}'")
+
+    def get_constraints(self, param_alias):
+        """Returns a string containing min/max or expr."""
+        try:
+            param = self.get_param(param_alias)
+        except ValueError:
+            return self._default_constraints
+        constraints = {
+            "value": param.value,
+            "min": param.min,
+            "max": param.max,
+            "vary": param.vary,
+            "expr": param.expr,
+        }
+        return constraints
+
+    def add_param(self, *args, **kwargs):
+        self.params.add(*args, **kwargs)
+
+    def remove_param(self, par):
+        self.params.pop(par)
+
+    def get_param(self, param_alias, use_alias=False):
+        """Shortcut for getting the Parameter object by the param alias."""
+        if use_alias:
+            aliases = {**self._default_aliases, **self.param_aliases}
+            param_name = aliases.get(param_alias, param_alias)
+        else:
+            param_name = param_alias
+        if param_name is None:
+            raise ValueError(
+                f"model '{self.shape}' does not support Parameter '{param_alias}'"
+            )
+        # return self.params[f"{self.name}_{param_name}"]
+        return self.params[f"{param_name}"]
+
 
 class Peak:
     """
@@ -398,11 +483,12 @@ class Peak:
         self,
         name,
         # spectrum,
-        area=None,
-        fwhm=None,
-        position=None,
-        alpha=None,
-        shape="PseudoVoigt",
+        # area=None,
+        # fwhm=None,
+        # position=None,
+        # alpha=None,
+        shape="Voigt",
+        **kwargs,
     ):
         # pylint: disable=too-many-arguments
         super().__init__()
@@ -412,11 +498,12 @@ class Peak:
         self.params = Parameters()
         self._shape = shape
         self.label = f"Peak {name}"
-        if None in (area, fwhm, position):
-            raise ValueError("Required attribute(s) missing")
+        # if None in (area, fwhm, position):
+        #    raise ValueError("Required attribute(s) missing")
 
         self._model = None
-        self.initialize_model(area, fwhm, position, alpha)
+        # self.initialize_model(area, fwhm, position, alpha)
+        self.initialize_model(**kwargs)
 
     @property
     def name(self):
@@ -437,8 +524,72 @@ class Peak:
     #         intensity = self._model.eval(params=self.params, x=energy)
     #     return intensity
 
-    def initialize_model(self, area, fwhm, position, alpha):
+    # def initialize_model(self, area, fwhm, position, alpha):
+    def initialize_model(self, **kwargs):
+
         self.clear_params()
+
+        guess = kwargs.pop("guess", False)
+
+        if self._shape == "PseudoVoigt":
+            # self.param_aliases["alpha"] = "fraction"
+            # if alpha is None:
+            #    alpha = 0.5
+            # self._model = models.PseudoVoigtModel(prefix=f"{self.name}_")
+            # self._model.set_param_hint("fraction", min=0, value=alpha)
+            self._model = lmmodels.PseudoVoigtModel(prefix=f"{self.name}_")
+        elif self._shape == "DS":
+
+            self._model = lmmodels.DoniachModel(prefix=f"{self.name}_")
+            # self.params = self._model.make_params()
+            # self.get_param("amplitude").set(value=kwargs["amplitude"], min=0, vary=True)
+            # self.get_param("center").set(value=kwargs["center"], min=0, vary=True)
+            # self.get_param("gamma").set(value=kwargs["gamma"], min=0, vary=True)
+            # self.get_param("sigma").set(value=kwargs["sigma"], min=0, vary=True)
+
+            # self.param_aliases["alpha"] = "asym"
+            # if alpha is None:
+            #    alpha = 0.1
+            # self._model = models.DoniachSunjicModel(prefix=f"{self.name}_")
+            # self._model.set_param_hint("asym", min=0, value=alpha)
+
+        elif self._shape == "Voigt":
+            # self.param_aliases["alpha"] = "fwhm_l"
+            # if alpha is None:
+            #    alpha = 0.5
+            self._model = lmmodels.VoigtModel(prefix=f"{self.name}_")
+            self._model.set_param_hint("gamma", value=0.5, expr=None)
+            # self.params = self._model.make_params()
+            # self.get_param("amplitude").set(value=kwargs["amplitude"], min=0, vary=True)
+            # self.get_param("center").set(value=kwargs["center"], min=0, vary=True)
+            # self.get_param("gamma").set(value=kwargs["gamma"], min=0, vary=True)
+            # self.get_param("sigma").set(value=kwargs["sigma"], min=0, vary=True)
+            # self._model.set_param_hint()
+            # self._model.set_param_hint("fwhm_l", min=0, value=alpha)
+        elif self._shape == "Gaussian":
+            self._model = lmmodels.GaussianModel(prefix=f"{self.name}_")
+        elif self._shape == "Lorentzian":
+            self._model = lmmodels.LorentzianModel(prefix=f"{self.name}_")
+        elif self._shape == "SkewedVoigt":
+            self._model = lmmodels.SkewedVoigtModel(prefix=f"{self.name}_")
+            self._model.set_param_hint("gamma", value=0.5, expr=None)
+
+        else:
+            raise NotImplementedError(f"Unkown shape '{self._shape}'")
+
+        self.params = self._model.make_params()
+        if guess:
+            self.params = self._model.guess(min=0, **kwargs)
+        else:
+            for k, v in kwargs.items():
+                self.get_param(k).set(value=v, min=0, vary=True)
+
+        # self.params += self._model.make_params()
+        # self.get_param("fwhm").set(value=fwhm, min=0, vary=True)
+        # self.get_param("amplitude").set(value=area, min=0, vary=True)
+        # self.get_param("center").set(value=position, min=-np.inf, vary=True)
+
+        """
         self.param_aliases = {"area": "amplitude", "fwhm": "fwhm", "position": "center"}
         if self._shape == "PseudoVoigt":
             self.param_aliases["alpha"] = "fraction"
@@ -465,6 +616,7 @@ class Peak:
         self.get_param("fwhm").set(value=fwhm, min=0, vary=True)
         self.get_param("amplitude").set(value=area, min=0, vary=True)
         self.get_param("center").set(value=position, min=-np.inf, vary=True)
+        """
 
     @property
     def shape(self):
@@ -488,11 +640,13 @@ class Peak:
     #     for param_alias in ("fwhm", "area", "position", "alpha"):
     #         self.set_constraints(param_alias, **constraints[param_alias])
 
-    def get_param(self, param_alias, use_alias=True):
+    def get_param(self, param_alias, use_alias=False):
         """Shortcut for getting the Parameter object by the param alias."""
         if use_alias:
             aliases = {**self._default_aliases, **self.param_aliases}
             param_name = aliases.get(param_alias, param_alias)
+        else:
+            param_name = param_alias
         if param_name is None:
             raise ValueError(
                 f"model '{self.shape}' does not support Parameter '{param_alias}'"
@@ -507,88 +661,88 @@ class Peak:
         for par in pars_to_del:
             self.params.pop(par)
 
-    def set_constraints(self, param_alias, **new):
-        """Sets a constraint for param. Valid keys:
-        value, vary, min, max, expr"""
-        try:
-            param = self.get_param(param_alias)
-        except ValueError:
-            return
+    # def set_constraints(self, param_alias, **new):
+    #     """Sets a constraint for param. Valid keys:
+    #     value, vary, min, max, expr"""
+    #     try:
+    #         param = self.get_param(param_alias)
+    #     except ValueError:
+    #         return
 
-        old = self.get_constraints(param_alias)
-        # enforce min=0 for all parameters except position:
-        if (
-            old["min"] < 0
-            and (new["min"] is None or new["min"] < 0)
-            and param_alias != "position"
-        ):
-            new["min"] = 0
-        # return if only None values are new
-        if all(v is None for v in dict(set(new.items()) - set(old.items()))):
-            return
+    #     old = self.get_constraints(param_alias)
+    #     # enforce min=0 for all parameters except position:
+    #     if (
+    #         old["min"] < 0
+    #         and (new["min"] is None or new["min"] < 0)
+    #         and param_alias != "position"
+    #     ):
+    #         new["min"] = 0
+    #     # return if only None values are new
+    #     if all(v is None for v in dict(set(new.items()) - set(old.items()))):
+    #         return
 
-        if new["expr"]:
-            new["expr"] = self.relation2expr(new["expr"], param_alias)
+    #     # if new["expr"]:
+    #     #    new["expr"] = self.relation2expr(new["expr"], param_alias)
 
-        try:
-            param.set(**new)
-            self.params.valuesdict()
-        except (SyntaxError, NameError, TypeError):
-            old["expr"] = ""
-            param.set(**old)
-            print(f"Invalid expression '{new['expr']}'")
+    #     try:
+    #         param.set(**new)
+    #         self.params.valuesdict()
+    #     except (SyntaxError, NameError, TypeError):
+    #         old["expr"] = ""
+    #         param.set(**old)
+    #         print(f"Invalid expression '{new['expr']}'")
 
-    def get_constraints(self, param_alias):
-        """Returns a string containing min/max or expr."""
-        try:
-            param = self.get_param(param_alias)
-        except ValueError:
-            return self._default_constraints
-        constraints = {
-            "value": param.value,
-            "min": param.min,
-            "max": param.max,
-            "vary": param.vary,
-            "expr": self.expr2relation(param.expr),
-        }
-        return constraints
+    # def get_constraints(self, param_alias):
+    #     """Returns a string containing min/max or expr."""
+    #     try:
+    #         param = self.get_param(param_alias)
+    #     except ValueError:
+    #         return self._default_constraints
+    #     constraints = {
+    #         "value": param.value,
+    #         "min": param.min,
+    #         "max": param.max,
+    #         "vary": param.vary,
+    #         "expr": self.expr2relation(param.expr),
+    #     }
+    #     return constraints
 
-    def expr2relation(self, expr):
-        """Translates technical expr string into a human-readable relation."""
-        if expr is None:
-            return ""
+    # def expr2relation(self, expr):
+    #     """Translates technical expr string into a human-readable relation."""
+    #     if expr is None:
+    #         return ""
 
-        def param_repl(matchobj):
-            """Replaces 'peakname_param' by 'peakname'"""
-            param_key = matchobj.group(0)
-            name = param_key.split("_")[0]
-            if self in self.spectrum.peaks:
-                return name
-            return param_key
+    #     def param_repl(matchobj):
+    #         """Replaces 'peakname_param' by 'peakname'"""
+    #         param_key = matchobj.group(0)
+    #         name = param_key.split("_")[0]
+    #         if self in self.spectrum.peaks:
+    #             return name
+    #         return param_key
 
-        regex = r"\b[A-Za-z][A-Za-z0-9]*_[a-z_]+"
-        relation = re.sub(regex, param_repl, expr)
-        return relation
+    #     regex = r"\b[A-Za-z][A-Za-z0-9]*_[a-z_]+"
+    #     relation = re.sub(regex, param_repl, expr)
+    #     return relation
 
-    def relation2expr(self, relation, param_alias):
-        """Translates a human-readable arithmetic relation to an expr string."""
+    # def relation2expr(self, relation, param_alias):
+    #     """Translates a human-readable arithmetic relation to an expr string."""
 
-        def name_repl(matchobj):
-            """Replaces 'peakname' by 'peakname_param' (searches case-insensitive)."""
-            name = matchobj.group(0)
-            name = name.upper()
-            if name == self.name.upper():
-                raise ValueError("Self-reference in peak constraint")
-            for peak in self.spectrum.peaks:
-                if peak.name.upper() == name:
-                    other = peak
-                    param_name = other.param_aliases[param_alias]
-                    return f"{name}_{param_name}"
-            return name
+    #     def name_repl(matchobj):
+    #         """Replaces 'peakname' by 'peakname_param' (searches case-insensitive)."""
+    #         name = matchobj.group(0)
+    #         name = name.upper()
+    #         if name == self.name.upper():
+    #             raise ValueError("Self-reference in peak constraint")
+    #         for peak in self.spectrum.peaks:
+    #             if peak.name.upper() == name:
+    #                 other = peak
+    #                 param_name = other.param_aliases[param_alias]
+    #                 return f"{name}_{param_name}"
+    #         return name
 
-        regex = r"\b[A-Za-z][A-Za-z0-9]*"
-        expr = re.sub(regex, name_repl, relation)
-        return expr
+    #     regex = r"\b[A-Za-z][A-Za-z0-9]*"
+    #     expr = re.sub(regex, name_repl, relation)
+    #     return expr
 
     def get_measured_area(self):
         """Returns measured area under the peak."""
