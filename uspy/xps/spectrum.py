@@ -4,93 +4,148 @@
 # pylint: disable=invalid-name
 
 import re
+from typing import Any, Union
 
 import numpy as np
+import matplotlib.pyplot as plt
 from lmfit import Parameters
-from lmfit.models import ConstantModel#, PseudoVoigtModel
+from lmfit.models import ConstantModel  # , PseudoVoigtModel
 
 from uspy.xps import processing, models, io
+from uspy.dataobject import Line
 
 
-class XPSSpectrum:
+class XPSSpectrum(Line):
     """
     Holds data from one single spectrum.
     """
+
     background_types = (None, "linear", "shirley", "tougaard")
     norm_types = (None, "highest", "high_energy", "low_energy", "manual", "energy")
-    _defaults = {
-        "energy_scale": "binding",
-        "photon_energy": 0,
-        "notes": "",
+    _meta_defaults = {
+        "ydim": "intensity",
+        "xdim": "energy",
+        "color": "k",
+        "raw_is_binding": False,  # False if kinetic energy
         "sweeps": np.nan,
         "dwelltime": np.nan,
         "pass_energy": np.nan,
     }
-    def __init__(self, path, idx=0):
-        self.path = path
-        self._meta = {}
-        self._energy = None
-        self._intensity = None
+    _unit_defaults = {"x": "eV", "y": "a.u."}
 
-        self.parse_txt(idx)
+    def __init__(self, source):
+        super().__init__(source)
+        # self.photon_energy = photon_energy
+        # self.binding_energy = binding_energy
 
-        if self._meta["energy_scale"] == "kinetic":
-            print("energy scale is not binding energy, trying to convert...")
-            self._energy = self._meta["photon_energy"] - self._energy
-        if len(self._energy) != len(self._intensity) or self._energy.ndim != 1:
-            raise ValueError("energy and intensity array sizes differ")
-        self._energy, self._intensity = processing.make_increasing(self._energy, self._intensity)
-        self._energy, self._intensity = processing.make_equidistant(self._energy, self._intensity)
+        # if not binding_energy and photon_energy:
+        #    self.binding_energy = True
+        #    self.x = photon_energy - self.x + energy_calibration
 
-        self._background = np.zeros_like(self._energy)
+        # self.path = path
+        # self._meta = {}
+        # self._energy = None
+        # self._intensity = None
+
+        # self.parse_txt(idx)
+
+        # if self._meta["energy_scale"] == "kinetic":
+        #     print("energy scale is not binding energy, trying to convert...")
+        #     self._energy = self._meta["photon_energy"] - self._energy
+        # if len(self._energy) != len(self._intensity) or self._energy.ndim != 1:
+        #     raise ValueError("energy and intensity array sizes differ")
+        # self._energy, self._intensity = processing.make_increasing(
+        #     self._energy, self._intensity
+        # )
+        # self._energy, self._intensity = processing.make_equidistant(
+        #     self._energy, self._intensity
+        # )
+
+        self._background = np.zeros_like(self.energy)
         self._background_type = None
+
+        self.energy_calibration = 0  # correction to binding energy
+        self.photon_energy = 0
+
         self._background_bounds = np.array([])
 
-        self.energy_calibration = 0
+        self._raw_energy = np.copy(self.x)
+        self._raw_intensity = np.copy(self.y)
 
         self._norm_divisor = 1.0
         self._norm_type = None
 
-    def parse_txt(self, idx):
-        try:
-            specdict = io.parse_spectrum_file(self.path)[idx]
-        except FileNotFoundError as e:
-            raise ValueError(f"{self.path} does not exist or has wrong file format") from e
-        try:
-            self._energy = specdict.pop("energy")
-            self._intensity = specdict.pop("intensity")
-        except KeyError as e:
-            raise ValueError(f"{self.path} cannot be parsed correctly") from e
-        self._meta = self._defaults.copy()
-        self._meta.update(specdict)
+        # Fit related
+        # self.params = Parameters()
+        # self._peaks = []
+
+    def parse(self, source: Union[str, np.ndarray, Line]) -> dict[str, Any]:
+        if isinstance(source, Line):
+            self._source = source
+            return {
+                "x": source.x,
+                "y": source.y,
+            }
+        else:
+            super().parse(source)
+
+    # def parse_txt(self, idx):
+    #     try:
+    #         specdict = io.parse_spectrum_file(self.path)[idx]
+    #     except FileNotFoundError as e:
+    #         raise ValueError(
+    #             f"{self.path} does not exist or has wrong file format"
+    #         ) from e
+    #     try:
+    #         self._energy = specdict.pop("energy")
+    #         self._intensity = specdict.pop("intensity")
+    #     except KeyError as e:
+    #         raise ValueError(f"{self.path} cannot be parsed correctly") from e
+    #     self._meta = self._defaults.copy()
+    #     self._meta.update(specdict)
 
     def __getattr__(self, attr):
-        if attr in ("path", "_meta", "_energy", "_intensity"):
-            raise AttributeError
-        try:
-            return self._meta[attr]
-        except KeyError as e:
-            raise AttributeError(f"No attribute named {attr}") from e
 
-    def __setattr__(self, attr, value):
-        if hasattr(self, "_meta") and attr in self._meta:
-            self._meta[attr] = value
-        else:
-            super().__setattr__(attr, value)
+        """
+        Spectrum inherits from line, so calling self.x and self.energy should return the same array
+        However, XPS spectra have different kinds of energys e.g raw energies, corrected energies,
+        binding energies... , so energy (and intensity) are modified by a property. Properties are
+        looked up before __getattr__ so this is valid. However, to hold the degenarcy of self.x ==
+        self.energy, __getattr__ has to be directed to the properties when asking for x and y.
+        """
+
+        if attr in ("_data", "_meta"):
+            return super().__getattr__(attr)
+        if attr == "x":
+            return self.energy
+        if attr == "y":
+            return self.intensity
+        return super().__getattr__(attr)
+
+    # def __setattr__(self, attr, value):
+    #     if hasattr(self, "_meta") and attr in self._meta:
+    #         self._meta[attr] = value
+    #     else:
+    #         super().__setattr__(attr, value)
 
     # Energy-related
     @property
     def energy(self):
-        return self._energy + self.energy_calibration
+        """Energy is binding energy"""
+        if self.raw_is_binding is True:
+            return self._raw_energy + self.energy_calibration
+        return self.photon_energy - (self._raw_energy + self.energy_calibration)
 
     @property
     def kinetic_energy(self):
-        return self.photon_energy - self._energy + self.energy_calibration
+        if self.raw_is_binding is False:
+            return self._raw_energy + self.energy_calibration
+        return self.photon_energy - (self._raw_energy + self.energy_calibration)
 
     # Intensity-related
     @property
     def intensity(self):
-        return self._intensity / self._norm_divisor
+        return self._raw_intensity / self._norm_divisor
 
     def intensity_at_E(self, energy):
         return processing.intensity_at_energy(self.energy, self.intensity, energy)
@@ -110,18 +165,25 @@ class XPSSpectrum:
         else:
             span = self._intensity.max() - self._intensity.min()
             if norm_type == "low_energy":
-                idx = np.argmax(np.abs(self._intensity - self._intensity[0]) > span * 0.05)
+                idx = np.argmax(
+                    np.abs(self._intensity - self._intensity[0]) > span * 0.05
+                )
                 self._norm_divisor = self._intensity[:idx:].mean()
             elif norm_type == "high_energy":
-                idx = np.argmax(np.abs(self._intensity[::-1] - self._intensity[-1]) > span * 0.05)
+                idx = np.argmax(
+                    np.abs(self._intensity[::-1] - self._intensity[-1]) > span * 0.05
+                )
                 self._norm_divisor = self._intensity[-1:idx:-1].mean()
         self._norm_type = norm_type
+
     @property
     def norm_type(self):
         return self._norm_type
+
     @property
     def norm_divisor(self):
         return self._norm_divisor
+
     @norm_divisor.setter
     def norm_divisor(self, value):
         self._norm_type = "manual"
@@ -138,32 +200,50 @@ class XPSSpectrum:
     @property
     def background_type(self):
         return self._background_type
-    @background_type.setter
-    def background_type(self, value):
-        if value not in self.background_types:
-            raise ValueError(f"Background type {value} not valid")
+
+    def calculate_background(self, type="shirley", bounds=None):
+        if bounds is None:
+            self._background_bounds = np.array(
+                [np.amin(self.energy), np.amax(self.energy)]
+            )
+        else:
+            if len(bounds) % 2 != 0:
+                raise ValueError("Background bounds must be pairwise.")
+            self._background_bounds = bounds
+
+        # self._background_bounds = np.sort(bounds) - self.energy_calibration
+        # self._background_bounds = self._background_bounds.clip(
+        #    self._energy.min(), self._energy.max()
+        # )
+
+        if type not in self.background_types:
+            raise ValueError(f"Background type {type} not valid")
         self._background = processing.calculate_background(
-            value, self._background_bounds, self._energy, self._intensity
+            type, self._background_bounds, self.energy, self.intensity
         )
-        self._background_type = value
+        # self._background_type = value
 
     @property
     def background_bounds(self):
-        return self._background_bounds + self._energy_calibration
-    @background_bounds.setter
-    def background_bounds(self, value):
-        """Only even-length numeral sequence-types are valid."""
-        if len(value) % 2 != 0:
-            raise ValueError("Background bounds must be pairwise.")
-        self._background_bounds = np.sort(np.array(value)) - self._energy_calibration
-        self._background_bounds = self._background_bounds.clip(
-            self._energy.min(), self._energy.max())
-        self._background = processing.calculate_background(
-            self.background_type, self.background_bounds, self.energy, self._intensity)
+        return self._background_bounds  # + self.energy_calibration
+
+    # @background_bounds.setter
+    # def background_bounds(self, value):
+    #     """Only even-length numeral sequence-types are valid."""
+    #     if len(value) % 2 != 0:
+    #         raise ValueError("Background bounds must be pairwise.")
+    #     self._background_bounds = np.sort(np.array(value)) - self._energy_calibration
+    #     self._background_bounds = self._background_bounds.clip(
+    #         self._energy.min(), self._energy.max()
+    #     )
+    #     self._background = processing.calculate_background(
+    #         self.background_type, self.background_bounds, self.energy, self._intensity
+    #     )
 
 
 class ModeledSpectrum(XPSSpectrum):
     """Holds information on the Fit and provides methods for fitting."""
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.params = Parameters()
@@ -215,42 +295,72 @@ class ModeledSpectrum(XPSSpectrum):
             result = self.model.fit(
                 self.intensity - self.background,
                 self.params,
-                x=self.energy
+                x=self.energy,
             )
         self.params.update(result.params)
 
-    def add_peak(self, name, **kwargs):
-        """
-        Add a peak with given parameters. Valid parameters:
-        area, fwhm, position and model specific parameters:
-            PseudoVoigt: fraction, gausswidth
-        """
-        if name in [peak.name for peak in self._peaks]:
-            raise ValueError("Peak already exists")
-        if "fwhm" not in kwargs and "height" in kwargs and "angle" in kwargs:
-            kwargs["fwhm"] = models.pah2fwhm(
-                kwargs["position"],
-                kwargs["angle"],
-                kwargs["height"],
-                kwargs["shape"]
-            )
-        if "area" not in kwargs and "height" in kwargs:
-            kwargs["area"] = models.pah2area(
-                kwargs["position"],
-                kwargs["angle"],
-                kwargs["height"],
-                kwargs["shape"]
-            )
-        kwargs.pop("angle", None)
-        kwargs.pop("height", None)
-        peak = Peak(name, self, **kwargs)
+    def eval(self):
+        return self.model.eval(
+            self.params,
+            x=self.energy,
+        )
+
+    def plot_eval(self, ax=None):
+        if not ax:
+            _, ax = plt.subplots()
+        ax.plot(self.energy, self.eval(), label="eval")
+        ax.plot(self.energy, self.intensity - self.background, label="data")
+        ax.legend()
+        # plt.show()
+
+    # def add_peak(self, name, **kwargs):
+    #     """
+    #     Add a peak with given parameters. Valid parameters:
+    #     area, fwhm, position and model specific parameters:
+    #         PseudoVoigt: fraction, gausswidth
+    #     """
+    #     if name in [peak.name for peak in self._peaks]:
+    #         # raise ValueError("Peak already exists")
+    #         self.remove_peak(name)
+    #     if "fwhm" not in kwargs and "height" in kwargs and "angle" in kwargs:
+    #         kwargs["fwhm"] = models.pah2fwhm(
+    #             kwargs["position"], kwargs["angle"], kwargs["height"], kwargs["shape"]
+    #         )
+    #     if "area" not in kwargs and "height" in kwargs:
+    #         kwargs["area"] = models.pah2area(
+    #             kwargs["position"], kwargs["angle"], kwargs["height"], kwargs["shape"]
+    #         )
+
+    #     kwargs.pop("angle", None)
+    #     kwargs.pop("height", None)
+    #     peak = Peak(name, self, **kwargs)
+    #     self._peaks.append(peak)
+    #     return peak
+
+    def add_peak(self, peak):
+        if peak.name in [p.name for p in self._peaks]:
+            print(f"Updating Peak {peak.name}")
+            self.remove_peak(next(filter(lambda x: x.name == peak.name, self._peaks)))
         self._peaks.append(peak)
-        return peak
+        self.params.update(peak.params)
 
     def remove_peak(self, peak):
         """Remove a peak specified by its name."""
-        peak.clear_params()
+        if isinstance(peak, str):
+            peak = next(filter(lambda x: x.name == peak, self._peaks))
+        # remove paramerts that belong to peak
+        pars_to_del = [
+            # par for par in self.params if re.match(rf"{peak.name}_[a-z]+", par)
+            par
+            for par in self.params
+            if par in peak.params
+        ]
+        for par in pars_to_del:
+            self.params.pop(par)
+
+        # peak.clear_params()
         self._peaks.remove(peak)
+        # self.params += peak.params
 
 
 class Peak:
@@ -268,7 +378,7 @@ class Peak:
     in a way that they all act similar.
     This ensures a consistent API.
     """
-    _signals = ("changed-peak", "changed-peak-meta")
+
     _default_aliases = {
         "alpha": None,
     }
@@ -280,20 +390,26 @@ class Peak:
         "vary": True,
         "min": 0,
         "max": np.inf,
-        "expr": ""
+        "expr": "",
     }
     shapes = ["PseudoVoigt", "DoniachSunjic", "Voigt"]
 
     def __init__(
-            self, name, spectrum,
-            area=None, fwhm=None, position=None, alpha=None,
-            shape="PseudoVoigt",
-        ):
+        self,
+        name,
+        # spectrum,
+        area=None,
+        fwhm=None,
+        position=None,
+        alpha=None,
+        shape="PseudoVoigt",
+    ):
         # pylint: disable=too-many-arguments
         super().__init__()
         self._name = name
-        self.spectrum = spectrum
-        self.params = spectrum.params
+        # self.spectrum = spectrum
+        # self.params = spectrum.params
+        self.params = Parameters()
         self._shape = shape
         self.label = f"Peak {name}"
         if None in (area, fwhm, position):
@@ -310,27 +426,20 @@ class Peak:
     def model(self):
         return self._model
 
-    @property
-    def intensity(self):
-        with processing.IgnoreUnderflow():
-            intensity = self._model.eval(
-                params=self.params,
-                x=self.spectrum.energy
-            )
-        return intensity
+    # @property
+    # def intensity(self):
+    #     with processing.IgnoreUnderflow():
+    #         intensity = self._model.eval(params=self.params, x=self.spectrum.energy)
+    #     return intensity
 
-    def intensity_at_E(self, energy):
-        with processing.IgnoreUnderflow():
-            intensity = self._model.eval(params=self.params, x=energy)
-        return intensity
+    # def intensity_at_E(self, energy):
+    #     with processing.IgnoreUnderflow():
+    #         intensity = self._model.eval(params=self.params, x=energy)
+    #     return intensity
 
     def initialize_model(self, area, fwhm, position, alpha):
         self.clear_params()
-        self.param_aliases = {
-            "area": "amplitude",
-            "fwhm": "fwhm",
-            "position": "center"
-        }
+        self.param_aliases = {"area": "amplitude", "fwhm": "fwhm", "position": "center"}
         if self._shape == "PseudoVoigt":
             self.param_aliases["alpha"] = "fraction"
             if alpha is None:
@@ -360,23 +469,24 @@ class Peak:
     @property
     def shape(self):
         return self._shape
-    @shape.setter
-    def shape(self, value):
-        if self._shape == value:
-            return
-        constraints = {}
-        values = {}
-        for param_alias in ("fwhm", "area", "position", "alpha"):
-            constraints[param_alias] = self.get_constraints(param_alias)
-            values[param_alias] = constraints[param_alias]["value"]
-        # only change shape after getting constraints!
-        if value in ("PseudoVoigt", "DoniachSunjic", "Voigt"):
-            self._shape = value
-        else:
-            raise NotImplementedError
-        self.initialize_model(**values)
-        for param_alias in ("fwhm", "area", "position", "alpha"):
-            self.set_constraints(param_alias, **constraints[param_alias])
+
+    # @shape.setter
+    # def shape(self, value):
+    #     if self._shape == value:
+    #         return
+    #     constraints = {}
+    #     values = {}
+    #     for param_alias in ("fwhm", "area", "position", "alpha"):
+    #         constraints[param_alias] = self.get_constraints(param_alias)
+    #         values[param_alias] = constraints[param_alias]["value"]
+    #     # only change shape after getting constraints!
+    #     if value in ("PseudoVoigt", "DoniachSunjic", "Voigt"):
+    #         self._shape = value
+    #     else:
+    #         raise NotImplementedError
+    #     self.initialize_model(**values)
+    #     for param_alias in ("fwhm", "area", "position", "alpha"):
+    #         self.set_constraints(param_alias, **constraints[param_alias])
 
     def get_param(self, param_alias, use_alias=True):
         """Shortcut for getting the Parameter object by the param alias."""
@@ -384,14 +494,15 @@ class Peak:
             aliases = {**self._default_aliases, **self.param_aliases}
             param_name = aliases.get(param_alias, param_alias)
         if param_name is None:
-            raise ValueError(f"model '{self.shape}' does not support Parameter '{param_alias}'")
+            raise ValueError(
+                f"model '{self.shape}' does not support Parameter '{param_alias}'"
+            )
         return self.params[f"{self.name}_{param_name}"]
 
     def clear_params(self):
         """Clear this peaks' parameters from the model."""
         pars_to_del = [
-            par for par in self.params
-            if re.match(fr"{self.name}_[a-z]+", par)
+            par for par in self.params if re.match(rf"{self.name}_[a-z]+", par)
         ]
         for par in pars_to_del:
             self.params.pop(par)
@@ -406,9 +517,11 @@ class Peak:
 
         old = self.get_constraints(param_alias)
         # enforce min=0 for all parameters except position:
-        if (old["min"] < 0
-                and (new["min"] is None or new["min"] < 0)
-                and param_alias != "position"):
+        if (
+            old["min"] < 0
+            and (new["min"] is None or new["min"] < 0)
+            and param_alias != "position"
+        ):
             new["min"] = 0
         # return if only None values are new
         if all(v is None for v in dict(set(new.items()) - set(old.items()))):
@@ -436,7 +549,7 @@ class Peak:
             "min": param.min,
             "max": param.max,
             "vary": param.vary,
-            "expr": self.expr2relation(param.expr)
+            "expr": self.expr2relation(param.expr),
         }
         return constraints
 
@@ -444,6 +557,7 @@ class Peak:
         """Translates technical expr string into a human-readable relation."""
         if expr is None:
             return ""
+
         def param_repl(matchobj):
             """Replaces 'peakname_param' by 'peakname'"""
             param_key = matchobj.group(0)
@@ -451,12 +565,14 @@ class Peak:
             if self in self.spectrum.peaks:
                 return name
             return param_key
+
         regex = r"\b[A-Za-z][A-Za-z0-9]*_[a-z_]+"
         relation = re.sub(regex, param_repl, expr)
         return relation
 
     def relation2expr(self, relation, param_alias):
         """Translates a human-readable arithmetic relation to an expr string."""
+
         def name_repl(matchobj):
             """Replaces 'peakname' by 'peakname_param' (searches case-insensitive)."""
             name = matchobj.group(0)
@@ -469,6 +585,7 @@ class Peak:
                     param_name = other.param_aliases[param_alias]
                     return f"{name}_{param_name}"
             return name
+
         regex = r"\b[A-Za-z][A-Za-z0-9]*"
         expr = re.sub(regex, name_repl, relation)
         return expr
