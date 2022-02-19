@@ -338,7 +338,7 @@ class DataObjectStack(Loadable):
                     )
                 )
                 self._virtual = False
-            # if stack is created from objects, all objects have to be the
+            # if stack is created from objects, all objects have to be the same
             for obj in source[1:]:
                 if not source[0].is_compatible(obj):
                     raise TypeError(
@@ -354,9 +354,9 @@ class DataObjectStack(Loadable):
     def _split_source(self, source: Union[str, Iterable]) -> list:
         """Split the source parameter of the constructor into source arguments
         that can be passed to single DataObjects."""
-        return_val = source
-        if not isinstance(return_val, list):
-            raise ValueError(f"Cannot create Objects from {type(self)}")
+        # return_val = source
+        if not isinstance(source, list):
+            raise ValueError(f"Cannot create Objects from {type(source)}")
         return source
 
     def _construct(self) -> None:
@@ -603,7 +603,7 @@ class Image(DataObject):
     _data_keys = ("image",)
     _meta_keys = ("width", "height")
     # TODO make a sensible default
-    #default_mask = None
+    # default_mask = None
 
     def __init__(self, *args, **kwargs) -> None:
         self._mask = None

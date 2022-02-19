@@ -6,6 +6,7 @@ Basic classes for Elmitec LEEM ".dat"-file parsing and data visualization.
 # plyint: disable=access-member-before-definition
 
 from __future__ import annotations
+from multiprocessing.sharedctypes import Value
 from typing import Any, Union, Optional
 from collections.abc import Iterable
 from numbers import Number
@@ -261,7 +262,10 @@ class LEEMStack(ImageStack):
             if not fnames:  # .../path
                 fnames = sorted(glob.glob(f"{source}/*.dat"))
             if not fnames:  # if nothing works it might just be a list of filenames
-                return super()._split_source(source)
+                try:
+                    return super()._split_source(source)
+                except ValueError:
+                    raise ValueError(f"No files were found at path {source}")
             return fnames
         return source
 
