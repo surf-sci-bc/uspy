@@ -21,6 +21,7 @@ import imageio
 import json_tricks
 import tifffile
 from tifffile.tifffile import TiffFileError
+import cv2 as cv
 
 import uspy.roi as roi
 
@@ -654,6 +655,79 @@ class Image(DataObject):
                 imageio.imwrite(fname, np.uint16(self.image))
             except ValueError:
                 super().save(fname)
+
+    def filter(self, method="gaussian", **kwargs):
+        """Apply 2D Filter to image
+
+        Applies a 2D Filter to the image, specified by the *method* argument. Valid methods are
+        "gaussian", "blur", "median" and "kernel". Depending on the selected method different kwargs
+        can be passed.
+
+
+        Parameters
+        ----------
+        method : str, optional
+            Applied filter type. Either "gaussian", "blur", "median" or "kernel", by default "gaussian".
+        kwargs : Depending on the passed method
+
+        Methods: possible kwargs are specified below
+
+        - gaussian: Applies a gaussian filter to the image
+
+            - size : int or tuple, by default (3, 3)
+                size of the applied kernel
+            - sigma: int, by default -1
+                width of the applied gaussian. When negative, sigma is calculated from kernel
+
+        - blur: Applies a normlized box filter with size of kernel
+
+            - size: int or tuple, by default (3,3)
+                size of applied kernel
+
+        - media: Applies median filter
+
+            - size: int, by default 3
+                size of kernel
+
+        - kernel: Convolutes image with kernel
+
+            - kernel: np.ndarray, by default None
+                kernel to be applied to the image
+
+        Returns
+        -------
+        Image
+            Returns image with applied filter.
+
+        Raises
+        ------
+        ValueError
+            If specified method is not valid.
+        """
+
+        img = self.copy()
+
+        if method == "gaussian":
+            sigma = kwargs.pop("sigma", -1)
+            size = kwargs.pop("size", (3, 3))
+            if isinstance(size, int):
+                size = (size, size)
+            img.image = cv.GaussianBlur(self.image, size, sigma, **kwargs)
+        elif method == "blur":
+            size = kwargs.pop("size", (3, 3))
+            if isinstance(size, int):
+                size = (size, size)
+            img.image = cv.blur(self.image, size, *kwargs)
+        elif method == "median":
+            size = kwargs.pop("size", 3)
+            img.image = cv.medianBlur(self.image, size)
+        elif method == "kernel":
+            kernel = kwargs.pop("kernel", None)
+            img.image = cv.filter2D(self.image, ddepth=-1, kernel=kernel, *kwargs)
+        else:
+            raise ValueError("Unkown Filter")
+
+        return img
 
     def __iadd__(self, other: Union[Image, Number, np.ndarray]) -> Image:
         if isinstance(other, Image):
