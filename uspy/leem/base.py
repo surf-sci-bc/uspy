@@ -156,6 +156,35 @@ class LEEMImg(Image):
     def find_warp_matrix(
         self, template: Image, algorithm="ecc", **kwargs
     ) -> np.ndarray:
+        """Calculates a warp matrix between the image and a template.
+
+        The algorithm applied is specified by the *algorithm* argument, which is *ecc* by default.
+        currently only *ecc* is implemented
+
+        Parameters
+        ----------
+        template : Image
+            Template image against which is aligned
+        algorithm : str, optional
+            algorithm used for registration, by default "ecc"
+
+        **kwargs
+            Additional keyword arguments are passed through to the registration function. Can specifiy further options like convergence criteria or transformations
+
+        Returns
+        -------
+        np.ndarray
+            3x3 matrix containing the alignment parameters
+
+        Raises
+        ------
+        ValueError
+            Raised when not implemented alogrithm is called.
+
+        See Also
+        --------
+        do_ecc_align
+        """
         if algorithm == "ecc":
             return do_ecc_align(self, template, **kwargs)
 
@@ -282,7 +311,11 @@ class LEEMStack(ImageStack):
         self._time_origin.value = value
 
     def __getitem__(self, index: Union[int, slice]) -> Union[LEEMImg, LEEMStack]:
-        elements = self._elements[index]
+        if isinstance(index, np.ndarray):
+            elements = [self._elements[i] for i in np.where(index == True)[0]]
+        else:
+            elements = self._elements[index]
+
         if isinstance(index, int):
             if (
                 self.virtual
@@ -302,7 +335,10 @@ class LEEMStack(ImageStack):
         Image registration of the stack
 
         The images of the stack are registered subsequently by calling Image.find_warp_matrix() for
-        each image and finally warping them using Image.warp()
+        each image and finally warping them using Image.warp(). After inital registration the
+        results are checked for sanity by checking if some translation shifts are more than
+        3 standard deviations away from the mean shift. If so, the values are interpolated from a
+        spline, over the whole stack. The same is true if the initial alignment fails.
 
         Parameters
         ----------
@@ -349,7 +385,6 @@ class LEEMStack(ImageStack):
         warp_matrices = [np.eye(3, dtype=np.float32)]
 
         if template is None:
-            warnings.warn("Aligning against template is considered unstable!")
             for index, (img1, img2) in enumerate(zip(tqdm(stack[1:]), stack)):
                 try:
                     warp_matrix = img1.find_warp_matrix(img2, mask=mask, **kwargs)
@@ -362,11 +397,11 @@ class LEEMStack(ImageStack):
                 # img1.warp(warp_matrix, inplace = True)
                 warp_matrices.append(warp_matrix)
         else:
+            warnings.warn("Aligning against template is considered unstable!")
             try:
                 template = stack[template]
             except:
                 pass
-            print(template.energy)
             for index, img in enumerate(stack):
                 try:
                     warp_matrix = img.find_warp_matrix(template, mask=mask, **kwargs)
@@ -727,11 +762,32 @@ def do_ecc_align(
 
     warp_matrix = np.eye(2, 3, dtype=np.float32)
 
+    template_arr = cv.normalize(
+        template_img.image,
+        None,
+        0,
+        255,
+        cv.NORM_MINMAX,
+        -1,
+        mask,
+    )
+    input_arr = cv.normalize(
+        input_img.image,
+        None,
+        0,
+        255,
+        cv.NORM_MINMAX,
+        -1,
+        mask,
+    )
+
     for sigma in [11, 5]:
 
         _, warp_matrix = cv.findTransformECC(  # template = warp_matrix * input
-            template_img.image,
-            input_img.image,
+            # template_img.image,
+            # input_img.image,
+            template_arr,
+            input_arr,
             warp_matrix,
             warp_mode,
             criteria,
