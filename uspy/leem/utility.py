@@ -8,7 +8,7 @@ import sys
 import contextlib
 from datetime import datetime, timedelta
 
-#from uspy.leem.base import LEEMImg, LEEMStack
+# from uspy.leem.base import LEEMImg, LEEMStack
 import uspy.leem.base as base
 
 
@@ -16,6 +16,7 @@ def imgify(img):
     if isinstance(img, base.LEEMImg):
         return img
     return base.LEEMImg(img)
+
 
 def stackify(stack, virtual=False):
     if isinstance(stack, base.LEEMStack):
@@ -25,17 +26,21 @@ def stackify(stack, virtual=False):
         # raise ValueError("LEEMStack expected, but got LEEMImg")
     return base.LEEMStack(stack, virtual=virtual)
 
+
 def timing_notification(title=""):
     print("uspy.leem.utility.timing_notification moved to uspy.utility")
+
     def timer(wrapped):
         def wrapper(*args, **kwargs):
             start = datetime.now()
             print(f"Started {title}")
             ret = wrapped(*args, **kwargs)
-            duration = str(datetime.now() - start).split('.')[0]
+            duration = str(datetime.now() - start).split(".")[0]
             print(f"Finished {title} in {duration}")
             return ret
+
         return wrapper
+
     return timer
 
 
@@ -43,6 +48,8 @@ class DummyFile(object):
     # pylint: disable=too-few-public-methods
     def write(self, x):
         pass
+
+
 @contextlib.contextmanager
 def silence():
     print("uspy.leem.utility.silence moved to uspy.utility")
@@ -60,10 +67,13 @@ def progress_bar(it, suffix="", total=None, size=25, fill="▇", empty="░", si
     start_time = datetime.now()
     if total is None:
         total = len(it)
+
     def display(perc):
         prog = fill * int(perc * size) + empty * (size - int(perc * size))
         duration = datetime.now() - start_time
-        statement = f"\r▕{prog}▏ {100*perc:.1f} % {suffix} ({str(duration).split('.')[0]}"
+        statement = (
+            f"\r▕{prog}▏ {100*perc:.1f} % {suffix} ({str(duration).split('.')[0]}"
+        )
         eta = duration * (1 / max(perc, 1e-5) - 1)
         if eta > timedelta(days=1):
             statement += " / ETA: > 1 day"
@@ -71,6 +81,7 @@ def progress_bar(it, suffix="", total=None, size=25, fill="▇", empty="░", si
             statement += f" / ETA: {str(eta).split('.')[0]}"
         statement += ")"
         return statement
+
     for i, item in enumerate(it):
         # avoid spamming output (do it max. 1000 times):
         if i / total > share + 0.001:
@@ -78,7 +89,6 @@ def progress_bar(it, suffix="", total=None, size=25, fill="▇", empty="░", si
             print("\033[K" + display(i / total), end="\r")
         yield item
     print("\033[K" + display(total))
-
 
 
 class ProgressBar(object):
@@ -94,6 +104,7 @@ class ProgressBar(object):
     fill        : bar fill character (Str)
     printEnd    : end character (e.g. "\r", "\r\n") (Str)
     """
+
     # pylint: disable=too-many-instance-attributes
     def __init__(self, total, suffix="", length=25, fill="▇"):
         print("uspy.leem.utility.ProgressBar moved to uspy.utility")
@@ -131,8 +142,10 @@ class ProgressBar(object):
             eta = "> 1 day"
         else:
             eta = str(eta).split(".")[0]
-        statement = (f"\r▕{prog}▏ {100*fraction:.1f} % "
-                     f"{self.suffix} ({str(duration).split('.')[0]} / ETA: {eta})")
+        statement = (
+            f"\r▕{prog}▏ {100*fraction:.1f} % "
+            f"{self.suffix} ({str(duration).split('.')[0]} / ETA: {eta})"
+        )
         # print("\r" + " " * (len(statement) + 5), end="\r")
         print(statement, end="\r")
         if not self.finished and self.iteration >= self.total:
@@ -142,11 +155,14 @@ class ProgressBar(object):
         if not self.finished:
             self.finished = True
             duration = datetime.now() - self._start_time
-            statement = (f"\r▕{self.fill * self.length}▏ {100:.1f} % "
-                         f"{self.suffix} ({str(duration).split('.')[0]})")
+            statement = (
+                f"\r▕{self.fill * self.length}▏ {100:.1f} % "
+                f"{self.suffix} ({str(duration).split('.')[0]})"
+            )
             print("\r" + " " * (len(statement) + 15), end="\r")
             print(statement, end="\r")
             print("")
+
 
 # SLIDERS = []
 # def plot_stack(stack, init=0):

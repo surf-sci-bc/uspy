@@ -290,6 +290,15 @@ class LEEMStack(ImageStack):
                 fnames = sorted(glob.glob(f"{source}*.dat"))
             if not fnames:  # .../path
                 fnames = sorted(glob.glob(f"{source}/*.dat"))
+
+            if fnames:
+                return fnames
+
+        try:
+            return super()._split_source(source)
+        except ValueError:
+            raise ValueError(f"No files were found at path {source}")
+
             if not fnames:  # if nothing works it might just be a list of filenames
                 try:
                     return super()._split_source(source)

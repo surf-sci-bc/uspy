@@ -23,7 +23,7 @@ from IPython.display import display, Video
 import uspy.dataobject as do
 import uspy.roi as rois
 from uspy.leem.utility import stackify, imgify
-from uspy.leem.processing import roify, ROI, RSM #, get_max_variance_idx
+from uspy.leem.processing import roify, ROI, RSM  # , get_max_variance_idx
 from uspy.leem.driftnorm import normalize_image
 
 
@@ -112,7 +112,7 @@ def plot_img(
     data = np.nan_to_num(img.image)
     if mask is True:
         mask = img.default_mask
-    
+
     if isinstance(mask, rois.ROI):
         data = mask.apply(img, return_array=True)
 
@@ -137,9 +137,7 @@ def plot_img(
     if invert:
         data = data.max() - data
 
-    ax.imshow(
-        data, cmap=cmap, clim=(np.nanmin(data), np.nanmax(data)), **kwargs
-    )
+    ax.imshow(data, cmap=cmap, clim=(np.nanmin(data), np.nanmax(data)), **kwargs)
 
     if fields is None:
         fields = img.default_fields
@@ -155,6 +153,7 @@ def plot_img(
             continue
         if not field:
             continue
+        # print(img.get_field_string(field))
         ax.text(
             x=_MPL_IMG_POS[i][2],
             y=_MPL_IMG_POS[i][3],
@@ -406,7 +405,7 @@ def plot_meta(stack, fields="temperature"):
             axes[i].plot(time, val)
         if field in ("pressure", "pressure1", "pressure2"):
             axes[i].set_yscale("log")
-        axes[i].set_ylabel(f"{field} in {stack[0].get_unit(field)}")
+        axes[i].set_ylabel(f"{field} in {stack[0]._units.get(field, '')}")
         axes[i].set_xlabel("Time in s")
 
     return axes
@@ -437,7 +436,7 @@ def print_meta(
 
     table = []
     for img in stack:
-        row = [os.path.basename(img.path)]
+        row = [os.path.basename(img.source)]
         for field in fields:
             row.append(img.get_field_string(field))
         table.append(row)
@@ -509,7 +508,7 @@ def plot_intensity(
         line.color = roi[0].color
     elif isinstance(roi, Sequence):
         line = [do.IntensityLine(stack, roi, xaxis) for roi in roi]
-        for li,ro in zip(line,roi):
+        for li, ro in zip(line, roi):
             li.color = ro.color
     else:
         line = do.IntensityLine(stack, roi, xaxis)
@@ -530,6 +529,28 @@ def plot_intensity_img(
     return_line=False,
     **kwargs,
 ) -> tuple[mpl.axes.Axes]:
+    """_summary_
+
+    Parameters
+    ----------
+    stack : Union[do.ImageStack, Sequence[do.ImageStack]]
+        _description_
+    roi : Union[rois.ROI, Sequence[rois.ROI]]
+        _description_
+    xaxis : str
+        _description_
+    img_idx : int, optional
+        _description_, by default None
+    stack_idx : int, optional
+        _description_, by default 0
+    return_line : bool, optional
+        _description_, by default False
+
+    Returns
+    -------
+    tuple[mpl.axes.Axes]
+        _description_
+    """
 
     _, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
 
@@ -542,7 +563,11 @@ def plot_intensity_img(
         img_idx = get_max_variance_idx(img_stack)
 
     plot_img(
-        img_stack[img_idx], ax=ax2, ticks=True, contrast=kwargs.pop("contrast", "auto")
+        img_stack[img_idx],
+        ax=ax2,
+        ticks=True,
+        contrast=kwargs.pop("contrast", "auto"),
+        mask=kwargs.pop("mask", False),
     )
 
     ax1 = plot_intensity(stack, roi, xaxis, ax1, return_line=return_line, **kwargs)

@@ -3,6 +3,7 @@ Basic data containers.
 """
 # pylint: disable=abstract-method
 from __future__ import annotations
+import glob
 from typing import Any, Callable, Sequence, Union, Optional
 from collections.abc import Iterable
 from numbers import Number
@@ -55,7 +56,7 @@ class Loadable:
         else:
             return json_tricks.dumps(self, allow_nan=True).encode("utf-8")
 
-    def save(self, fname: str) -> None:
+    def save(self, fname: str) -> DataObject:
         """Save the DataObject to a file depending on the filename extension."""
         _fname = fname
         compress = thin = pickl = False
@@ -91,6 +92,8 @@ class Loadable:
         else:
             with Path(fname).open("wb") as pfile:
                 pfile.write(self.dumps(thin, use_pickle=pickl))
+
+        return self
 
     # def _reduce(self) -> dict:
     #     raise NotImplementedError
@@ -331,6 +334,7 @@ class DataObjectStack(Loadable):
 
     def __init__(self, source: Union[str, Iterable], virtual: bool = False) -> None:
         self._virtual = virtual
+        # If the Stack is initialized from a list of Objects
         if isinstance(source, Iterable) and isinstance(source[0], self._type):
             if virtual:
                 warnings.warn(
@@ -347,6 +351,7 @@ class DataObjectStack(Loadable):
                     )
 
             self._elements = self._split_source(source)
+            # self._elements = source
         else:
             self._elements = self._split_source(source)
             if not self.virtual:
@@ -729,6 +734,19 @@ class Image(DataObject):
 
         return img
 
+    def contrast(self, method="equal"):
+        img = self.copy()
+        if method == "auto":
+            pass
+
+        if method == "equal":
+            img.image = cv.equalizeHist(img.image.astype(np.uint8))
+        elif method == "clahe":
+            clahe = cv.createCLAHE()
+            img.image = clahe.apply(img.image)
+
+        return img
+
     def __iadd__(self, other: Union[Image, Number, np.ndarray]) -> Image:
         if isinstance(other, Image):
             self.image += other.image
@@ -880,7 +898,7 @@ class ImageStack(DataObjectStack):
             img = np.mean(self[i * avg : i * avg + avg])
             imgs.append(img)
 
-        return ImageStack(imgs)
+        return type(self)(imgs)
 
     def save(self, fname: str) -> None:
         if fname.lower().endswith((".tiff", ".tif")):
@@ -1134,7 +1152,7 @@ class Line(DataObject):
         line.x, line.y = self.x, np.convolve(self.y, kernel, mode="same")
         return line
 
-    def save(self, fname: str) -> None:
+    def save(self, fname: str) -> Line:
         """
         Saves the line as .csv
 
@@ -1149,10 +1167,12 @@ class Line(DataObject):
         -------
             None
         """
-        if fname.lower().endswith(".csv"):
+        if fname.lower().endswith(".csv") or fname.lower().endswith(".txt"):
             self.dataframe.to_csv(fname, index=False, header=True)
         else:
             super().save(fname)
+
+        return self
 
     def is_compatible(self, other: Line) -> bool:
         try:
