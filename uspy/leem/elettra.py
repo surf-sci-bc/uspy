@@ -5,8 +5,10 @@ from typing import Any, Iterable, Union
 import numpy as np
 
 import pandas as pd
+import scipy
 import uspy.leem.base as leembase
 import tifffile
+from scipy.ndimage import gaussian_filter
 
 
 class LEEMImg(leembase.LEEMImg):
@@ -18,9 +20,13 @@ class LEEMImg(leembase.LEEMImg):
         _description_
     """
 
+    def __init__(self, *args, **kwargs) -> None:
+        self.energy_offset = 0
+        super().__init__(*args, **kwargs)
+
     @property
     def binding_energy(self):
-        return self.photon_energy - self.energy
+        return self.photon_energy - self.energy - self.energy_offset
 
     @property
     def kinetic_energy(self):
@@ -65,9 +71,11 @@ class LEEMImg(leembase.LEEMImg):
 
         elif source.endswith(".dat"):
             idict = leembase.parse_dat(source)
-
-        fname = glob.glob(f"{p}/*beamline.txt")
-        idict.update(read_beamline_metadata(fname[0]))
+        try:
+            fname = glob.glob(f"{p}/*beamline.txt")
+            idict.update(read_beamline_metadata(fname[0]))
+        except IndexError:
+            pass
 
         for new, old in leembase.ATTR_NAMES.items():
             idict[new] = idict.pop(old, np.nan)
@@ -116,6 +124,15 @@ class LEEMStack(leembase.LEEMStack):
                 self.mesh = df.iloc[:, 3].to_list()
                 self.beam_current = df.iloc[:, 4].to_list()
                 self.temperature = df.iloc[:, 5].to_list()
+
+    @property
+    def energy_offset(self):
+        return self.energy_offset
+
+    @energy_offset.setter
+    def energy_offset(self, value):
+        for img in self:
+            img.energy_offset = value
 
     def _split_source(self, source: Union[str, Iterable]) -> list:
         """_summary_
@@ -259,3 +276,63 @@ def read_beamline_metadata(fname: str) -> dict:
                 idict["mesh_unit"] = line.split(",")[4]
 
     return idict
+
+
+def fermi_edge(
+    x,
+    fd_center=0,
+    fd_width=0.003,
+    const_fd=1,
+    lin_fd=0,
+    const_bkg=1,
+    lin_bkg=0,
+    offset=0,
+    conv_width=0.02,
+):
+    """Fermi function with constant and Linear DOS.
+    After https://github.com/chstan/arpes/blob/master/arpes/fits/fit_models/fermi_edge.py
+    Args:
+        x: value to evaluate function at
+        fd_center: center of the step
+        fd_width: width of the step
+        const_bkg: constant background
+        lin_bkg: linear background slope
+        offset: constant background
+    """
+    dx = fd_center - x
+    fermi = (const_fd + lin_fd * dx) / (np.exp(dx / fd_width) + 1)
+    # return (const_bkg + lin_bkg * dx) * fermi + offset
+
+    bg = np.array([lin_bkg * xx + const_bkg if xx - fd_center <= 0 else 0 for xx in x])
+
+    x_scaling = x[1] - x[0]
+
+    return (
+        gaussian_filter(
+            fermi + bg,
+            sigma=conv_width / x_scaling,
+        )
+        + offset
+    )
+
+
+def fit_fermi_edge(x, y, temp, **kwargs):
+    kb = 8.617e-5  # eV/K
+
+    def fe(x, ef):
+        return 1 / np.exp((x - ef) / (kb * temp))
+
+    def bg(x, a, b, ef):
+        return np.array([a * xx + b if xx <= ef else 0 for xx in x])
+
+    def fermi_edge_func(x, ef, a, b, c, conv_width, offset):
+        x_scaling = x[1] - x[0]
+
+        return (
+            gaussian_filter(
+                c * (fe(x, ef) + bg(x, ef, a, b)), sigma=conv_width / x_scaling
+            )
+            + offset
+        )
+
+    return scipy.optimize.curve_fit(fermi_edge_func, x, y, **kwargs)

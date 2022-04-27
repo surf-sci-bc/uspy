@@ -3,24 +3,29 @@ Classes for defining shapes and regions on images.
 """
 # pylint: disable=abstract-method
 from __future__ import annotations
-from typing import Any, Union, Optional
+from turtle import width
+from typing import Any, Sequence, Union, Optional
 from collections.abc import Iterable
 
 import cv2
 import numpy as np
 import matplotlib as mpl
 from scipy import ndimage
+from skimage.measure import profile_line
 
 import uspy.dataobject as do
 
 
-class StyledObject():#do.Loadable):
+class StyledObject:  # do.Loadable):
     """Contains a style dictionary that can have class-wise defaults. The dictionary
     is intended for matplotlib keyword arguments."""
+
     _idx = 0
     _default_style = {}
 
-    def __init__(self, style: dict[str, Any] = None, color: Optional[str] = None) -> None:
+    def __init__(
+        self, style: dict[str, Any] = None, color: Optional[str] = None
+    ) -> None:
         style_ = self._default_style.copy()
         if style is not None:
             style_.update(style)
@@ -58,14 +63,20 @@ class StyledObject():#do.Loadable):
 
 class ROI(StyledObject):
     """An image region represented as a boolean 2D array."""
+
     # take care: OpenCV-points are given as (x, y),
     # but numpy 2d image arrays are in (y, x)-coordinates
     shapes = ("circle", "ellipse", "square", "rectangle", "point", "polygon")
 
-    def __init__(self, x0: int, y0: int,
-                 source: Union[np.ndarray,str,Iterable],
-                 style: dict[str, Any] = None, color: Optional[str] = None,
-                 **kwargs) -> None:
+    def __init__(
+        self,
+        x0: int,
+        y0: int,
+        source: Union[np.ndarray, str, Iterable],
+        style: dict[str, Any] = None,
+        color: Optional[str] = None,
+        **kwargs,
+    ) -> None:
         self.position = np.array([x0, y0])
         self._ref_point = np.array([0, 0])
         self.params = kwargs
@@ -73,7 +84,7 @@ class ROI(StyledObject):
         if isinstance(source, str):
             self._apply_params(shape=source, **self.params)
         elif isinstance(source, Iterable):
-            pass            # polygon
+            pass  # polygon
         else:
             self.array = np.array(source)
         assert self.array.ndim == 2
@@ -118,7 +129,7 @@ class ROI(StyledObject):
                 startAngle=0,
                 endAngle=360,
                 color=1,
-                thickness=-1
+                thickness=-1,
             )
         elif shape in ("square", "rectangle"):
             self._ref_point = np.array([width / 2, height / 2])
@@ -127,7 +138,7 @@ class ROI(StyledObject):
                 pt1=tuple(self._ref_point.astype(int)),
                 pt2=(width, height),
                 color=1,
-                thickness=-1
+                thickness=-1,
             )
             array = ndimage.rotate(array, rotation)
         elif shape == "polygon":
@@ -150,11 +161,18 @@ class ROI(StyledObject):
         return cls(x0, y0, source="circle", **kwargs)
 
     @classmethod
+    def ellipse(cls, x0: int, y0: int, **kwargs) -> ROI:
+        """Construct a point ROI."""
+        return cls(x0, y0, source="ellipse", **kwargs)
+
+    @classmethod
     def from_array(cls, x0: int, y0: int, array: Iterable, **kwargs) -> ROI:
         """Construct a polygonic ROI from a list of corners. Seems Superfluous?????"""
         return cls(x0, y0, source=array, **kwargs)
 
-    def apply(self, obj: do.Image, return_array: bool = False) -> Union[do.Image,np.ndarray]:
+    def apply(
+        self, obj: do.Image, return_array: bool = False
+    ) -> Union[do.Image, np.ndarray]:
         """Apply the MaskLike to a Dataobject and either return the masked
         DataObject or the raw masked data."""
         full_mask = self.pad_to(*obj.image.shape).astype(bool)
@@ -181,12 +199,12 @@ class ROI(StyledObject):
         crop_high = mask_size - np.clip(-high_corner, 0, None)
         if any(crop_low > mask_size) or any(crop_high < 0):
             return result
-        mask = self.array[crop_low[0]:crop_high[0], crop_low[1]:crop_high[1]]
+        mask = self.array[crop_low[0] : crop_high[0], crop_low[1] : crop_high[1]]
 
         # pad the mask until it matches the pad_size:
         pad_low = np.clip(low_corner, 0, None)
         pad_high = pad_size - np.clip(high_corner, 0, None)
-        result[pad_low[0]:pad_high[0], pad_low[1]:pad_high[1]] = mask
+        result[pad_low[0] : pad_high[0], pad_low[1] : pad_high[1]] = mask
         # put results in the buffer variables
         self._mask_buffer = result
 
@@ -224,6 +242,41 @@ class ROI(StyledObject):
     #     return ROI.from_array(self.mask.array + other.mask.array)
 
 
-
-class Profile:
+class Profile(StyledObject):
     """Extract profiles from images."""
+
+    def __init__(
+        self,
+        points: Sequence,
+        width: int = 1,
+        style: dict[str, Any] = None,
+        color: Optional[str] = None,
+        **kwargs,
+    ) -> None:
+
+        self.points = points
+        self.width = width
+
+        super().__init__(style=style, color=color)
+
+    def apply(self, obj: do.DataObject):
+
+        ret_val = np.array([])
+        for src, dst in zip(self.points, self.points[1:]):
+            ret_val = np.append(
+                ret_val,
+                profile_line(obj.image, src[::-1], dst[::-1], self.width),
+            )
+
+        return ret_val
+
+    def plot(self, ax):
+        xvalues = [point[0] for point in self.points]
+        yvalues = [point[1] for point in self.points]
+        ax.plot(
+            xvalues,
+            yvalues,
+            linewidth=self.width,
+            color=self.color,
+            alpha=self.style.get("alpha", 0.5),
+        )

@@ -579,6 +579,47 @@ def plot_intensity_img(
     return ax1, ax2
 
 
+def waterfall(stack, profile, yaxis="rel_time", cmap="inferno", ax=None, **kwargs):
+    """_summary_
+
+    Parameters
+    ----------
+    stack : _type_
+        _description_
+    profile : _type_
+        _description_
+    yaxis : str, optional
+        _description_, by default "rel_time"
+    cmap : str, optional
+        _description_, by default "inferno"
+    ax : _type_, optional
+        _description_, by default None
+
+    Returns
+    -------
+    _type_
+        _description_
+    """
+
+    ax = _get_ax(ax, **kwargs)
+
+    # wf = np.stack([profile.apply(img) for img in stack])
+    # y = getattr(stack, yaxis)
+
+    wf = do.Waterfall(stack, profile, yaxis)
+
+    ax.imshow(
+        wf.image,
+        extent=[0, wf.width, wf.y[-1], wf.y[0]],
+        cmap=cmap,
+        aspect="auto",
+    )
+    ax.set_ylabel(f"{yaxis} in {wf.stack[0]._units[yaxis]}")
+    ax.set_xlabel("Pixel")
+
+    return ax
+
+
 # def plot_intensity(stack, *args, xaxis="rel_time", ax=None, **kwargs):
 #     """Plots the image intensity in a specified ROI over a specified
 #     x axis. The x axis can be any attribute of the stack.
@@ -690,19 +731,16 @@ def plot_iv_img(*args, **kwargs):
     return plot_intensity_img(*args, xaxis="energy", **kwargs)
 
 
-def plot_rois(*args, img=None, ax=None, **kwargs):
+def plot_rois(rois, img=None, ax=None, **kwargs):
     """Plot rois onto a given axes object. The ROI can either be given like in
     plot_intensity()."""
-    roi_list = roify(*args, **kwargs)
-    for kwarg in ROI.kwargs:
-        kwargs.pop(kwarg, None)
     if ax is None:
         ax = _get_ax(ax)
     if img is not None:
         img = imgify(img)
         ax = plot_img(img, ticks=True, ax=ax)
 
-    for roi in roi_list:
+    for roi in rois:
         roi.plot(ax=ax)
         # ax.add_artist(roi.artist)
     return ax

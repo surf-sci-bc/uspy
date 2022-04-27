@@ -3,7 +3,6 @@ Basic data containers.
 """
 # pylint: disable=abstract-method
 from __future__ import annotations
-import glob
 from typing import Any, Callable, Sequence, Union, Optional
 from collections.abc import Iterable
 from numbers import Number
@@ -173,6 +172,7 @@ class DataObject(Loadable):
     _unit_defaults = {}
     _meta_defaults = {}
     default_fields = ()
+    _setters = ()  # list of attributes that have setters, so __setattr__ can handle the correct
 
     def __new__(cls, *_args, **_kwargs):
         obj = super().__new__(cls)  # really not forward args and kwargs?
@@ -722,13 +722,13 @@ class Image(DataObject):
             size = kwargs.pop("size", (3, 3))
             if isinstance(size, int):
                 size = (size, size)
-            img.image = cv.blur(self.image, size, *kwargs)
+            img.image = cv.blur(self.image, size, **kwargs)
         elif method == "median":
             size = kwargs.pop("size", 3)
             img.image = cv.medianBlur(self.image, size)
         elif method == "kernel":
             kernel = kwargs.pop("kernel", None)
-            img.image = cv.filter2D(self.image, ddepth=-1, kernel=kernel, *kwargs)
+            img.image = cv.filter2D(self.image, ddepth=-1, kernel=kernel, **kwargs)
         else:
             raise ValueError("Unkown Filter")
 
@@ -906,6 +906,9 @@ class ImageStack(DataObjectStack):
             tifffile.imwrite(fname, array)
         else:
             super().save(fname)
+
+    def filter(self, *args, **kwargs):
+        return type(self)([img.filter(*args, **kwargs) for img in self])
 
 
 class Line(DataObject):
@@ -1487,3 +1490,50 @@ class StitchedLine(Line):
         y = df.values.flatten()
 
         return x, y
+
+
+class ProfileLine(Line):
+    def __init__(self, img, profile) -> None:
+        super().__init__((img, profile))
+
+    def parse(self, source: Sequence[Image, roi.Profile]) -> dict[str, Any]:
+
+        img, profile = source
+
+        y = profile.apply(img)
+        x = np.linspace(0, len(y), len(y))
+
+        self._source = source
+
+        return {
+            "x": x,
+            "y": y,
+            "xdim": "pixel",
+            "ydim": "intensity",
+            "x_unit": "px",
+            "img": img,
+            "profile": profile,
+        }
+
+
+class Waterfall(Image):
+    def __init__(self, stack: ImageStack, profile: roi.Profile, yaxis: str) -> None:
+        super().__init__((stack, profile, yaxis))
+
+    def parse(self, source: Sequence[ImageStack, roi.Profile, str]) -> dict[str, Any]:
+        stack, profile, yaxis = source
+
+        wf = np.stack([profile.apply(img) for img in stack])
+        yval = getattr(stack, yaxis)
+
+        self._source = source
+
+        return {
+            "image": wf,
+            "y": yval,
+            "stack": stack,
+            "profile": profile,
+            "yaxis": yaxis,
+            "height": wf.shape[0],
+            "width": wf.shape[1],
+        }
