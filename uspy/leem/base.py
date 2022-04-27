@@ -662,7 +662,7 @@ def parse_dat(fname: str, debug: bool = False) -> dict[str, Any]:
                 parse_block(buffer, field_dict)
                 if debug:
                     print("\tknown")
-            elif bit in (106, 107, 108, 109, 235, 236, 237):  # varian pressures
+            elif bit in (106, 107, 108, 109, 234, 235, 236, 237):  # varian pressures
                 key = parse_cp1252_until_null(uk_file, debug)
                 data[f"{key}_unit"] = parse_cp1252_until_null(uk_file, debug)
                 data[key] = parse_bytes(uk_file.read(4), 0, "float")
