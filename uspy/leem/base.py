@@ -607,6 +607,10 @@ ATTR_NAMES = {
 VARIABLE_HEADER = {
     255: (0, None),  # stop byte
     100: (8, {"x_position": (0, "float"), "y_position": (4, "float")}),
+    228: (
+        8,
+        {"x_position": (0, "float"), "y_position": (4, "float")},
+    ),  # Image Version 8 of Elettra
     # Average Images: 0 means no averaging, 255 means sliding average
     104: (6, {"exposure": (0, "float"), "averaging": (4, "short")}),
     105: (0, {"_img_title": (0, "cp1252")}),

@@ -66,6 +66,8 @@ class LEEMImg(leembase.LEEMImg):
 
             # when using .tif files no timestamp is saved, so it is assumed the modification date
             # of the file is the timestamp, so take care
+            # This is only true for single images. For stacks, the timestamp is read from the
+            # tracefile
 
             idict["timestamp"] = os.path.getmtime(source)
 
@@ -119,11 +121,21 @@ class LEEMStack(leembase.LEEMStack):
                 df = pd.read_csv(fname, delimiter=" ")
 
                 # pylint: disable=no-member
-                self.energy = df.iloc[:, 1].to_list()
-                self.objective = df.iloc[:, 2].to_list()
-                self.mesh = df.iloc[:, 3].to_list()
-                self.beam_current = df.iloc[:, 4].to_list()
-                self.temperature = df.iloc[:, 5].to_list()
+
+                # When stack is created from .dat files, these metadata are already present
+                self.timestamp = [x / 1000.0 for x in df.iloc[:, 1].to_list()]
+                self.energy = df.iloc[:, 2].to_list()
+                self.objective = df.iloc[:, 3].to_list()
+                self.temperature = df.iloc[:, 6].to_list()
+
+                self.mesh = df.iloc[:, 4].to_list()
+                self.beam_current = df.iloc[:, 5].to_list()
+
+                # The timeorigin has to be explicitly stated, because base.LEEMStack assumes, that
+                # the timestamp is already known from the files itself. But here, the timeorigin is
+                # only known after the tracefile is read, which is after initialization of the stack
+
+                self._time_origin.value = self[0].timestamp
 
     @property
     def energy_offset(self):
