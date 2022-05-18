@@ -123,13 +123,31 @@ class LEEMStack(leembase.LEEMStack):
                 # pylint: disable=no-member
 
                 # When stack is created from .dat files, these metadata are already present
-                self.timestamp = [x / 1000.0 for x in df.iloc[:, 1].to_list()]
-                self.energy = df.iloc[:, 2].to_list()
-                self.objective = df.iloc[:, 3].to_list()
-                self.temperature = df.iloc[:, 6].to_list()
 
-                self.mesh = df.iloc[:, 4].to_list()
-                self.beam_current = df.iloc[:, 5].to_list()
+                trace_attr = {
+                    "time": "timestamp",
+                    "STV": "energy",
+                    "MOBJ": "objective",
+                    "Mesh": "mesh",
+                    "BeamCurrent": "beam_current",
+                    "temperature": "temperature",
+                    "emiss": "emission",
+                    "PMCH": "pressure1",
+                }
+
+                for header, vals in df.items():
+                    attr = header.split("_")[0]
+                    setattr(self, trace_attr.get(attr, attr), vals)
+
+                self.timestamp = [x / 1000.0 for x in self.timestamp]
+
+                # self.timestamp = [x / 1000.0 for x in df.iloc[:, 1].to_list()]
+                # self.energy = df.iloc[:, 2].to_list()
+                # self.objective = df.iloc[:, 3].to_list()
+                # self.temperature = df.iloc[:, 6].to_list()
+
+                # self.mesh = df.iloc[:, 4].to_list()
+                # self.beam_current = df.iloc[:, 5].to_list()
 
                 # The timeorigin has to be explicitly stated, because base.LEEMStack assumes, that
                 # the timestamp is already known from the files itself. But here, the timeorigin is
