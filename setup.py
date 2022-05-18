@@ -9,14 +9,14 @@ setup(
     use_scm_version={
         "root": ".",
         "relative_to": __file__,
-        "fallback_version": "NOT-INSTALLED-VERSION"
+        "fallback_version": "NOT-INSTALLED-VERSION",
     },
     author="Simon Fischer, Lars Buß, Jon-Olaf Krisponeit",
     description="LEEM data analysis (and more...?)",
     packages=find_packages(include=["uspy", "uspy.*"]),
     classifiers=(
         "Programming Language :: Python :: 3",
-        "Topic :: Scientific/Engineering :: Physics"
+        "Topic :: Scientific/Engineering :: Physics",
     ),
     license="MIT",
     keywords="physics LEEM microscopy spectroscopy",
@@ -32,6 +32,7 @@ setup(
         "imageio",
         "tifffile",
         "pyclustering",
+        "natsort",
         "nltk",
         "opencv-python-headless",
         "kneed",
@@ -39,11 +40,11 @@ setup(
         "ipython",
         "netCDF4",
         "json_tricks",
-        "setuptools_scm",       # see uspy/version.py
+        "setuptools_scm",  # see uspy/version.py
     ],
     package_data={"uspy.xps": ["rsf.db"]},
     python_requires="~=3.6",
-    tests_require=["pytest", "pytest-cov"]
+    tests_require=["pytest", "pytest-cov"],
 )
 
 ### Additional packages

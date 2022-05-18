@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 from typing import Any, Iterable, Union
 import numpy as np
+import natsort
 
 import pandas as pd
 import scipy
@@ -192,19 +193,22 @@ class LEEMStack(leembase.LEEMStack):
             # the .tif files that are always present.
             # .dat Files are prefered because they save the data in a more robust way, e.g timestamp
 
+            # Elettra data is only saved with 3 digits (2 leading zeros at start), so when more than
+            # 999 files are saved, alphanumeric sorting fails. So natsort is necessary here.
+
             if source.endswith(".dat"):  # .../path/*.dat
-                fnames = sorted(glob.glob(f"{source}"))
+                fnames = natsort.natsorted(glob.glob(f"{source}"))
             if not fnames:  # .../path/
-                fnames = sorted(glob.glob(f"{source}*.dat"))
+                fnames = natsort.natsorted(glob.glob(f"{source}*.dat"))
             if not fnames:  # .../path
-                fnames = sorted(glob.glob(f"{source}/*.dat"))
+                fnames = natsort.natsorted(glob.glob(f"{source}/*.dat"))
 
             if source.endswith(".tif"):  # .../path/*.tif
-                fnames = sorted(glob.glob(f"{source}"))
+                fnames = natsort.natsorted(glob.glob(f"{source}"))
             if not fnames:  # .../path/
-                fnames = sorted(glob.glob(f"{source}*.tif"))
+                fnames = natsort.natsorted(glob.glob(f"{source}*.tif"))
             if not fnames:  # .../path
-                fnames = sorted(glob.glob(f"{source}/*.tif"))
+                fnames = natsort.natsorted(glob.glob(f"{source}/*.tif"))
 
             if fnames:
                 return fnames
