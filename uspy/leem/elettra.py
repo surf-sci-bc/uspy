@@ -125,19 +125,25 @@ class LEEMStack(leembase.LEEMStack):
                 # When stack is created from .dat files, these metadata are already present
 
                 trace_attr = {
-                    "time": "timestamp",
-                    "STV": "energy",
-                    "MOBJ": "objective",
-                    "Mesh": "mesh",
-                    "BeamCurrent": "beam_current",
-                    "temperature": "temperature",
-                    "emiss": "emission",
-                    "PMCH": "pressure1",
+                    "time": ("timestamp", "s"),
+                    "STV": ("energy", "eV"),
+                    "MOBJ": ("objective", "mA"),
+                    "Mesh": ("mesh", "V"),
+                    "BeamCurrent": ("beam_current", "mA"),
+                    "temperature": ("temperature", "C"),
+                    "emiss": ("emission", "mA"),
+                    "PMCH": ("pressure1", "mBar"),
                 }
 
                 for header, vals in df.items():
                     attr = header.split("_")[0]
-                    setattr(self, trace_attr.get(attr, attr), vals)
+                    setattr(self, trace_attr.get(attr, (attr,))[0], vals)
+
+                    # set units
+                    for img in self:
+                        img._units[trace_attr.get(attr, (attr,))[0]] = trace_attr.get(
+                            attr, (attr, "a.u.")
+                        )[1]
 
                 self.timestamp = [x / 1000.0 for x in self.timestamp]
 
