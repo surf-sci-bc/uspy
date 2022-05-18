@@ -130,8 +130,8 @@ class LEEMStack(leembase.LEEMStack):
                     "MOBJ": ("objective", "mA"),
                     "Mesh": ("mesh", "V"),
                     "BeamCurrent": ("beam_current", "mA"),
-                    "temperature": ("temperature", "C"),
-                    "emiss": ("emission", "mA"),
+                    "temperature": ("temperature", "°C"),
+                    "emiss": ("emission", "µA"),
                     "PMCH": ("pressure1", "mBar"),
                 }
 
