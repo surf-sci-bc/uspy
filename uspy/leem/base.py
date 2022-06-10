@@ -6,7 +6,6 @@ Basic classes for Elmitec LEEM ".dat"-file parsing and data visualization.
 # plyint: disable=access-member-before-definition
 
 from __future__ import annotations
-from multiprocessing.sharedctypes import Value
 from typing import Any, Union, Optional
 from collections.abc import Iterable
 from numbers import Number
@@ -15,7 +14,8 @@ import glob
 from pathlib import Path
 import warnings
 from tqdm.auto import tqdm
-from scipy.interpolate import UnivariateSpline
+import scipy.stats
+import pandas as pd
 
 import numpy as np
 import cv2 as cv
@@ -338,6 +338,7 @@ class LEEMStack(ImageStack):
         inplace: bool = False,
         mask: Union[bool, np.ndarray, None] = True,
         template=None,
+        sanity=True,
         **kwargs,
     ) -> LEEMStack:
         """
@@ -429,68 +430,39 @@ class LEEMStack(ImageStack):
             # they are relative to first image
             # T = M_1 * img_1 => M_2*img2 = M_2*img2 => img2 = M_2^-1*M_1*img1
 
-        # Check sanity. Are some aligns outside 3 std dev, then they are most likely wrong.
-        # Outliners are replaced with np.nan
         dx = np.array([matrix[0, 2] for matrix in warp_matrices])
         dy = np.array([matrix[1, 2] for matrix in warp_matrices])
-        mask_dx = np.ma.masked_invalid(dx)
-        mask_dy = np.ma.masked_invalid(dy)
 
-        mean_x, std_x = np.mean(mask_dx), np.std(mask_dx)
-        mean_y, std_y = np.mean(mask_dy), np.std(mask_dy)
+        if sanity:
 
-        for index, (x, y) in enumerate(zip(dx, dy)):
-            # if values are NaN the if condition will be False, so this should not make a problem
-            if np.abs(x - mean_x) >= 3 * std_x or np.abs(y - mean_y) >= 3 * std_y:
-                print(f"Align of Image {index} to far out. (>3 std.dev.)")
-                # print(f"dx: {x}, mean: {mean_x}, std.dev: {std_x}")
-                # print(f"dy: {y}, mean: {mean_y}, std.dev: {std_y}")
-                # print("Replacing with mean value.")
-                dx[index] = np.nan
-                dy[index] = np.nan
+            # Check sanity. Are some aligns outside 3 std dev, then they are most likely wrong.
+            # Outliners are replaced with np.nan
+            # Calculate zscore of dx,dy
 
-                # warp_matrices[index][0,2] = mean_x
-                # warp_matrices[index][1,2] = mean_y
+            dx_z = np.abs(scipy.stats.zscore(dx, nan_policy="omit"))
+            dy_z = np.abs(scipy.stats.zscore(dy, nan_policy="omit"))
+
+            for index, value in enumerate((dx_z > 3) | (dy_z > 3)):
+                if value:
+                    print(f"Align {index} to far out")
+
+            dx[(dx_z > 3) | (dy_z > 3)] = np.nan
+            dy[(dx_z > 3) | (dy_z > 3)] = np.nan
 
         # Interpolate over valid points and recalculate invalid points.
         # Interpolation cannot handle nan, so first the nan values have to be converted to a
         # numerical value and then the weight is set to zero.
 
-        # array used for interpolation
+        # Check if dx and dy have nan values at same positions
         np.testing.assert_array_equal(np.isnan(dx), np.isnan(dy))
-        # return dx
-        w = np.isnan(dx)
 
-        dx[w] = 0.0
-        dy[w] = 0.0
-
-        ii = [x for x in range(len(stack))]
-
-        spl_x = UnivariateSpline(ii, dx, w=~w, s=0.1)
-        spl_y = UnivariateSpline(ii, dy, w=~w, s=0.1)
-
-        dx[w] = spl_x(np.where(w == True)[0])
-        dy[w] = spl_y(np.where(w == True)[0])
-
-        # import matplotlib.pyplot as plt
-
-        # plt.plot(dx, "+")
-        # plt.plot(np.linspace(0, len(dx), 1000), spl_x(np.linspace(0, len(dx), 1000)))
-        # return dx
-        # plt.plot(dy)
+        # Pandas interpolates over nan values
+        dx = pd.Series(dx).interpolate("spline", order=3)
+        dy = pd.Series(dy).interpolate("spline", order=3)
 
         for index, (x, y) in enumerate(zip(dx, dy)):
-            # print(x, y)
             warp_matrices[index][0, 2] = x
             warp_matrices[index][1, 2] = y
-
-        # import matplotlib.pyplot as plt
-
-        # plt.plot(dx)
-        # plt.plot(spl_x(ii))
-        # plt.plot(spl_y(ii))
-        # print(spl_x(np.array([3, 4, 5])))
-        # plt.plot(np.linspace(0, len(dx), 1000), spl_x(np.linspace(0, len(dx), 1000)))
 
         # calculate the warp matrices with respect to the position of first image
         for index, matrix in enumerate(warp_matrices[1:]):
