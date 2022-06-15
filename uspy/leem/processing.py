@@ -17,8 +17,8 @@ import scipy.constants as sc
 import scipy.signal
 import scipy.ndimage
 import skimage.measure
-from uspy.dataobject import IntensityLine
-from uspy.leem.base import LEEMStack
+from uspy.dataobject import DataObject, IntensityLine
+from uspy.leem.base import LEEMStack, LEEMImg
 from symmetrize import pointops as po, tps, sym
 
 
@@ -61,7 +61,7 @@ def fit_2d_gaussian(img, roi):
     return out
 
 
-def correct_img_distortion(img, pks: list, symmetry="hexagonal", rot=None):
+def correct_img_distortion(stack, pks: list, symmetry="hexagonal", rot=None):
 
     """
     Image distortion corrections using thin plate splines.
@@ -95,15 +95,25 @@ def correct_img_distortion(img, pks: list, symmetry="hexagonal", rot=None):
         ret="all",
     )
 
-    interp_order = 3  # interpolation order
-    img_warped, spline_warp = tps.tpsWarping(
-        psur_ord, ptargs, img.image, None, interp_order, ret="all"
-    )
+    if isinstance(stack, LEEMImg):
+        stack = LEEMStack([stack])
 
-    warped_img = img.copy()
-    warped_img.image = img_warped
-    warped_img.spline_warp = spline_warp
-    return warped_img
+    warped_stack = stack.copy()
+
+    interp_order = 3  # interpolation order
+
+    for img, warped_img in zip(stack, warped_stack):
+        img_warped, spline_warp = tps.tpsWarping(
+            psur_ord, ptargs, img.image, None, interp_order, ret="all"
+        )
+
+        warped_img.image = img_warped
+        warped_img.spline_warp = spline_warp
+
+    if len(warped_stack) == 1:
+        return warped_stack[0]
+
+    return warped_stack
 
 
 def correct_stack_distortion(stack, spline):
