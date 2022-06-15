@@ -23,7 +23,6 @@ from IPython.display import display, Video
 import uspy.dataobject as do
 import uspy.roi as rois
 from uspy.leem.utility import stackify, imgify
-from uspy.leem.processing import roify, ROI, RSM  # , get_max_variance_idx
 from uspy.leem.driftnorm import normalize_image
 
 

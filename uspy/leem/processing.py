@@ -6,6 +6,7 @@ import copy
 from collections import abc
 
 import cv2
+from matplotlib import image
 import matplotlib.lines
 import matplotlib.patches
 import matplotlib.pyplot as plt
@@ -14,7 +15,13 @@ import scipy.interpolate
 import scipy.optimize
 import scipy.constants as sc
 import scipy.signal
+import scipy.ndimage
 import skimage.measure
+from uspy.dataobject import IntensityLine
+from uspy.leem.base import LEEMStack
+from symmetrize import pointops as po, tps, sym
+
+
 # import uspy.leem.driftnorm as driftnorm
 
 # from uspy.leem.base import LEEMStack#, Loadable
@@ -36,157 +43,242 @@ def calculate_dose(stack, pressurefield="pressure1", approx=1):
     return long_dose[cutoff // 2 : len(stack) + cutoff // 2]
 
 
-class ROI:
-    # pylint: disable=too-many-instance-attributes
-    _defaults = {
-        "circle": {"radius": 10},
-        "rectangle": {"width": 50, "height": 50, "rot": 0},
-        "ellipse": {"xradius": 10, "yradius": 20, "rot": 0},
-    }
-    kwargs = (
-        "x0",
-        "y0",
-        "type_",
-        "color",
-        "radius",
-        "width",
-        "height",
-        "xradius",
-        "yradius",
+def center_of_mass(img, roi):
+    img = roi.apply(img)
+    return scipy.ndimage.center_of_mass(img.image.T)
+
+
+def maximum(img, roi):
+    img = roi.apply(img)
+    return np.unravel_index(img.image.argmax(), img.image.shape)
+
+
+def fit_2d_gaussian(img, roi):
+    img = roi.apply(img)
+    m, n = img.image.shape
+    R, C = np.mgrid[:m, :n]
+    out = np.ma.column_stack((C.ravel(), R.ravel(), img.image.ravel()))
+    return out
+
+
+def correct_img_distortion(img, pks: list, symmetry="hexagonal", rot=None):
+
+    """
+    Image distortion corrections using thin plate splines.
+
+    After https://github.com/RealPolitiX/symmetrize/tree/master/examples
+
+    Related Publication:
+        Rui Patrick Xian, Laurenz Rettig, Ralph Ernstorfer.
+        Symmetry-guided nonrigid registration: The case for distortion correction in
+        multidimensional photoemission spectroscopy.
+        Ultramicroscopy 202 (2019), 133-139
+        https://doi.org/10.1016/j.ultramic.2019.04.004
+    """
+
+    pcent, psur = po.pointset_center(pks, method="centroidnn")
+    psur_ord = po.pointset_order(psur, direction="ccw")
+
+    if symmetry == "hexagonal":
+        arot = np.ones(5) * 60
+    else:
+        arot = np.array(rot)
+
+    mcvd = po.cvdist(psur_ord, pcent).mean()
+    ptargs = sym.rotVertexGenerator(
+        pcent,
+        fixedvertex=psur_ord[0, :],
+        cvd=mcvd,
+        arot=arot,
+        direction=-1,
+        scale=1,
+        ret="all",
     )
-    _color_idx = 0
 
-    def __init__(self, x0, y0, type_=None, color=None, artist_kw=None, **kwargs):
-        # pylint: disable=too-many-arguments
-        self.position = np.array([x0, y0])
-        self._img_shape = None
-        self.area = None
-        self._mask = None
+    interp_order = 3  # interpolation order
+    img_warped, spline_warp = tps.tpsWarping(
+        psur_ord, ptargs, img.image, None, interp_order, ret="all"
+    )
 
-        if type_ is None:
-            for t, props in self._defaults.items():
-                if any(k in kwargs for k in props) and all(k in props for k in kwargs):
-                    type_ = t
-                    break
-            else:
-                type_ = "circle"
-        if not all(k in self._defaults[type_] for k in kwargs):
-            raise ValueError(f"kwargs {kwargs} don't match a ROI type")
-        self.type_ = type_
-        assert self.type_ in self._defaults
-        self.params = copy.deepcopy(self._defaults[self.type_])
-        self.params.update(kwargs)
-
-        if artist_kw is None:
-            artist_kw = dict()
-        if color is None and "color" not in artist_kw:
-            color = plt.rcParams["axes.prop_cycle"].by_key()["color"][ROI._color_idx]
-            ROI._color_idx += 1
-        artist_kw["color"] = artist_kw.get("color", color)
-        artist_kw["fill"] = artist_kw.get("fill", False)
-        self.artist_kw = artist_kw
-
-    def __repr__(self):
-        return (
-            f"{self.type_}(position:{self.position},"
-            + ",".join(f"{k}:{v}" for k, v in self.params.items())
-            + ")"
-        )
-
-    @property
-    def color(self):
-        return self.artist_kw["color"]
-
-    def apply(self, img_array):
-        if img_array.shape != self._img_shape or self._mask is None:
-            self._mask = self.create_mask(*img_array.shape)
-            self._img_shape = img_array.shape
-        mask = self._mask
-        return img_array * mask
-
-    def create_mask(self, img_height, img_width):
-        mask = np.zeros((img_height, img_width))
-        rot = self.params.get("rot", 0)
-
-        if self.type_ == "circle":
-            mask = cv2.circle(
-                mask,
-                center=tuple(self.position),
-                radius=self.params["radius"],
-                color=1,
-                thickness=-1,
-            ).astype(np.bool)
-        elif self.type_ == "ellipse":
-            mask = cv2.ellipse(
-                mask,
-                center=tuple(self.position),
-                axes=(self.params["xradius"], self.params["yradius"]),
-                angle=self.params["rot"],
-                startAngle=0,
-                endAngle=360,
-                color=1,
-                thickness=-1,
-            ).astype(np.bool)
-        elif self.type_ == "rectangle":
-            w, h = self.params["width"], self.params["height"]
-            rot = -self.params["rot"] * np.pi / 180
-            R = np.array([[np.cos(rot), -np.sin(rot)], [np.sin(rot), np.cos(rot)]])
-            corners = np.array(
-                [[-w / 2, -h / 2], [-w / 2, h / 2], [w / 2, h / 2], [w / 2, -h / 2]]
-            )
-            corners = np.rint(np.dot(corners, R) + self.position).astype(np.int32)
-            mask = cv2.fillConvexPoly(mask, corners, color=1).astype(np.bool)
-        else:
-            raise ValueError("Unknown ROI type")
-
-        self.area = mask.sum()
-        return mask
-
-    @property
-    def artist(self):
-        if self.type_ == "circle":
-            art = plt.Circle(self.position, self.params["radius"], **self.artist_kw)
-        elif self.type_ == "ellipse":
-            art = matplotlib.patches.Ellipse(
-                self.position,
-                self.params["xradius"] * 2,
-                self.params["yradius"] * 2,
-                angle=self.params["rot"],
-                **self.artist_kw,
-            )
-        elif self.type_ == "rectangle":
-            w, h = self.params["width"], self.params["height"]
-            rot = -self.params["rot"] * np.pi / 180
-            R = np.array([[np.cos(rot), -np.sin(rot)], [np.sin(rot), np.cos(rot)]])
-            lower_left = np.rint(np.dot([-w / 2, -h / 2], R) + self.position)
-            art = plt.Rectangle(
-                lower_left,
-                self.params["width"],
-                self.params["height"],
-                angle=self.params["rot"],
-                **self.artist_kw,
-            )
-        else:
-            raise ValueError("Unknown ROI type")
-        return art
+    warped_img = img.copy()
+    warped_img.image = img_warped
+    warped_img.spline_warp = spline_warp
+    return warped_img
 
 
-def roify(*args, **kwargs):
-    """Takes either a single ROI, an iterable of ROIs or a set of
-    arguments for the ROI constructor. Returns a list of ROIs (for the
-    first and latter case, this list has length 1)."""
-    if "rois" in kwargs:
-        args = (*args, kwargs.pop("rois"))
-    if args and isinstance(args[0], ROI):
-        if kwargs or len(args) > 1:
-            print("WARNING: too many arguments for roify()")
-        return [args[0]]
-    elif args and isinstance(args[0], abc.Iterable):
-        if all(isinstance(roi, ROI) for roi in args[0]):
-            if kwargs or len(args) > 1:
-                print("WARNING: too many arguments for roify()")
-            return args[0]
-    return [ROI(*args, **kwargs)]
+def correct_stack_distortion(stack, spline):
+    try:
+        rdeform, cdeform = spline.spline_warp
+    except AttributeError:
+        rdeform, cdeform = spline
+    stack_warped = stack.copy()
+    stack_warped.image = sym.applyWarping(
+        stack.image, axis=0, warptype="deform_field", dfield=[rdeform, cdeform]
+    )
+
+    return stack_warped
+
+
+def calc_correlation(stack, line):
+    data = stack.image
+    corr = np.zeros_like(stack[0].image)
+    for ii in range(stack[0].height):
+        for jj in range(stack[0].width):
+            corr[ii, jj] = scipy.spatial.distance.correlation(data[:, ii, jj], line.y)
+    return corr
+
+
+# class ROI:
+#     # pylint: disable=too-many-instance-attributes
+#     _defaults = {
+#         "circle": {"radius": 10},
+#         "rectangle": {"width": 50, "height": 50, "rot": 0},
+#         "ellipse": {"xradius": 10, "yradius": 20, "rot": 0},
+#     }
+#     kwargs = (
+#         "x0",
+#         "y0",
+#         "type_",
+#         "color",
+#         "radius",
+#         "width",
+#         "height",
+#         "xradius",
+#         "yradius",
+#     )
+#     _color_idx = 0
+
+#     def __init__(self, x0, y0, type_=None, color=None, artist_kw=None, **kwargs):
+#         # pylint: disable=too-many-arguments
+#         self.position = np.array([x0, y0])
+#         self._img_shape = None
+#         self.area = None
+#         self._mask = None
+
+#         if type_ is None:
+#             for t, props in self._defaults.items():
+#                 if any(k in kwargs for k in props) and all(k in props for k in kwargs):
+#                     type_ = t
+#                     break
+#             else:
+#                 type_ = "circle"
+#         if not all(k in self._defaults[type_] for k in kwargs):
+#             raise ValueError(f"kwargs {kwargs} don't match a ROI type")
+#         self.type_ = type_
+#         assert self.type_ in self._defaults
+#         self.params = copy.deepcopy(self._defaults[self.type_])
+#         self.params.update(kwargs)
+
+#         if artist_kw is None:
+#             artist_kw = dict()
+#         if color is None and "color" not in artist_kw:
+#             color = plt.rcParams["axes.prop_cycle"].by_key()["color"][ROI._color_idx]
+#             ROI._color_idx += 1
+#         artist_kw["color"] = artist_kw.get("color", color)
+#         artist_kw["fill"] = artist_kw.get("fill", False)
+#         self.artist_kw = artist_kw
+
+#     def __repr__(self):
+#         return (
+#             f"{self.type_}(position:{self.position},"
+#             + ",".join(f"{k}:{v}" for k, v in self.params.items())
+#             + ")"
+#         )
+
+#     @property
+#     def color(self):
+#         return self.artist_kw["color"]
+
+#     def apply(self, img_array):
+#         if img_array.shape != self._img_shape or self._mask is None:
+#             self._mask = self.create_mask(*img_array.shape)
+#             self._img_shape = img_array.shape
+#         mask = self._mask
+#         return img_array * mask
+
+#     def create_mask(self, img_height, img_width):
+#         mask = np.zeros((img_height, img_width))
+#         rot = self.params.get("rot", 0)
+
+#         if self.type_ == "circle":
+#             mask = cv2.circle(
+#                 mask,
+#                 center=tuple(self.position),
+#                 radius=self.params["radius"],
+#                 color=1,
+#                 thickness=-1,
+#             ).astype(np.bool)
+#         elif self.type_ == "ellipse":
+#             mask = cv2.ellipse(
+#                 mask,
+#                 center=tuple(self.position),
+#                 axes=(self.params["xradius"], self.params["yradius"]),
+#                 angle=self.params["rot"],
+#                 startAngle=0,
+#                 endAngle=360,
+#                 color=1,
+#                 thickness=-1,
+#             ).astype(np.bool)
+#         elif self.type_ == "rectangle":
+#             w, h = self.params["width"], self.params["height"]
+#             rot = -self.params["rot"] * np.pi / 180
+#             R = np.array([[np.cos(rot), -np.sin(rot)], [np.sin(rot), np.cos(rot)]])
+#             corners = np.array(
+#                 [[-w / 2, -h / 2], [-w / 2, h / 2], [w / 2, h / 2], [w / 2, -h / 2]]
+#             )
+#             corners = np.rint(np.dot(corners, R) + self.position).astype(np.int32)
+#             mask = cv2.fillConvexPoly(mask, corners, color=1).astype(np.bool)
+#         else:
+#             raise ValueError("Unknown ROI type")
+
+#         self.area = mask.sum()
+#         return mask
+
+#     @property
+#     def artist(self):
+#         if self.type_ == "circle":
+#             art = plt.Circle(self.position, self.params["radius"], **self.artist_kw)
+#         elif self.type_ == "ellipse":
+#             art = matplotlib.patches.Ellipse(
+#                 self.position,
+#                 self.params["xradius"] * 2,
+#                 self.params["yradius"] * 2,
+#                 angle=self.params["rot"],
+#                 **self.artist_kw,
+#             )
+#         elif self.type_ == "rectangle":
+#             w, h = self.params["width"], self.params["height"]
+#             rot = -self.params["rot"] * np.pi / 180
+#             R = np.array([[np.cos(rot), -np.sin(rot)], [np.sin(rot), np.cos(rot)]])
+#             lower_left = np.rint(np.dot([-w / 2, -h / 2], R) + self.position)
+#             art = plt.Rectangle(
+#                 lower_left,
+#                 self.params["width"],
+#                 self.params["height"],
+#                 angle=self.params["rot"],
+#                 **self.artist_kw,
+#             )
+#         else:
+#             raise ValueError("Unknown ROI type")
+#         return art
+
+
+# def roify(*args, **kwargs):
+#     """Takes either a single ROI, an iterable of ROIs or a set of
+#     arguments for the ROI constructor. Returns a list of ROIs (for the
+#     first and latter case, this list has length 1)."""
+#     if "rois" in kwargs:
+#         args = (*args, kwargs.pop("rois"))
+#     if args and isinstance(args[0], ROI):
+#         if kwargs or len(args) > 1:
+#             print("WARNING: too many arguments for roify()")
+#         return [args[0]]
+#     elif args and isinstance(args[0], abc.Iterable):
+#         if all(isinstance(roi, ROI) for roi in args[0]):
+#             if kwargs or len(args) > 1:
+#                 print("WARNING: too many arguments for roify()")
+#             return args[0]
+#     return [ROI(*args, **kwargs)]
 
 
 # def roi_intensity(img, *args, **kwargs):
@@ -219,104 +311,104 @@ def get_max_variance_idx(stack):
     return max_index
 
 
-class Profile(ROI):
-    """
-    Describes a profile through a LEEM or LEED image.
-    Arguments:
-        - x0, y0:   the center of the profile
-        - theta:    inclination with respect to the horizontal
-        - length:   the profile extends by length/2 from the center in each direction
-        - width:    width to average over
-        - reduce_func:  how to average along width, either a function or "gaussian" or "rect"
-        - alpha, color: used when plotting the line
-    Attributes:
-        - endpoints
-        - length
-        - artist    can be added to a matplotlib Axes
-    Methods:
-        - apply(img_array)  takes a 2D numpy array and returns a 1D profile
-    """
+# class Profile(ROI):
+#     """
+#     Describes a profile through a LEEM or LEED image.
+#     Arguments:
+#         - x0, y0:   the center of the profile
+#         - theta:    inclination with respect to the horizontal
+#         - length:   the profile extends by length/2 from the center in each direction
+#         - width:    width to average over
+#         - reduce_func:  how to average along width, either a function or "gaussian" or "rect"
+#         - alpha, color: used when plotting the line
+#     Attributes:
+#         - endpoints
+#         - length
+#         - artist    can be added to a matplotlib Axes
+#     Methods:
+#         - apply(img_array)  takes a 2D numpy array and returns a 1D profile
+#     """
 
-    _defaults = {"profile": {"theta": 0, "length": 100, "width": 10}}
-    kwargs = ("x0", "y0", "type_", "color", "width", "length", "theta")
+#     _defaults = {"profile": {"theta": 0, "length": 100, "width": 10}}
+#     kwargs = ("x0", "y0", "type_", "color", "width", "length", "theta")
 
-    def __init__(self, *args, reduce_func="gaussian", artist_kw=None, **kwargs):
-        if artist_kw is None:
-            artist_kw = dict()
-        artist_kw["alpha"] = artist_kw.get("alpha", 0.3)
-        super().__init__(*args, type_="profile", artist_kw=artist_kw, **kwargs)
-        self.artist_kw.pop("fill")
-        self.params["theta"] *= np.pi / 180
-        self.params["length"] = int(self.params["length"])
-        self.reduce = reduce_func
+#     def __init__(self, *args, reduce_func="gaussian", artist_kw=None, **kwargs):
+#         if artist_kw is None:
+#             artist_kw = dict()
+#         artist_kw["alpha"] = artist_kw.get("alpha", 0.3)
+#         super().__init__(*args, type_="profile", artist_kw=artist_kw, **kwargs)
+#         self.artist_kw.pop("fill")
+#         self.params["theta"] *= np.pi / 180
+#         self.params["length"] = int(self.params["length"])
+#         self.reduce = reduce_func
 
-    def apply(self, img_array):
-        profile = skimage.measure.profile_line(
-            img_array,
-            self.endpoints[0, ::-1],
-            self.endpoints[1, ::-1],
-            linewidth=self.params["width"],
-            mode="constant",
-            reduce_func=self.reduce,
-        )
-        return profile
+#     def apply(self, img_array):
+#         profile = skimage.measure.profile_line(
+#             img_array,
+#             self.endpoints[0, ::-1],
+#             self.endpoints[1, ::-1],
+#             linewidth=self.params["width"],
+#             mode="constant",
+#             reduce_func=self.reduce,
+#         )
+#         return profile
 
-    @property
-    def length(self):
-        return self.params["length"]
+#     @property
+#     def length(self):
+#         return self.params["length"]
 
-    @property
-    def endpoints(self):
-        theta = self.params["theta"]
-        length = self.params["length"] - 1  # profile_line will include endpoint
-        dyx = np.array([np.cos(theta) * length, -np.sin(theta) * length])
-        return np.array([self.position - dyx * 0.4999, self.position + dyx * 0.4999])
-        # dyx * 0.4999 to stay below the length (profile_line will do ceil)
+#     @property
+#     def endpoints(self):
+#         theta = self.params["theta"]
+#         length = self.params["length"] - 1  # profile_line will include endpoint
+#         dyx = np.array([np.cos(theta) * length, -np.sin(theta) * length])
+#         return np.array([self.position - dyx * 0.4999, self.position + dyx * 0.4999])
+#         # dyx * 0.4999 to stay below the length (profile_line will do ceil)
 
-    @property
-    def xy(self):
-        x = np.linspace(self.endpoints[0, 0], self.endpoints[1, 0], self.length)
-        y = np.linspace(self.endpoints[0, 1], self.endpoints[1, 1], self.length)
-        return np.stack([x, y]).T
+#     @property
+#     def xy(self):
+#         x = np.linspace(self.endpoints[0, 0], self.endpoints[1, 0], self.length)
+#         y = np.linspace(self.endpoints[0, 1], self.endpoints[1, 1], self.length)
+#         return np.stack([x, y]).T
 
-    @property
-    def xyC(self):
-        """xy "edge" values for pcolormesh"""
-        x = np.linspace(self.endpoints[0, 0], self.endpoints[1, 0], self.length + 1)
-        y = np.linspace(self.endpoints[0, 1], self.endpoints[1, 1], self.length + 1)
-        return np.stack([x, y]).T
+#     @property
+#     def xyC(self):
+#         """xy "edge" values for pcolormesh"""
+#         x = np.linspace(self.endpoints[0, 0], self.endpoints[1, 0], self.length + 1)
+#         y = np.linspace(self.endpoints[0, 1], self.endpoints[1, 1], self.length + 1)
+#         return np.stack([x, y]).T
 
-    @property
-    def reduce(self):
-        return self._reduce_func
+#     @property
+#     def reduce(self):
+#         return self._reduce_func
 
-    @reduce.setter
-    def reduce(self, func):
-        width = self.params["width"]
-        if func == "gaussian":
-            window = scipy.signal.windows.gaussian(width, std=width / 2)
-            func = lambda x: np.mean(window * x)
-        elif func in ("rect", "boxcar"):
-            window = scipy.signal.windows.boxcar(width)
-            func = lambda x: np.mean(window * x)
-            # func = None # also works?
-        elif not callable(func):
-            raise ValueError(f"Unkown reduce_func {func}")
-        self._reduce_func = func
+#     @reduce.setter
+#     def reduce(self, func):
+#         width = self.params["width"]
+#         if func == "gaussian":
+#             window = scipy.signal.windows.gaussian(width, std=width / 2)
+#             func = lambda x: np.mean(window * x)
+#         elif func in ("rect", "boxcar"):
+#             window = scipy.signal.windows.boxcar(width)
+#             func = lambda x: np.mean(window * x)
+#             # func = None # also works?
+#         elif not callable(func):
+#             raise ValueError(f"Unkown reduce_func {func}")
+#         self._reduce_func = func
 
-    def create_mask(self, img_height, img_width):
-        raise NotImplementedError
+#     def create_mask(self, img_height, img_width):
+#         raise NotImplementedError
 
-    @property
-    def artist(self):
-        art = matplotlib.lines.Line2D(
-            self.endpoints[:, 0],
-            self.endpoints[:, 1],
-            lw=self.params["width"],
-            solid_capstyle="butt",
-            **self.artist_kw,
-        )
-        return art
+#     @property
+#     def artist(self):
+#         art = matplotlib.lines.Line2D(
+#             self.endpoints[:, 0],
+#             self.endpoints[:, 1],
+#             lw=self.params["width"],
+#             solid_capstyle="butt",
+#             **self.artist_kw,
+#         )
+#         return art
 
 
 class RSM:
@@ -369,7 +461,7 @@ class RSM:
         # see Thomas Schmidt, hering3.c, L600
         # kpara^2 + kperp^2 = K
         # k0^2 = (kperp - k0)^2 + kpara^2
-        kperp = k0 + np.sqrt(k0 ** 2 - kpara ** 2)  # kpara^2 + kperp^2 = k0^2
+        kperp = k0 + np.sqrt(k0**2 - kpara**2)  # kpara^2 + kperp^2 = k0^2
         return np.nan_to_num(kperp, 0)
 
 
@@ -543,3 +635,37 @@ class RSM:
 #     def save_csv(self, ofile):
 #         data = np.vstack((self._x, self._y))
 #         np.savetxt(ofile, data, delimiter=",")
+
+
+def poisson_correction(line: IntensityLine, plot=False) -> IntensityLine:
+    stack = line.stack
+    roi = line.roi
+
+    # mask image for each image in stack, so mean and variance can be calulated
+    mstack = LEEMStack([roi.apply(img) for img in stack])
+    mean = np.array([np.mean((img.image)) for img in mstack])
+    var = np.array([np.var((img.image)) / np.sum(~img.image.mask) for img in mstack])
+
+    # Fit line to Variance-Mean
+    # To calculate Darkcounts and gain of CCD per Electron and Pixel
+
+    f = lambda x, a, b: a * (x) + b
+    popt, pcov = scipy.optimize.curve_fit(f, mean, var)
+    a, b = popt
+    x0 = -b / a
+    gain = np.sqrt(a)
+    err = np.sqrt(np.diag(pcov))
+    print(popt, err)
+    print(f"Dark Counts={x0}±{(err[0]/a-err[1]/b)*gain}")
+    print(f"gain={gain}±{0.5*err[0]/a*gain}")
+
+    if plot:
+        plt.scatter(mean, var)
+        plt.plot(mean, f(mean, *popt), color="r")
+        plt.xlabel("Mean")
+        plt.ylabel("Variance")
+        plt.show()
+
+    # Return Poission corrected line. Intensity is now electrons per pixel.
+
+    return (line - x0) / gain

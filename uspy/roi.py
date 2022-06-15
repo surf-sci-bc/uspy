@@ -84,8 +84,7 @@ class ROI(StyledObject):
         if isinstance(source, str):
             self._apply_params(shape=source, **self.params)
         elif isinstance(source, Iterable):
-            pass  # polygon
-        else:
+            # pass  # polygon
             self.array = np.array(source)
         assert self.array.ndim == 2
 
@@ -166,7 +165,8 @@ class ROI(StyledObject):
         return cls(x0, y0, source="ellipse", **kwargs)
 
     @classmethod
-    def from_array(cls, x0: int, y0: int, array: Iterable, **kwargs) -> ROI:
+    def from_array(cls, array: Iterable, x0: int = 0, y0: int = 0, **kwargs) -> ROI:
+        # def from_array(cls, array: Iterable, **kwargs) -> ROI:
         """Construct a polygonic ROI from a list of corners. Seems Superfluous?????"""
         return cls(x0, y0, source=array, **kwargs)
 
