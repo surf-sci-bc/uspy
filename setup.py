@@ -29,6 +29,7 @@ setup(
         "scikit-image",
         "scikit-learn",
         "scikit-video",
+        "symmetrize",
         "imageio",
         "tifffile",
         "pyclustering",
