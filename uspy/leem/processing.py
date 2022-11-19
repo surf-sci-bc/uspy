@@ -80,7 +80,12 @@ def correct_img_distortion(stack, pks: list, symmetry="hexagonal", rot=None):
     psur_ord = po.pointset_order(psur, direction="ccw")
 
     if symmetry == "hexagonal":
-        arot = np.ones(5) * 60
+        arot = (
+            np.ones(
+                5,
+            )
+            * 60
+        )
     else:
         arot = np.array(rot)
 
@@ -104,10 +109,15 @@ def correct_img_distortion(stack, pks: list, symmetry="hexagonal", rot=None):
 
     for img, warped_img in zip(stack, warped_stack):
         img_warped, spline_warp = tps.tpsWarping(
-            psur_ord, ptargs, img.image, None, interp_order, ret="all"
+            psur_ord,
+            ptargs,
+            img.image.T,  # .T because symmetrize expects a different x,y convention
+            None,
+            interp_order,
+            ret="all",
         )
 
-        warped_img.image = img_warped
+        warped_img.image = img_warped.T
         warped_img.spline_warp = spline_warp
 
     if len(warped_stack) == 1:
