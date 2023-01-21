@@ -29,6 +29,13 @@ def plot_img(
     return uspy.plotting.plot_img(img, fields=fields, *args, **kwargs)
 
 
+def make_video(
+    stack, *args, fields=("temperature", "pressure1", "energy", "fov"), **kwargs
+):
+    stack = stackify(stack)
+    return uspy.plotting.make_video(stack, fields=fields, *args, **kwargs)
+
+
 def plot_aligns(stack, xaxis=None):
     stack = stackify(stack)
     if xaxis is None:

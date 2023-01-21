@@ -145,11 +145,11 @@ class LEEMImg(Image):
 
         if inplace:
             self.image = result.image
-            self.mcp = mcp
+            self.mcp = mcp.source
             self.dark_counts = dark_counts
             return self
 
-        result.mcp = mcp
+        result.mcp = mcp.source
         result.dark_counts = dark_counts
         return result
 

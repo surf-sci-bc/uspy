@@ -116,7 +116,7 @@ def plot_img(
         data = mask.apply(img, return_array=True)
 
     if log:
-        data = np.ma.log(data)
+        data = np.ma.log(data, where=(data > 0))
 
     if contrast is None or contrast in ("auto", "maximum"):
         contrast = data.min(), data.max()
@@ -607,11 +607,14 @@ def waterfall(stack, profile, yaxis="rel_time", cmap="inferno", ax=None, **kwarg
 
     wf = do.Waterfall(stack, profile, yaxis)
 
+    extent = kwargs.pop("extent", [0, wf.width, wf.y[-1], wf.y[0]])
+    aspect = kwargs.pop("aspect", "auto")
+
     ax.imshow(
         wf.image,
-        extent=[0, wf.width, wf.y[-1], wf.y[0]],
+        extent=extent,
         cmap=cmap,
-        aspect="auto",
+        aspect=aspect,
     )
     ax.set_ylabel(f"{yaxis} in {wf.stack[0]._units[yaxis]}")
     ax.set_xlabel("Pixel")

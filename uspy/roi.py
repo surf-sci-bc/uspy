@@ -85,11 +85,11 @@ class ROI(StyledObject):
             self._apply_params(shape=source, **self.params)
         elif isinstance(source, Iterable):
             # pass  # polygon
-            self.array = np.array(source)
+            self.array = np.array(source, dtype=bool)
         assert self.array.ndim == 2
 
         super().__init__(style=style, color=color)
-        self._mask_buffer = np.array([[]])
+        self._mask_buffer = np.array([[]], dtype=bool)
         self._center_buffer = True
 
     def _apply_params(self, shape: Optional[str] = "circle", **kwargs):
@@ -145,8 +145,8 @@ class ROI(StyledObject):
         else:
             raise ValueError(f"Unknown shape {shape}")
 
-        self.array = array
-        return array
+        self.array = array.astype(bool)
+        return array.astype(bool)
 
     @classmethod
     def point(cls, x0: int, y0: int, **kwargs) -> ROI:
