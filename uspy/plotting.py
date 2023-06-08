@@ -180,6 +180,7 @@ def make_video(
     fps=24,
     overwrite=True,
     scale=0.5,
+    mask=None,
     **kwargs,
 ):
     """
@@ -232,6 +233,7 @@ def make_video(
         return Video(ofile)
     # make input sane
     stack = stackify(stack, virtual=True)
+    stack = stack.copy()
     if "increment" in kwargs:
         skip = kwargs.pop("increment")
     if skip:
@@ -239,15 +241,25 @@ def make_video(
     if isinstance(fields, str):
         fields = [fields]
 
+    ## Apply mask if applicable
+
+    if mask is not None:
+        for index, img in enumerate(stack):
+            stack[index] = mask.apply(img)
+
     # find the contrast values
     if contrast in ("auto", "inner"):
         contrast_type = contrast
         print("WARNING: The video is on auto contrast.")
     elif contrast == "maximum":
-        c0, c1 = 2e16, 0
-        for img in stack:
-            c0 = min(c0, np.nanmin(img.image))
-            c1 = max(c1, np.nanmax(img.image))
+        # c0, c1 = 2e16, 0
+        # for img in stack:
+        #    c0 = min(c0, np.nanmin(img.image))
+        #    c1 = max(c1, np.nanmax(img.image))
+        # contrast = sorted((c0, c1))
+
+        c0 = np.ma.min(stack.image)
+        c1 = np.ma.max(stack.image)
         contrast = sorted((c0, c1))
         print(f"Set contrast to {contrast}")
         contrast_type = "static"
@@ -290,10 +302,21 @@ def make_video(
             field_color = "black"
     color = tuple(int(rgb * 255) for rgb in matplotlib.colors.to_rgb(field_color))
 
+    ## Create Mask if neccesary
+
     for img in stack:
-        if mcp is not None:
-            img = normalize_image(img, mcp=mcp, dark_counts=dark_counts)
+        # if mcp is not None:
+        #    img = normalize_image(img, mcp=mcp, dark_counts=dark_counts)
         data = np.nan_to_num(img.image)
+
+        try:
+            mask_array = np.array(img.image.mask, dtype=np.uint8)
+            # print(mask_array)
+        except AttributeError:
+            mask_array = None
+
+        # data = np.ma.array(data, mask=~mask_array)
+
         if log:
             data = np.nan_to_num(np.log(data))
         # set contrast
@@ -302,13 +325,17 @@ def make_video(
             contrast = inner.min(), inner.max()
         if contrast_type == "auto":
             contrast = data.min(), data.max()
+
         data = cv.normalize(
             np.clip(data, contrast[0], contrast[1]),
-            np.ones_like(data, dtype=np.uint8),
+            None,
             0,
             255,
             norm_type=cv.NORM_MINMAX,
+            # mask=mask_array,
         )
+
+        # data[~mask_array] = 255
 
         if invert:
             data = -data + data.max()
@@ -448,6 +475,7 @@ def print_meta(
 def plot_line(
     line: Union[do.Line, Sequence[do.Line]],
     ax: Union[mpl.axes.Axes, None] = None,
+    export_to=False,
     **kwargs,
 ) -> mpl.axes.Axes:
     """Plot a Line Dataobject
@@ -466,9 +494,34 @@ def plot_line(
 
     line = line if isinstance(line, Sequence) else [line]
 
+    if "label" in kwargs:
+        for li in line:
+            li.label = kwargs.pop("label")
+    if "color" in kwargs:
+        for li in line:
+            li.color = kwargs.pop("color")
+
     ax = _get_ax(ax, xlabel=line[0].xdim, ylabel=line[0].ydim)
-    for line in line:
-        ax.plot(line.x, line.y, color=line.color, **kwargs)
+    for li in line:
+        ax.plot(
+            li.x,
+            li.y,
+            color=li.color,
+            label="_"
+            if li.label is None
+            else li.label,  # underscore is ignoired by ax.legend
+            **kwargs,
+        )
+        if export_to:
+            if li.label is None or "_" in li.label[0]:
+                print("Line without label will not be exported.")
+            elif li.label:
+                li.save(f"{export_to}_{li.label}.csv")
+
+    for li in ax.lines:  # Check if a label is set, then generate legend
+        if "_" not in li.get_label()[0]:
+            ax.legend()
+            break
 
     return ax
 
@@ -505,13 +558,16 @@ def plot_intensity(
     if isinstance(stack, Sequence):
         line = do.StitchedLine(stack, roi, xaxis)
         line.color = roi[0].color
+        line.label = roi[0].label
     elif isinstance(roi, Sequence):
         line = [do.IntensityLine(stack, roi, xaxis) for roi in roi]
         for li, ro in zip(line, roi):
             li.color = ro.color
+            li.label = ro.label
     else:
         line = do.IntensityLine(stack, roi, xaxis)
         line.color = roi.color
+        line.label = roi.label
 
     ax = plot_line(line, ax, **kwargs)
     if return_line:

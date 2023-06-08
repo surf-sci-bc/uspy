@@ -75,11 +75,13 @@ class ROI(StyledObject):
         source: Union[np.ndarray, str, Iterable],
         style: dict[str, Any] = None,
         color: Optional[str] = None,
+        label: Optional[str] = None,
         **kwargs,
     ) -> None:
         self.position = np.array([x0, y0])
         self._ref_point = np.array([0, 0])
         self.params = kwargs
+        self.label = label
 
         if isinstance(source, str):
             self._apply_params(shape=source, **self.params)
@@ -208,7 +210,7 @@ class ROI(StyledObject):
         # put results in the buffer variables
         self._mask_buffer = result
 
-        return result
+        return result.astype(bool)
 
     @property
     def area(self) -> int:

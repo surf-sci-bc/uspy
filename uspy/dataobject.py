@@ -970,6 +970,7 @@ class Line(DataObject):
         "ydim": "y",
         "xdim": "x",
         "color": "k",
+        "label": None,
     }
     _unit_defaults = {"x": "a.u.", "y": "a.u."}
 
@@ -1153,6 +1154,8 @@ class Line(DataObject):
         line = self.copy()
         # pylint: disable=attribute-defined-outside-init
         line.x, line.y = self.x, np.convolve(self.y, kernel, mode="same")
+        line.y[0], line.y[-1] = self.y[0], self.y[-1]
+
         return line
 
     def save(self, fname: str) -> Line:
@@ -1324,6 +1327,7 @@ class IntensityLine(Line):
             "xdim": xaxis,
             "ydim": "intensity",
             "x_unit": stack[0].unit[xaxis],
+            "label": roi_.label,
         }
 
 
