@@ -24,6 +24,7 @@ import uspy.dataobject as do
 import uspy.roi as rois
 from uspy.leem.utility import stackify, imgify
 from uspy.leem.driftnorm import normalize_image
+from scipy.interpolate import RegularGridInterpolator
 
 
 def plot_img(
@@ -243,9 +244,19 @@ def make_video(
 
     ## Apply mask if applicable
 
-    if mask is not None:
-        for index, img in enumerate(stack):
-            stack[index] = mask.apply(img)
+    # if mask is not None:
+    #    for index, img in enumerate(stack):
+    #        stack[index] = mask.apply(img)
+
+    if mask:
+        mask_array = mask.pad_to(stack[0].height, stack[0].width)
+    else:
+        mask_array = np.ones_like(stack[0].image, dtype=bool)
+
+    ## apply mask to stack so the contrast is correctly extracted
+
+    for index, img in enumerate(stack):
+        stack[index].image = np.ma.array(img.image, mask=~mask_array)
 
     # find the contrast values
     if contrast in ("auto", "inner"):
@@ -264,8 +275,8 @@ def make_video(
         print(f"Set contrast to {contrast}")
         contrast_type = "static"
     elif isinstance(contrast, int):
-        c0 = np.nanmin(stack[contrast].image)
-        c1 = np.nanmax(stack[contrast].image)
+        c0 = np.ma.nanmin(stack[contrast].image)
+        c1 = np.ma.nanmax(stack[contrast].image)
         contrast = sorted((c0, c1))
         print(f"Set contrast to {contrast}")
         contrast_type = "static"
@@ -309,11 +320,17 @@ def make_video(
         #    img = normalize_image(img, mcp=mcp, dark_counts=dark_counts)
         data = np.nan_to_num(img.image)
 
-        try:
-            mask_array = np.array(img.image.mask, dtype=np.uint8)
-            # print(mask_array)
-        except AttributeError:
-            mask_array = None
+        # try:
+        # mask_array = np.array(img.image.mask, dtype=np.uint8)
+        # mask_array = np.ma.getmaskarray(img.image).astype(np.uint8)
+        # print(mask_array)
+        # except AttributeError:
+        #    mask_array = None
+
+        # print(mask_array.shape)
+        # plt.imshow(mask_array)
+        # plt.show()
+        # print(data.shape)
 
         # data = np.ma.array(data, mask=~mask_array)
 
@@ -322,9 +339,9 @@ def make_video(
         # set contrast
         if contrast_type == "inner":
             inner = data[dy:-dy, dx:-dx]
-            contrast = inner.min(), inner.max()
+            contrast = np.ma.min(data), np.ma.max(data)
         if contrast_type == "auto":
-            contrast = data.min(), data.max()
+            contrast = np.ma.min(data), np.ma.max(data)
 
         data = cv.normalize(
             np.clip(data, contrast[0], contrast[1]),
@@ -332,10 +349,10 @@ def make_video(
             0,
             255,
             norm_type=cv.NORM_MINMAX,
-            # mask=mask_array,
+            mask=mask_array.astype(np.uint8),
         )
 
-        # data[~mask_array] = 255
+        data[~mask_array] = 255  # make outside of mask white
 
         if invert:
             data = -data + data.max()
@@ -405,15 +422,16 @@ def plot_mov(stack, skip=None, ncols=4, virtual=True, dpi=100, **kwargs):
     return axes.flatten()
 
 
-def plot_meta(stack, fields="temperature"):
+def plot_meta(stack, fields="temperature", axes=None):
     """Plots some metadata of the stack over time. Returns an array of the
     axes objects."""
     stack = stackify(stack)
     if isinstance(fields, str):
         fields = [fields]
+    if axes is None:
+        fig, axes = plt.subplots(len(fields), figsize=(6, len(fields) * 3))
+        fig.subplots_adjust(hspace=0.3)
 
-    fig, axes = plt.subplots(len(fields), figsize=(6, len(fields) * 3))
-    fig.subplots_adjust(hspace=0.3)
     # Reshape in case the supplot has only one plot, so it stays iterable
     axes = np.array(axes).reshape(-1)
 
@@ -516,7 +534,7 @@ def plot_line(
             if li.label is None or "_" in li.label[0]:
                 print("Line without label will not be exported.")
             elif li.label:
-                li.save(f"{export_to}_{li.label}.csv")
+                li.save(f"{export_to}".replace("$", li.label))
 
     for li in ax.lines:  # Check if a label is set, then generate legend
         if "_" not in li.get_label()[0]:
@@ -634,7 +652,18 @@ def plot_intensity_img(
     return ax1, ax2
 
 
-def waterfall(stack, profile, yaxis="rel_time", cmap="inferno", ax=None, **kwargs):
+def waterfall(
+    stack,
+    profile,
+    yaxis="rel_time",
+    interpolate=False,
+    cmap="inferno",
+    contrast=None,
+    invert=False,
+    ax=None,
+    log=False,
+    **kwargs,
+):
     """_summary_
 
     Parameters
@@ -663,8 +692,39 @@ def waterfall(stack, profile, yaxis="rel_time", cmap="inferno", ax=None, **kwarg
 
     wf = do.Waterfall(stack, profile, yaxis)
 
+    if interpolate:
+        nx, ny = kwargs.pop("npoints", (None, None))
+        if not all((nx, ny)):
+            ValueError(
+                "For interpolation the number of points in the interpolation grid need to be specified npoints=(nx,ny)."
+            )
+
+        XX, YY = np.meshgrid(
+            np.linspace(min(wf.x), max(wf.x), nx), np.linspace(min(wf.y), max(wf.y), ny)
+        )
+        wf.image = RegularGridInterpolator(
+            (wf.x, wf.y), wf.image.T, bounds_error=False, fill_value=None
+        )((XX, YY))
+
     extent = kwargs.pop("extent", [0, wf.width, wf.y[-1], wf.y[0]])
     aspect = kwargs.pop("aspect", "auto")
+
+    if log:
+        wf.image = np.log(wf.image)
+        try:
+            contrast = np.log(contrast)
+        except:
+            pass
+
+    if contrast is None or contrast in ("auto", "maximum"):
+        contrast = wf.image.min(), wf.image.max()
+
+    wf.image = np.clip(wf.image, contrast[0], None) - contrast[0]
+    wf.image = wf.image / (contrast[1] - contrast[0]) * 255
+    wf.image = np.clip(wf.image, 0, 255).astype(np.uint8)
+
+    if invert:
+        wf.image = -wf.image + 255
 
     ax.imshow(
         wf.image,

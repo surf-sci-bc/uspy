@@ -120,44 +120,6 @@ class Loadable:
         #    obj = obj.reconstruct()
         return obj
 
-
-# class ThinObject:
-#     """
-#     Inner class which is a thin version of the full Loadable. Meant for
-#     lightweight data saving.
-#     """
-
-#     def __init__(self, obj: Loadable) -> None:
-#         self._obj = obj
-#         self._type = type(obj)
-
-#     def __getstate__(self) -> dict:
-#         state = self._obj._reduce()
-#         for _, val in state.items():
-#             # Check if something in state can be casted to Thinobject
-#             # if isinstance(val, Loadable):
-#             try:
-#                 val = ThinObject(val)
-#             # Is Loadable but has not _reduce function or is not Loadable
-#             except (NotImplementedError, AttributeError):
-#                 # See if it is a list of something that can be made thin
-#                 try:
-#                     for item in val:
-#                         item = ThinObject(item)
-#                 except (TypeError, AttributeError, NotImplementedError):
-#                     pass  # do val stays val...
-
-#             state["_type"] = self._type
-#             # state.update(self._obj._reduce())
-#             return state
-
-#     def __setstate__(self, state: dict) -> None:
-#         obj = state["_type"]._reconstruct(state)
-#         # cast ThinObject into the Object that it was originally
-#         self.__class__ = obj.__class__
-#         self.__dict__ = obj.__dict__
-
-
 class DataObject(Loadable):
     """
     Base class for data objects like images, lines, points, ...
@@ -835,7 +797,6 @@ class ImageStack(DataObjectStack):
     _type = Image
 
     def _split_source(self, source: Union[str, Iterable]) -> list:
-
         if isinstance(source, list):
             return super()._split_source(source)
 
@@ -1069,7 +1030,6 @@ class Line(DataObject):
         order: Union[str, int] = "cubic",
         **kwargs,
     ) -> Union[np.ndarray, Callable]:
-
         """
         Interpolates the x,y data of the Line with a spline of order 'order'
 
@@ -1175,6 +1135,8 @@ class Line(DataObject):
         """
         if fname.lower().endswith(".csv") or fname.lower().endswith(".txt"):
             self.dataframe.to_csv(fname, index=False, header=True)
+        elif fname.lower().endswith(".tsf"):  # This is for CasaXPS
+            self.dataframe.to_csv(fname, index=False, header=False, sep="\t")
         else:
             super().save(fname)
 
@@ -1501,7 +1463,6 @@ class ProfileLine(Line):
         super().__init__((img, profile))
 
     def parse(self, source: Sequence[Image, roi.Profile]) -> dict[str, Any]:
-
         img, profile = source
 
         y = profile.apply(img)
@@ -1534,6 +1495,7 @@ class Waterfall(Image):
 
         return {
             "image": wf,
+            "x": ProfileLine(stack[0], profile).x,
             "y": yval,
             "stack": stack,
             "profile": profile,
