@@ -107,23 +107,27 @@ class ROI(StyledObject):
             self._ref_point = np.array([0, 0])
             array = np.array([[1]])
             return
+        elif shape != "polygon":
+            if "radius" in kwargs:
+                if "width" in kwargs:
+                    raise ValueError("Both radius and width were given for a shape-ROI")
+                width = kwargs.pop("radius") * 2
+            else:
+                width = kwargs.pop("width")
+            height = kwargs.pop("height", width)
+            max_extent = int(np.sqrt(width**2 + height**2))
+        elif shape == "polygon":
+            corners = kwargs.pop("corners")
+            width = np.max(corners[:, 0]) - np.min(corners[:, 0])
+            height = np.max(corners[:, 1]) - np.min(corners[:, 1])
+            max_extent = max([int(width), int(height)])
 
-        if "radius" in kwargs:
-            if "width" in kwargs:
-                raise ValueError("Both radius and width were given for a shape-ROI")
-            width = kwargs.pop("radius") * 2
-        else:
-            width = kwargs.pop("width")
-        height = kwargs.pop("height", width)
-        rotation = kwargs.pop("rotation", 0)
-
-        max_extent = int(np.sqrt(width**2 + height**2))
         mask = np.zeros((max_extent, max_extent))
-
+        rotation = kwargs.pop("rotation", 0)
         if shape in ("circle", "ellipse"):
             self._ref_point = np.array([width / 2, height / 2])
             array = cv2.ellipse(
-                mask,
+                mask,  # mask,
                 center=tuple(self._ref_point.astype(int)),
                 axes=(width // 2, height // 2),
                 angle=rotation,
@@ -135,7 +139,7 @@ class ROI(StyledObject):
         elif shape in ("square", "rectangle"):
             self._ref_point = np.array([width / 2, height / 2])
             array = cv2.rectangle(
-                mask,
+                mask,  # mask,
                 pt1=tuple(self._ref_point.astype(int)),
                 pt2=(width, height),
                 color=1,
@@ -143,7 +147,12 @@ class ROI(StyledObject):
             )
             array = ndimage.rotate(array, rotation)
         elif shape == "polygon":
-            raise NotImplementedError
+            # self._ref_point = self.position
+            array = cv2.fillPoly(
+                mask, pts=[corners.astype(np.int32)], color=(255, 0, 0)
+            )
+
+            # raise NotImplementedError
         else:
             raise ValueError(f"Unknown shape {shape}")
 
@@ -165,6 +174,16 @@ class ROI(StyledObject):
     def ellipse(cls, x0: int, y0: int, **kwargs) -> ROI:
         """Construct a point ROI."""
         return cls(x0, y0, source="ellipse", **kwargs)
+
+    @classmethod
+    def polygon(cls, corners, **kwargs) -> ROI:
+        """Construct a polygon ROI."""
+        corners = np.array(corners)
+        x0 = np.min(corners[:, 0])
+        y0 = np.min(corners[:, 1])
+        corners[:, 0] -= x0
+        corners[:, 1] -= y0
+        return cls(x0, y0, source="polygon", corners=corners, **kwargs)
 
     @classmethod
     def from_array(cls, array: Iterable, x0: int = 0, y0: int = 0, **kwargs) -> ROI:
@@ -240,8 +259,8 @@ class ROI(StyledObject):
         array = self.pad_to(img_width, img_height)
         ax.imshow(array, cmap=self.cmap, alpha=self.style.get("alpha", 0.5))
 
-    # def __add__(self, other: ROI) -> ROI:
-    #     return ROI.from_array(self.mask.array + other.mask.array)
+    def __add__(self, other: ROI) -> ROI:
+        return ROI.from_array(self.array + other.array)
 
 
 class Profile(StyledObject):
@@ -255,14 +274,12 @@ class Profile(StyledObject):
         color: Optional[str] = None,
         **kwargs,
     ) -> None:
-
         self.points = points
         self.width = width
 
         super().__init__(style=style, color=color)
 
     def apply(self, obj: do.DataObject):
-
         ret_val = np.array([])
         for src, dst in zip(self.points, self.points[1:]):
             ret_val = np.append(
