@@ -1,4 +1,5 @@
 """Setup script."""
+
 # pylint: disable=invalid-name
 
 from setuptools import setup, find_packages
@@ -9,7 +10,7 @@ setup(
     use_scm_version={
         "root": ".",
         "relative_to": __file__,
-        "fallback_version": "NOT-INSTALLED-VERSION",
+        "fallback_version": "0.0.0",
     },
     author="Simon Fischer, Lars Buß, Jon-Olaf Krisponeit",
     description="LEEM data analysis (and more...?)",
@@ -32,8 +33,10 @@ setup(
         "symmetrize",
         "imageio",
         "tifffile",
-        "pyclustering",
+        # "pyclustering", This is broken
+        "pyclustering @ git+https://github.com/KulikDM/pyclustering.git@Warning-Fix",  # This should fix it
         "natsort",
+        "numba",
         "nltk",
         "opencv-python-headless",
         "kneed",

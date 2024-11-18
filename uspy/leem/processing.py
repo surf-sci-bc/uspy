@@ -17,9 +17,13 @@ import scipy.constants as sc
 import scipy.signal
 import scipy.ndimage
 import skimage.measure
+from uspy import roi as rois
 from uspy.dataobject import DataObject, IntensityLine
 from uspy.leem.base import LEEMStack, LEEMImg
 from symmetrize import pointops as po, tps, sym
+from scipy.optimize import curve_fit
+from numba import jit
+import numba
 
 
 # import uspy.leem.driftnorm as driftnorm
@@ -62,7 +66,6 @@ def fit_2d_gaussian(img, roi):
 
 
 def correct_img_distortion(stack, pks: list, symmetry="hexagonal", rot=None):
-
     """
     Image distortion corrections using thin plate splines.
 
@@ -145,6 +148,149 @@ def calc_correlation(stack, line):
     for ii in range(stack[0].height):
         for jj in range(stack[0].width):
             corr[ii, jj] = scipy.spatial.distance.correlation(data[:, ii, jj], line.y)
+    return corr
+
+
+def _fit_plane(x_points, y_points, z_points):
+    """Fits a plane to a set of points.
+    The plane is represented by the coefficients a, b, and c of the equation
+    z = ax + by + c.
+    Args:
+      x_points: A numpy array of shape (n,) containing the x coordinates of the points.
+      y_points: A numpy array of shape (n,) containing the y coordinates of the points.
+      z_points: A numpy array of shape (n,) containing the z coordinates of the points.
+    Returns:
+      A tuple containing the coefficients a, b, and c of the plane.
+    """
+    # Create a numpy array with the points.
+    points = np.array([x_points, y_points, z_points]).T
+    # Compute the normal vector to the plane.
+    normal_vector = np.cross(points[1] - points[0], points[2] - points[0])
+    # Compute the constant term of the plane.
+    constant_term = -np.dot(normal_vector, points[0])
+    return normal_vector, constant_term
+
+
+def _1gaussian(x, amp1, cen1, sigma1, a, b):
+    return (
+        amp1
+        * (1 / (sigma1 * (np.sqrt(2 * np.pi))))
+        * (np.exp((-1.0 / 2.0) * (((x - cen1) / sigma1) ** 2)))
+        + a
+        + b * x
+    )
+
+
+def xps_correct(stack, roi, radius=5, p0=None, plot=True):
+    # Fits gauss peaks to points in stack
+
+    if plot:
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
+
+    if type(roi[0]) is np.array:  # if roi is list of points
+        try:
+            roi = [rois.ROI.circle(*r, radius=5) for r in roi]
+        except:
+            print("roi must either be a list of rois or a list of coordinates")
+
+    # Extract curves
+
+    signal = np.array(
+        [
+            IntensityLine(
+                stack,
+                r,
+                xaxis="binding_energy",
+            ).y
+            for r in roi
+        ]
+    )
+
+    # Calculate shifts by fitting a gaussian to the peaks
+
+    energies = stack.binding_energy
+
+    shifts = []
+    for line in signal:
+        if not p0:
+            p1 = [
+                np.max(line) - np.min(line),
+                energies[np.argmax(line)],
+                1,
+                np.min(line),
+                0,
+            ]
+        else:
+            p1 = p0
+
+        popt, _ = curve_fit(_1gaussian, energies, line, p0=p1)
+        # print(popt)
+        shifts.append(popt[1])
+        if plot:
+            color = next(ax1._get_lines.prop_cycler)["color"]
+            ax1.plot(energies, line, "+", color=color)
+            ax1.plot(
+                np.linspace(energies[0], energies[-1], 100),
+                _1gaussian(np.linspace(energies[0], energies[-1], 100), *popt),
+                color=color,
+            )
+            ax1.set_title("Peaks + Gaussian Fit")
+    shifts = np.array(shifts)
+    shifts -= shifts.mean()
+    # print(shifts)
+
+    points = np.array([r.position for r in roi])
+
+    # Fit plane to shifts
+    normal_vector, constant_term = _fit_plane(points[:, 0], points[:, 1], shifts)
+
+    xx, yy = np.mgrid[0 : stack[0].width, 0 : stack[0].height]
+    zz = (
+        -(normal_vector[0] * yy + normal_vector[1] * xx + constant_term)
+        / normal_vector[2]
+    )
+
+    if plot:
+        min, max = np.min(shifts), np.max(shifts)
+        ax2.set_aspect("equal")
+        p = ax2.pcolormesh(zz, vmin=min, vmax=max)
+        ax2.contour(zz, 30, colors=["k"], vmin=min, vmax=max)
+        fig.colorbar(p)
+        ax2.scatter(*points.T, c=shifts, s=100, ec="k", vmin=min, vmax=max)
+        ax2.invert_yaxis()
+        ax2.set_title("Energy Correction Plane Fit")
+        plt.plot()
+
+    return -zz
+
+
+@jit(nopython=True, parallel=True)
+# shift pixel columns pixelwise in z direction
+def _shift_z_cols(stack, z_corr):
+    ret_val = np.zeros_like(stack)
+
+    for xx in numba.prange(stack.shape[1]):
+        for yy in numba.prange(stack.shape[2]):
+            shift = int(np.floor(z_corr[xx, yy]))  # integer shift
+            for zz in numba.prange(stack.shape[0] - 1):  # iterate over each column
+                if (
+                    zz + shift > stack.shape[0] - 1 or zz + shift < 0
+                ):  # if pixels are shifted out of range skip them
+                    continue
+                diff = z_corr[xx, yy] - shift  # fractional shift
+                ret_val[zz + shift, xx, yy] = (diff) * stack[zz, xx, yy] + (
+                    1 - diff
+                ) * stack[
+                    zz + 1, xx, yy
+                ]  # caluclate shifted pixel by weighting
+    return ret_val
+
+
+def correct_energies(stack, z_corr):
+    corr = stack.copy()
+    dE = stack[0].energy - stack[1].energy
+    z_corr = z_corr / dE
+    corr.image = _shift_z_cols(corr.image, z_corr)
     return corr
 
 
