@@ -1,4 +1,5 @@
 """Some functions for processing LEEM images and stacks."""
+
 # pylint: disable=missing-docstring
 # pylint: disable=invalid-name
 
@@ -227,12 +228,14 @@ def xps_correct(stack, roi, radius=5, p0=None, plot=True):
         # print(popt)
         shifts.append(popt[1])
         if plot:
-            color = next(ax1._get_lines.prop_cycler)["color"]
-            ax1.plot(energies, line, "+", color=color)
+            # color = next(ax1._get_lines.prop_cycler)["color"] # prop_cycler was removed
+            ax1.plot(energies, line, "+")
             ax1.plot(
                 np.linspace(energies[0], energies[-1], 100),
                 _1gaussian(np.linspace(energies[0], energies[-1], 100), *popt),
-                color=color,
+                color=ax1.get_lines()[
+                    -1
+                ].get_color(),  # Make sure fit and data have the same color
             )
             ax1.set_title("Peaks + Gaussian Fit")
     shifts = np.array(shifts)
