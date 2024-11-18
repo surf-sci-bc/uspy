@@ -89,6 +89,8 @@ class LEEMImg(Image):
                 fmt = ".0f"
             elif field == "energy":
                 fmt = ".3g"
+            elif field == "rel_time":
+                fmt = ".0f"
         return super().get_field_string(field, fmt)
 
     def warp(self, warp_matrix=None, inplace: bool = False):
