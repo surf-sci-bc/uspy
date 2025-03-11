@@ -1,4 +1,5 @@
 """Plotting helper functions."""
+
 # pylint: disable=too-many-arguments
 # pylint: disable=invalid-name
 
@@ -181,6 +182,7 @@ def make_video(
     fps=24,
     overwrite=True,
     scale=0.5,
+    crf: int = 23,
     mask=None,
     **kwargs,
 ):
@@ -298,6 +300,8 @@ def make_video(
         "-vcodec": "libx264",
         "-pix_fmt": "yuv420p",
         "-profile:v": "high",
+        "-level": "4.2",
+        "-crf": str(crf),
     }
     writer = skvideo.io.FFmpegWriter(
         ofile, inputdict=ffmpeg_indict, outputdict=ffmpeg_outdict  # , verbosity=1
@@ -525,9 +529,9 @@ def plot_line(
             li.x,
             li.y,
             color=li.color,
-            label="_"
-            if li.label is None
-            else li.label,  # underscore is ignoired by ax.legend
+            label=(
+                "_" if li.label is None else li.label
+            ),  # underscore is ignoired by ax.legend
             **kwargs,
         )
         if export_to:
