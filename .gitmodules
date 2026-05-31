@@ -1,4 +1,4 @@
 
 [submodule "testdata"]
 	path = testdata
-	url = https://github.com/surf-sci-bc/agfalta_tools_testdata.git
+	url = git@github.com:surf-sci-bc/agfalta_tools_testdata.git
