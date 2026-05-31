@@ -91,7 +91,7 @@ class ROI(StyledObject):
         assert self.array.ndim == 2
 
         super().__init__(style=style, color=color)
-        self._mask_buffer = np.array([[]], dtype=bool)
+        self._mask_buffer = np.zeros((0, 0), dtype=bool)
         self._center_buffer = True
 
     def _apply_params(self, shape: Optional[str] = "circle", **kwargs):
@@ -159,6 +159,17 @@ class ROI(StyledObject):
         self.array = array.astype(bool)
         return array.astype(bool)
 
+    @property
+    def array(self) -> np.ndarray:
+        n = self._array_shape[0] * self._array_shape[1]
+        return np.unpackbits(self._packed_array)[:n].reshape(self._array_shape).astype(bool)
+
+    @array.setter
+    def array(self, value: np.ndarray) -> None:
+        arr = np.asarray(value, dtype=bool)
+        self._array_shape = arr.shape
+        self._packed_array = np.packbits(arr.ravel())
+
     @classmethod
     def point(cls, x0: int, y0: int, **kwargs) -> ROI:
         """Construct a point ROI."""
@@ -214,7 +225,7 @@ class ROI(StyledObject):
         low_corner = self.origin[::-1].astype(int)
         high_corner = pad_size - mask_size - low_corner
 
-        result = np.zeros(pad_size)
+        result = np.zeros(pad_size, dtype=bool)
         # crop the mask, if need be (i.e., if corners have negative components):
         crop_low = np.clip(-low_corner, 0, None)
         crop_high = mask_size - np.clip(-high_corner, 0, None)
@@ -229,7 +240,7 @@ class ROI(StyledObject):
         # put results in the buffer variables
         self._mask_buffer = result
 
-        return result.astype(bool)
+        return result
 
     @property
     def area(self) -> int:
