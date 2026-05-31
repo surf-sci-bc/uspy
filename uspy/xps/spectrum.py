@@ -12,7 +12,7 @@ from lmfit import Parameters, report_fit
 from lmfit.models import ConstantModel  # , PseudoVoigtModel
 import lmfit.models as lmmodels
 
-from uspy.xps import processing, models
+from uspy.xps import processing, models, io
 from uspy.dataobject import Line
 
 
@@ -87,8 +87,21 @@ class XPSSpectrum(Line):
                 "x": source.x,
                 "y": source.y,
             }
+        elif isinstance(source, str):
+            self._source = source
+            specdict = io.parse_spectrum_file(source)[0]
+            energy = specdict.pop("energy")
+            intensity = specdict.pop("intensity")
+            energy, intensity = processing.make_increasing(energy, intensity)
+            result = {"x": energy, "y": intensity}
+            if specdict.pop("energy_scale", None) == "binding":
+                result["raw_is_binding"] = True
+            for k, v in specdict.items():
+                if k in self._meta_defaults:
+                    result[k] = v
+            return result
         else:
-            super().parse(source)
+            return super().parse(source)
 
     # def parse_txt(self, idx):
     #     try:
@@ -264,6 +277,8 @@ class ModeledSpectrum(XPSSpectrum):
     @property
     def fit_intensity(self):
         """Returns fit result on whole energy range."""
+        if not self._peaks:
+            return np.zeros_like(self.energy)
         with processing.IgnoreUnderflow():
             fit = self.model.eval(params=self.params, x=self.energy)
         try:
@@ -354,7 +369,9 @@ class ModeledSpectrum(XPSSpectrum):
     #     self._peaks.append(peak)
     #     return peak
 
-    def add_peak(self, peak):
+    def add_peak(self, peak, **kwargs):
+        if isinstance(peak, str):
+            peak = Peak(peak, **kwargs)
         if peak.name in [p.name for p in self._peaks]:
             print(f"Updating Peak {peak.name}")
             self.remove_peak(next(filter(lambda x: x.name == peak.name, self._peaks)))
@@ -466,6 +483,11 @@ class Peak:
 
     _default_aliases = {
         "alpha": None,
+    }
+    _param_aliases = {
+        "area": "amplitude",
+        "fwhm": "fwhm",
+        "position": "center",
     }
     _defaults = {
         "alpha": 0.5,
@@ -582,7 +604,10 @@ class Peak:
             self.params = self._model.guess(min=0, **kwargs)
         else:
             for k, v in kwargs.items():
-                self.get_param(k).set(value=v, min=0, vary=True)
+                real_key = self._param_aliases.get(k, k)
+                param_name = f"{self._name}_{real_key}"
+                if param_name in self.params:
+                    self.params[param_name].set(value=v, min=0, vary=True)
 
         # self.params += self._model.make_params()
         # self.get_param("fwhm").set(value=fwhm, min=0, vary=True)

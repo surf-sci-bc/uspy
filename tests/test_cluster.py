@@ -26,8 +26,8 @@ def main():
         # raise FileNotFoundError
         stack = base.LEEMStack(TESTDATA_DIR + "pendried_stack.lstk")
         loaded = True
-    except FileNotFoundError:
-        stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_RuO2_normed_aligned_80-130.tif")
+    except (FileNotFoundError, ValueError):
+        stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_RuO2_normed_aligned_80-140.tif")
         stack.energy = np.linspace(3.0, 50.0, len(stack))
         stack = stack[10:]
 
@@ -75,26 +75,18 @@ def main():
 
 @pytest.fixture
 def pendry_stack():
-    loaded = False
-    try:
-        stack = base.LEEMStack(TESTDATA_DIR + "pendried_stack.lstk")
-        loaded = True
-    except FileNotFoundError:
-        stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_RuO2_normed_aligned_80-130.tif")
-        stack.energy = np.linspace(3.0, 50.0, len(stack))
+    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_RuO2_normed_aligned_80-140.tif")
+    stack.energy = np.linspace(3.0, 50.0, len(stack))
 
     X, _, _ = cluster.stack2vectors(stack, mask_outer=0.2) # cut away 20% on every side
 
-    if loaded:
-        X = stack.pendry
-    else:
-        # cut out a few bad frames
-        X = np.delete(X, list((range(10))) + [160], axis=1)
-        energy = np.delete(stack.energy, list((range(10))) + [160])
+    # cut out a few bad frames (filter to valid indices)
+    del_idx = [i for i in list(range(10)) + [160] if i < X.shape[1]]
+    X = np.delete(X, del_idx, axis=1)
+    energy = np.delete(stack.energy, del_idx)
 
-        X = cluster.pendryfy(X, energy)
-        stack.pendry = X
-        stack.save(TESTDATA_DIR + "pendried_stack.lstk")
+    X = cluster.pendryfy(X, energy)
+    stack.pendry = X
     return stack
 
 

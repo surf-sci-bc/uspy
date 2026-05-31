@@ -167,7 +167,7 @@ def test_img_setattr(img):
 def test_stack_getattr(stack):
     assert stack.energy.shape == (len(stack),)
     test_idx = len(stack) // 2
-    assert stack.timestamp[test_idx] == stack[test_idx].timestamp
+    assert same_or_nan(stack.timestamp[test_idx], stack[test_idx].timestamp)
     assert same_or_nan(stack.energy[test_idx], stack[test_idx].energy)
     assert same_or_nan(stack.rel_time[test_idx], stack[test_idx].rel_time)
 
