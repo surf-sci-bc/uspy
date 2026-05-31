@@ -43,6 +43,7 @@ setup(
         "lmfit",
         "ipython",
         "netCDF4",
+        "xarray",
         "json_tricks",
         "setuptools_scm",  # see uspy/version.py
     ],

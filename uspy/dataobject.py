@@ -4,7 +4,7 @@ Basic data containers.
 # pylint: disable=abstract-method
 from __future__ import annotations
 from typing import Any, Callable, Sequence, Union, Optional
-from collections.abc import Iterable
+from collections.abc import Iterable, MutableMapping
 from numbers import Number
 from pathlib import Path
 import bz2
@@ -22,8 +22,35 @@ import json_tricks
 import tifffile
 from tifffile.tifffile import TiffFileError
 import cv2 as cv
+import xarray as xr
 
 import uspy.roi as roi
+
+
+class _MetaView(MutableMapping):
+    """Live proxy over xr.Dataset.attrs that hides ``_unit``-suffixed keys."""
+
+    __slots__ = ("_attrs",)
+
+    def __init__(self, attrs: dict) -> None:
+        object.__setattr__(self, "_attrs", attrs)
+
+    def __getitem__(self, key: str):
+        if key.endswith("_unit"):
+            raise KeyError(key)
+        return self._attrs[key]
+
+    def __setitem__(self, key: str, value) -> None:
+        self._attrs[key] = value
+
+    def __delitem__(self, key: str) -> None:
+        del self._attrs[key]
+
+    def __iter__(self):
+        return (k for k in self._attrs if not k.endswith("_unit"))
+
+    def __len__(self) -> int:
+        return sum(1 for k in self._attrs if not k.endswith("_unit"))
 
 
 class Loadable:
@@ -107,8 +134,8 @@ class Loadable:
 
         if fname.endswith(cls._pickle_extension + ".bz2"):
             print("Uncompressing data...")
-            file = bz2.BZ2File(fname, "rb")
-            obj = pickle.load(file)
+            with bz2.BZ2File(fname, "rb") as file:
+                obj = pickle.load(file)
             print("Done.")
         elif fname.endswith(cls._pickle_extension):
             with Path(fname).open("rb") as pfile:
@@ -131,16 +158,19 @@ class DataObject(Loadable):
     """
 
     _data_keys = ()
+    _coord_keys = ()   # parse keys that become xarray coordinates
+    _dim_map = {}      # maps data_var name → tuple of dim names
     _unit_defaults = {}
     _meta_defaults = {}
     default_fields = ()
-    _setters = ()  # list of attributes that have setters, so __setattr__ can handle the correct
+    _setters = ()
 
     def __new__(cls, *_args, **_kwargs):
-        obj = super().__new__(cls)  # really not forward args and kwargs?
-        obj._data = {}
-        obj._meta = obj._meta_defaults.copy()
-        obj._units = obj._unit_defaults.copy()
+        obj = super().__new__(cls)
+        obj._dataset = xr.Dataset(attrs={
+            **cls._meta_defaults,
+            **{f"{k}_unit": v for k, v in cls._unit_defaults.items()},
+        })
         obj._source = None
         return obj
 
@@ -150,18 +180,24 @@ class DataObject(Loadable):
         for k in self._data_keys:
             if k not in parsed:
                 raise ValueError(f"Parse function did not give '{k}' data.")
+        # Pass 1: coordinates must exist before data_vars that reference them as dims
         for k, value in parsed.items():
             if k.startswith("_"):
                 continue
+            if k in self._coord_keys:
+                self._dataset = self._dataset.assign_coords({k: np.asarray(value)})
+        # Pass 2: data_vars, unit attrs, meta attrs
+        for k, value in parsed.items():
+            if k.startswith("_") or k in self._coord_keys:
+                continue
             if k in self._data_keys:
-                self._data[k] = value
-            elif "_unit" in k:
-                self._units[k.replace("_unit", "")] = value
+                arr = np.asarray(value)
+                dims = self._dim_map.get(k) or tuple(f"dim_{i}" for i in range(arr.ndim))
+                self._dataset[k] = (dims, arr)
+            elif k.endswith("_unit"):
+                self._dataset.attrs[k] = value
             else:
-                self._meta[k] = value
-        for k in self._meta:
-            if k not in self._unit_defaults:
-                self._unit_defaults[k] = ""
+                self._dataset.attrs[k] = value
 
     def parse(self, source: str) -> dict[str, Any]:
         """Read in data. Should set the _source attribute."""
@@ -178,18 +214,68 @@ class DataObject(Loadable):
 
     @property
     def data(self) -> dict[str, Any]:
-        """Mutable data container dictionary."""
-        return self._data
+        """Snapshot dict of data arrays (0-D arrays unwrapped to Python scalars)."""
+        ds = object.__getattribute__(self, "_dataset")
+        result = {}
+        for k in ds.data_vars:
+            v = ds[k].values
+            result[k] = v.item() if v.ndim == 0 else v
+        return result
+
+    @data.setter
+    def data(self, _value) -> None:
+        pass  # read-only; assignment is a no-op for backward compat
 
     @property
-    def meta(self) -> dict[str, Any]:
-        """Mutable metadata dictionary."""
-        return self._meta
+    def meta(self) -> dict:
+        """Snapshot of metadata (excludes unit entries)."""
+        ds = object.__getattribute__(self, "_dataset")
+        return {k: v for k, v in ds.attrs.items() if not k.endswith("_unit")}
+
+    @meta.setter
+    def meta(self, _value) -> None:
+        pass  # read-only; assignment is a no-op for backward compat
 
     @property
     def unit(self) -> dict[str, str]:
-        """Dictionary with unit strings for meta values."""
-        return self._units
+        """Snapshot dict mapping each key to its unit string."""
+        ds = object.__getattribute__(self, "_dataset")
+        keys = (
+            list(ds.data_vars.keys())
+            + list(ds.coords.keys())
+            + [k for k in ds.attrs if not k.endswith("_unit")]
+        )
+        return {k: ds.attrs.get(f"{k}_unit", "") for k in keys}
+
+    @unit.setter
+    def unit(self, _value) -> None:
+        pass  # read-only; assignment is a no-op for backward compat
+
+    # --- backward-compat shims so old code like ``obj._data = None`` stays a no-op ---
+
+    @property
+    def _data(self):
+        return self.data
+
+    @_data.setter
+    def _data(self, _value) -> None:
+        pass
+
+    @property
+    def _meta(self):
+        return self.meta
+
+    @_meta.setter
+    def _meta(self, _value) -> None:
+        pass
+
+    @property
+    def _units(self):
+        return self.unit
+
+    @_units.setter
+    def _units(self, _value) -> None:
+        pass
 
     def get_field_string(self, field: str, fmt: Optional[str] = None) -> str:
         """Get a string that contains the value and its unit."""
@@ -204,29 +290,50 @@ class DataObject(Loadable):
         return f"{value} {unit}".strip()
 
     def __getattr__(self, attr: str) -> Any:
-        # if attr in ("_meta", "_data"):
-        #    raise AttributeError("Premature access to _meta or _data")
-        if attr in self._data:
-            return self._data[attr]
-        if attr in self._meta:
-            return self._meta[attr]
+        try:
+            ds = object.__getattribute__(self, "_dataset")
+        except AttributeError:
+            raise AttributeError(f"No attribute named {attr}")
+        if attr in ds.data_vars:
+            return ds[attr].values
+        if attr in ds.coords:
+            return ds.coords[attr].values
+        if attr in ds.attrs and not attr.endswith("_unit"):
+            return ds.attrs[attr]
         raise AttributeError(f"No attribute named {attr}")
 
     def __setattr__(self, attr: str, value: Any) -> None:
-        if attr in ("_meta", "_data") and attr in self.__dict__:
-            return
+        # underscore-prefixed: let Python's normal machinery handle it
+        # (properties _data/_meta/_units will intercept via their __set__)
         if attr.startswith("_") or attr in self.__dict__:
             super().__setattr__(attr, value)
-        elif attr in self._data:
-            self._data[attr] = value
+            return
+        # data descriptors (properties) in the MRO take precedence
+        for klass in type(self).__mro__:
+            if attr in klass.__dict__ and hasattr(klass.__dict__[attr], "__set__"):
+                super().__setattr__(attr, value)
+                return
+        # route to xarray dataset
+        try:
+            ds = object.__getattribute__(self, "_dataset")
+        except AttributeError:
+            super().__setattr__(attr, value)
+            return
+        if attr in ds.data_vars:
+            arr = np.asarray(value)
+            self._dataset[attr] = (ds[attr].dims, arr)
+        elif attr in ds.coords:
+            self._dataset = ds.assign_coords({attr: np.asarray(value)})
         else:
-            self._meta[attr] = value
+            ds.attrs[attr] = value
 
     def __eq__(self, other: DataObject):
+        if not isinstance(other, DataObject):
+            return NotImplemented
         try:
             assert not DeepDiff(
-                self.meta,
-                other.meta,
+                dict(self.meta),
+                dict(other.meta),
                 ignore_order=True,
                 number_format_notation="e",
                 significant_digits=5,
@@ -280,7 +387,7 @@ class DataObject(Loadable):
         prettystring += f"Source: {self.source}\n"
         prettystring += "Metadata:\n"
         for k, v in self.meta.items():
-            unit = self.get(f"{k}_unit", "")
+            unit = self.unit.get(k, "")
             prettystring += f"\t{k}:\t{v} (unit: {unit})\n"
         prettystring += "Data:\n"
         for k, v in self.data.items():
@@ -333,11 +440,7 @@ class DataObjectStack(Loadable):
         sources = self._elements
         if not sources:
             raise ValueError("Empty source for DataObjectStack (wrong file path?)")
-        self._elements = [self._single_construct(sources[0])]
-        for source in sources[1:]:
-            element = self._single_construct(source)
-            assert self._elements[0].is_compatible(element)
-            self._elements.append(element)
+        self._elements = [self._single_construct(source) for source in sources]
 
     def _deconstruct(self) -> None:
         """Retain the source objects instead of the direct elements."""
@@ -462,13 +565,13 @@ class DataObjectStack(Loadable):
             return
         if attr.startswith("_") or attr in self.__dict__:
             return super().__setattr__(attr, value)
-        if isinstance(value, Iterable) and len(value) == len(self):
+        if not isinstance(value, str) and isinstance(value, Iterable) and len(value) == len(self):
             if self.virtual:
                 raise ValueError(f"Can't set attribute '{attr}' for virtual stack")
             for obj, single_value in zip(self, value):
                 setattr(obj, attr, single_value)
         else:
-            if isinstance(value, Iterable) and len(value) != len(self):
+            if not isinstance(value, str) and isinstance(value, Iterable) and len(value) != len(self):
                 print(
                     f"Attribute {attr} with length {len(value)} cannot be assigned elementwise to "
                     f"stack with length {len(self)}. It will be assigned to the stack itself."
@@ -555,6 +658,13 @@ class DataObjectStack(Loadable):
     # def _reconstruct(cls, state: dict) -> DataObjectStack:
     #     return cls(state["sources"], state["virtual"])
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, type(self)):
+            return False
+        if len(self) != len(other):
+            return False
+        return all(a == b for a, b in zip(self, other))
+
     def __json_encode__(self) -> dict:
         return {"source": self.elements, "virtual": self.virtual}
 
@@ -569,6 +679,7 @@ class Image(DataObject):
 
     # pylint: disable=no-member
     _data_keys = ("image",)
+    _dim_map = {"image": ("y", "x")}
     _meta_keys = ("width", "height")
     # TODO make a sensible default
     # default_mask = None
@@ -617,11 +728,10 @@ class Image(DataObject):
     def save(self, fname: str, **kwargs) -> None:
         if fname.lower().endswith((".tiff", ".tif")):
             tifffile.imwrite(fname, self.image, **kwargs)
+        elif fname.lower().endswith((".png", ".jpg", ".jpeg", ".bmp")):
+            imageio.imwrite(fname, np.uint16(self.image))
         else:
-            try:
-                imageio.imwrite(fname, np.uint16(self.image))
-            except ValueError:
-                super().save(fname)
+            super().save(fname)
 
     def filter(self, method="gaussian", **kwargs):
         """Apply 2D Filter to image
@@ -711,9 +821,9 @@ class Image(DataObject):
 
     def __iadd__(self, other: Union[Image, Number, np.ndarray]) -> Image:
         if isinstance(other, Image):
-            self.image += other.image
+            self.image = self.image + other.image
         elif isinstance(other, (Number, np.ndarray)):
-            self.image += other
+            self.image = self.image + other
         else:
             raise TypeError(
                 f"Unsupported Operation '+' for types {type(self)} and {type(other)}"
@@ -732,9 +842,9 @@ class Image(DataObject):
 
     def __isub__(self, other: Union[Image, Number, np.ndarray]) -> Image:
         if isinstance(other, Image):
-            self.image -= other.image
+            self.image = self.image - other.image
         elif isinstance(other, (Number, np.ndarray)):
-            self.image -= other
+            self.image = self.image - other
         else:
             raise TypeError(
                 f"Unsupported Operation '-' for types {type(self)} and {type(other)}"
@@ -748,9 +858,9 @@ class Image(DataObject):
 
     def __imul__(self, other: Union[Image, Number, np.ndarray]) -> Image:
         if isinstance(other, Image):
-            self.image *= other.image
+            self.image = self.image * other.image
         elif isinstance(other, (Number, np.ndarray)):
-            self.image *= other
+            self.image = self.image * other
         else:
             raise TypeError(
                 f"Unsupported Operation '*' for types {type(self)} and {type(other)}"
@@ -767,9 +877,9 @@ class Image(DataObject):
 
     def __itruediv__(self, other: Union[Image, Number, np.ndarray]) -> Image:
         if isinstance(other, (Number, np.ndarray)):
-            self.image /= other
+            self.image = self.image / other
         elif isinstance(other, Image):
-            self.image /= other.image
+            self.image = self.image / other.image
         else:
             raise TypeError(
                 f"Unsupported Operation '/' for types {type(self)} and {type(other)}"
@@ -927,6 +1037,8 @@ class Line(DataObject):
 
     # pylint: disable=no-member
     _data_keys = ("x", "y")
+    _coord_keys = ("x",)
+    _dim_map = {"y": ("x",)}
     _meta_defaults = {
         "ydim": "y",
         "xdim": "x",
@@ -939,27 +1051,32 @@ class Line(DataObject):
         super().__init__(source)
 
     def __getattr__(self, attr: str) -> Any:
-        # _data and _meta have to be handled by super() to avoid recursion
-        if attr in ("_data", "_meta"):
-            return super().__getattr__(attr)
-        if attr == self._meta["xdim"]:
-            return self._data["x"]
-        if attr == self._meta["ydim"]:
-            return self._data["y"]
-
+        try:
+            ds = object.__getattribute__(self, "_dataset")
+            xdim = ds.attrs.get("xdim")
+            ydim = ds.attrs.get("ydim")
+        except AttributeError:
+            raise AttributeError(f"No attribute named {attr}")
+        if attr == xdim:
+            return ds.coords["x"].values
+        if attr == ydim:
+            return ds["y"].values
         return super().__getattr__(attr)
 
     def __setattr__(self, attr: str, value: Any) -> None:
-        # _data and _meta have to be handled by super() to avoid recursion
-        if attr in ("_data", "_meta"):
-            return super().__setattr__(attr, value)
-
-        if attr == self._meta["xdim"]:
-            self._data["x"] = value
-        elif attr == self._meta["ydim"]:
-            self._data["y"] = value
+        try:
+            ds = object.__getattribute__(self, "_dataset")
+            xdim = ds.attrs.get("xdim")
+            ydim = ds.attrs.get("ydim")
+        except AttributeError:
+            super().__setattr__(attr, value)
+            return
+        if attr == xdim:
+            self._dataset = ds.assign_coords({"x": np.asarray(value)})
+        elif attr == ydim:
+            self._dataset["y"] = (("x",), np.asarray(value))
         else:
-            return super().__setattr__(attr, value)
+            super().__setattr__(attr, value)
 
     def parse(self, source: Union[str, np.ndarray]) -> dict[str, Any]:
         if isinstance(source, np.ndarray):
@@ -1006,7 +1123,8 @@ class Line(DataObject):
     @property
     def length(self) -> int:
         """Length of the x and y data."""
-        return len(self.x)
+        ds = object.__getattribute__(self, "_dataset")
+        return len(ds.coords["x"])
 
     @property
     def area(self) -> float:
@@ -1016,11 +1134,12 @@ class Line(DataObject):
     @property
     def dataframe(self) -> pd.DataFrame:
         """Pandas Dataframe of the lines x,y data"""
+        u = self.unit
         return pd.DataFrame(
             data=np.stack([self.x, self.y], axis=1),
             columns=[
-                f"{self.xdim} in {self._units['x']}",
-                f"{self.ydim} in {self._units['y']}",
+                f"{self.xdim} in {u.get('x', 'a.u.')}",
+                f"{self.ydim} in {u.get('y', 'a.u.')}",
             ],
         )
 
@@ -1111,11 +1230,11 @@ class Line(DataObject):
         if isinstance(kernel, int):
             kernel = np.ones(kernel) / kernel
 
+        y_new = np.convolve(self.y, kernel, mode="same")
+        y_new[0], y_new[-1] = self.y[0], self.y[-1]
         line = self.copy()
-        # pylint: disable=attribute-defined-outside-init
-        line.x, line.y = self.x, np.convolve(self.y, kernel, mode="same")
-        line.y[0], line.y[-1] = self.y[0], self.y[-1]
-
+        line.x = self.x
+        line.y = y_new
         return line
 
     def save(self, fname: str) -> Line:
@@ -1152,50 +1271,46 @@ class Line(DataObject):
 
     def __iadd__(self, other: Union[Line, Number, np.ndarray]) -> Line:
         if isinstance(other, Line):
-            self.y += other.y
+            self.y = self.y + other.y
         elif isinstance(other, (Number, np.ndarray)):
-            self.y += other
+            self.y = self.y + other
         else:
             raise TypeError(
                 f"Unsupported Operation '+' for types {type(self)} and {type(other)}"
             )
-
         return self
 
     def __isub__(self, other: Union[Line, Number, np.ndarray]) -> Line:
         if isinstance(other, Line):
-            self.y -= other.y
+            self.y = self.y - other.y
         elif isinstance(other, (Number, np.ndarray)):
-            self.y -= other
+            self.y = self.y - other
         else:
             raise TypeError(
                 f"Unsupported Operation '-' for types {type(self)} and {type(other)}"
             )
-
         return self
 
     def __imul__(self, other: Union[Line, Number, np.ndarray]) -> Line:
         if isinstance(other, Line):
-            self.y *= other.y
+            self.y = self.y * other.y
         elif isinstance(other, (Number, np.ndarray)):
-            self.y *= other
+            self.y = self.y * other
         else:
             raise TypeError(
                 f"Unsupported Operation '*' for types {type(self)} and {type(other)}"
             )
-
         return self
 
     def __itruediv__(self, other: Union[Line, Number, np.ndarray]) -> Line:
         if isinstance(other, Line):
-            self.y /= other.y
+            self.y = self.y / other.y
         elif isinstance(other, (Number, np.ndarray)):
-            self.y /= other
+            self.y = self.y / other
         else:
             raise TypeError(
                 f"Unsupported Operation '/' for types {type(self)} and {type(other)}"
             )
-
         return self
 
     def __add__(self, other: Union[Line, Number, np.ndarray]) -> Line:

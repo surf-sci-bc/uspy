@@ -11,7 +11,6 @@ import numpy as np
 
 from uspy.leem.utility import imgify, stackify
 from uspy.utility import progress_bar
-import uspy.leem.processing as processing
 
 
 def normalize(img_or_stack, *args, **kwargs):
@@ -28,17 +27,17 @@ def normalize_image(img, mcp, dark_counts=100):
     mcp = imgify(mcp)
     if not isinstance(dark_counts, (int, float, complex)):
         dark_image = imgify(dark_counts)
-        dark_counts = dark_image.data
+        dark_counts = dark_image.image
 
     img = img.copy()
     try:
-        normed_mcp = np.clip(np.nan_to_num(mcp.data - dark_counts), 1, None)
-        normed = (img.data - dark_counts) / normed_mcp
+        normed_mcp = np.clip(np.nan_to_num(mcp.image - dark_counts), 1, None)
+        normed = (img.image - dark_counts) / normed_mcp
     except ValueError as e:
         raise ValueError(
             "Normalize: Resolution of MCP or dark image does not match."
         ) from e
-    img.data = np.nan_to_num(np.clip(normed, 0, None))
+    img.image = np.nan_to_num(np.clip(normed, 0, None))
     return img
 
 
@@ -85,27 +84,29 @@ def align_stack(*args, **kwargs):
 def apply_alignment_matrices(stack, alignment):
     stack = stack.copy()
     for warp_matrix, img in zip(alignment, stack):
-        img.data = cv.warpPerspective(
-            img.data,
+        img.image = cv.warpPerspective(
+            img.image,
             warp_matrix,
-            img.data.shape[::-1],
+            img.image.shape[::-1],
             flags=cv.INTER_LINEAR + cv.WARP_INVERSE_MAP,
         )
 
     return stack
 
 
-def find_alignment_matrices(stack, algorithm="ecc", roi=None, **kwargs):
-
-    if roi is None or not isinstance(roi, processing.ROI):
-        print("No valid ROI found. Creating default ROI with 15% cutoff on each side")
-        #y0, x0 = np.array(np.shape(stack[0].data), dtype=int) * 0.15
-        height, width = np.array(np.shape(stack[0].data))
-        roi = processing.ROI(width//2, height//2, type_="rectangle", width=width*0.7, height=height*0.7)
+def find_alignment_matrices(stack, algorithm="ecc", roi=None, mask_outer=0.15, **kwargs):
 
     stack = stack.copy()
-    img_height, img_width = np.shape(stack[0].data)
-    mask = np.array(roi.create_mask(img_height, img_width), dtype=np.uint8)
+    img_height, img_width = stack[0].image.shape
+    if roi is None:
+        y0 = int(img_height * mask_outer)
+        y1 = int(img_height * (1 - mask_outer))
+        x0 = int(img_width * mask_outer)
+        x1 = int(img_width * (1 - mask_outer))
+        mask = np.zeros((img_height, img_width), dtype=np.uint8)
+        mask[y0:y1, x0:x1] = 1
+    else:
+        mask = np.array(roi.create_mask(img_height, img_width), dtype=np.uint8)
 
     if algorithm == "ecc":
         return do_ecc_align(stack, mask=mask, **kwargs)
@@ -150,8 +151,8 @@ def do_ecc_align(
                 warp_matrix = np.eye(2, 3, dtype=np.float32)
 
                 _, warp_matrix = cv.findTransformECC(  # template = warp_matrix * input
-                    stack[ii].data,  # ii is template image
-                    stack[jj].data,  # jj is input image
+                    stack[ii].image,  # ii is template image
+                    stack[jj].image,  # jj is input image
                     warp_matrix,
                     warp_mode,
                     criteria,

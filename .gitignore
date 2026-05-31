@@ -9,6 +9,7 @@
 venv
 dist
 dev
+.idea
 .vscode
 agfalta/dev
 tests/htmlcov

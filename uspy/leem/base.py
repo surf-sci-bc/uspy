@@ -77,7 +77,7 @@ class LEEMImg(Image):
             time_origin = TimeOrigin(time_origin)
         super().__init__(*args, **kwargs)
         self._time_origin = time_origin  # is a list so it can be mutable
-        self.default_mask = ROI.circle(
+        self._default_mask = ROI.circle(
             x0=self.width // 2, y0=self.height // 2, radius=self.width // 2
         )
 
@@ -238,7 +238,7 @@ class LEEMImg(Image):
 
     @pressure.setter
     def pressure(self, value: Number) -> None:
-        self._meta["pressure"] = value
+        self._dataset.attrs["pressure"] = value
 
     # @property
     # def resolution(self) -> Number:
@@ -264,6 +264,14 @@ class LEEMImg(Image):
         if np.isnan(self.timestamp):
             return "??-??-?? ??:??:??"
         return datetime.fromtimestamp(self.timestamp).strftime("%Y-%m-%d %H:%M:%S")
+
+    @property
+    def default_mask(self):
+        return self._default_mask
+
+    @default_mask.setter
+    def default_mask(self, value) -> None:
+        self._default_mask = value
 
     @property
     def unwarped(self) -> LEEMImg:

@@ -1,4 +1,5 @@
 .git
+.idea
 README.md
 venv
 agfalta.egg-info
