@@ -1,6 +1,7 @@
 """
 Basic data containers.
 """
+
 # pylint: disable=abstract-method
 from __future__ import annotations
 from typing import Any, Callable, Sequence, Union, Optional
@@ -16,12 +17,14 @@ from deepdiff import DeepDiff
 import numpy as np
 import scipy.interpolate
 import scipy.integrate
+import scipy.optimize
 import pandas as pd
 import imageio
 import json_tricks
 import tifffile
 from tifffile.tifffile import TiffFileError
 import cv2 as cv
+from tqdm import tqdm
 
 import uspy.roi as roi
 
@@ -119,6 +122,7 @@ class Loadable:
         # if isinstance(obj, Loadable.ThinObject):
         #    obj = obj.reconstruct()
         return obj
+
 
 class DataObject(Loadable):
     """
@@ -334,10 +338,13 @@ class DataObjectStack(Loadable):
         if not sources:
             raise ValueError("Empty source for DataObjectStack (wrong file path?)")
         self._elements = [self._single_construct(sources[0])]
-        for source in sources[1:]:
+        for source in tqdm(sources[1:]):
             element = self._single_construct(source)
-            assert self._elements[0].is_compatible(element)
-            self._elements.append(element)
+            try:
+                assert self._elements[0].is_compatible(element)
+                self._elements.append(element)
+            except AssertionError:
+                Warning("A non compatible element was skipped during construction!")
 
     def _deconstruct(self) -> None:
         """Retain the source objects instead of the direct elements."""

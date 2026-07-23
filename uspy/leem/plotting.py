@@ -24,7 +24,7 @@ from uspy.plotting import *
 def plot_img(
     img, *args, fields=("temperature", "pressure1", "energy", "fov"), **kwargs
 ):
-    """See uspy.plotting.plot_img"""
+    """See uspy.plotting"""
     img = imgify(img)
     return uspy.plotting.plot_img(img, fields=fields, *args, **kwargs)
 

@@ -343,7 +343,7 @@ def make_video(
         # set contrast
         if contrast_type == "inner":
             inner = data[dy:-dy, dx:-dx]
-            contrast = np.ma.min(data), np.ma.max(data)
+            contrast = np.ma.min(inner), np.ma.max(inner)
         if contrast_type == "auto":
             contrast = np.ma.min(data), np.ma.max(data)
 

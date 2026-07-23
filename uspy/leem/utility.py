@@ -8,8 +8,12 @@ import sys
 import contextlib
 from datetime import datetime, timedelta
 
+import numpy as np
+import scipy
+
 # from uspy.leem.base import LEEMImg, LEEMStack
 import uspy.leem.base as base
+import uspy.utility
 
 
 def imgify(img):
@@ -62,33 +66,9 @@ def silence():
 def progress_bar(it, suffix="", total=None, size=25, fill="▇", empty="░", silent=False):
     # pylint: disable=too-many-arguments
     print("uspy.leem.utility.progress_bar moved to uspy.utility")
-    if silent:
-        return it
-    start_time = datetime.now()
-    if total is None:
-        total = len(it)
-
-    def display(perc):
-        prog = fill * int(perc * size) + empty * (size - int(perc * size))
-        duration = datetime.now() - start_time
-        statement = (
-            f"\r▕{prog}▏ {100*perc:.1f} % {suffix} ({str(duration).split('.')[0]}"
-        )
-        eta = duration * (1 / max(perc, 1e-5) - 1)
-        if eta > timedelta(days=1):
-            statement += " / ETA: > 1 day"
-        elif eta > timedelta(seconds=3):
-            statement += f" / ETA: {str(eta).split('.')[0]}"
-        statement += ")"
-        return statement
-
-    for i, item in enumerate(it):
-        # avoid spamming output (do it max. 1000 times):
-        if i / total > share + 0.001:
-            share = i / total
-            print("\033[K" + display(i / total), end="\r")
-        yield item
-    print("\033[K" + display(total))
+    yield from uspy.utility.progress_bar(
+        it, suffix=suffix, total=total, size=size, fill=fill, empty=empty, silent=silent
+    )
 
 
 class ProgressBar(object):

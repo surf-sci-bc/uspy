@@ -14,6 +14,13 @@ from uspy.dataobject import Line
 from uspy.dataobject import Image
 
 
+# test_base_old.py tests the legacy uspy.leem.base_old module (pre-dataobject API) and
+# is not maintained. test_driftnorm.py/test_rsm.py target uspy.leem.driftnorm/rsm, whose
+# normalize/align functionality has moved onto LEEMImg/LEEMStack directly (see
+# test_leembase.py); driftnorm.py and rsm.py are legacy and no longer exercised by tests.
+collect_ignore = ["test_base_old.py", "test_driftnorm.py", "test_rsm.py"]
+
+
 ######### Utility
 
 

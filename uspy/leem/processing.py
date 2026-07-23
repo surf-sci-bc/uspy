@@ -143,12 +143,14 @@ def correct_stack_distortion(stack, spline):
     return stack_warped
 
 
-def calc_correlation(stack, line):
+def calc_correlation(stack, line, threshold=None):
     data = stack.image
     corr = np.zeros_like(stack[0].image)
     for ii in range(stack[0].height):
         for jj in range(stack[0].width):
             corr[ii, jj] = scipy.spatial.distance.correlation(data[:, ii, jj], line.y)
+    if threshold:
+        return corr[corr < threshold]
     return corr
 
 
@@ -182,7 +184,20 @@ def _1gaussian(x, amp1, cen1, sigma1, a, b):
     )
 
 
-def xps_correct(stack, roi, radius=5, p0=None, plot=True):
+def _2gaussian(x, amp1, cen1, sigma1, amp2, cen2, sigma2, a, b):
+    return (
+        amp1
+        * (1 / (sigma1 * (np.sqrt(2 * np.pi))))
+        * (np.exp((-1.0 / 2.0) * (((x - cen1) / sigma1) ** 2)))
+        + amp2
+        * (1 / (sigma2 * (np.sqrt(2 * np.pi))))
+        * (np.exp((-1.0 / 2.0) * (((x - cen2) / sigma2) ** 2)))
+        + a
+        + b * x
+    )
+
+
+def xps_correct(stack, roi, radius=5, p0=None, plot=True, duplet=False):
     # Fits gauss peaks to points in stack
 
     if plot:
@@ -214,25 +229,43 @@ def xps_correct(stack, roi, radius=5, p0=None, plot=True):
     shifts = []
     for line in signal:
         if not p0:
-            p1 = [
-                np.max(line) - np.min(line),
-                energies[np.argmax(line)],
-                1,
-                np.min(line),
-                0,
-            ]
+            if not duplet:
+                p1 = [
+                    np.max(line) - np.min(line),
+                    energies[np.argmax(line)],
+                    1,
+                    np.min(line),
+                    0,
+                ]
+            else:
+                p1 = [
+                    np.max(line) - np.min(line),
+                    energies[np.argmax(line)],
+                    1,
+                    np.max(line) - np.min(line),
+                    energies[np.argmax(line)] + 1,
+                    1,
+                    np.min(line),
+                    0,
+                ]
         else:
             p1 = p0
 
-        popt, _ = curve_fit(_1gaussian, energies, line, p0=p1)
+        popt, _ = curve_fit(
+            _1gaussian if not duplet else _2gaussian, energies, line, p0=p1
+        )
         # print(popt)
-        shifts.append(popt[1])
+        shifts.append(popt[1] if not duplet else np.mean([popt[1], popt[4]]))
         if plot:
             # color = next(ax1._get_lines.prop_cycler)["color"] # prop_cycler was removed
             ax1.plot(energies, line, "+")
             ax1.plot(
                 np.linspace(energies[0], energies[-1], 100),
-                _1gaussian(np.linspace(energies[0], energies[-1], 100), *popt),
+                (
+                    _1gaussian(np.linspace(energies[0], energies[-1], 100), *popt)
+                    if not duplet
+                    else _2gaussian(np.linspace(energies[0], energies[-1], 100), *popt)
+                ),
                 color=ax1.get_lines()[
                     -1
                 ].get_color(),  # Make sure fit and data have the same color
@@ -836,5 +869,65 @@ def poisson_correction(line: IntensityLine, plot=False) -> IntensityLine:
         plt.show()
 
     # Return Poission corrected line. Intensity is now electrons per pixel.
+
+
+def fermi_edge(
+    x,
+    fd_center=0,
+    fd_width=0.003,
+    const_fd=1,
+    lin_fd=0,
+    const_bkg=1,
+    lin_bkg=0,
+    offset=0,
+    conv_width=0.02,
+):
+    """Fermi function with constant and Linear DOS.
+    After https://github.com/chstan/arpes/blob/master/arpes/fits/fit_models/fermi_edge.py
+    Args:
+        x: value to evaluate function at
+        fd_center: center of the step
+        fd_width: width of the step
+        const_bkg: constant background
+        lin_bkg: linear background slope
+        offset: constant background
+    """
+    dx = fd_center - x
+    fermi = (const_fd + lin_fd * dx) / (np.exp(dx / fd_width) + 1)
+    # return (const_bkg + lin_bkg * dx) * fermi + offset
+
+    bg = np.array([lin_bkg * xx + const_bkg if xx - fd_center <= 0 else 0 for xx in x])
+
+    x_scaling = x[1] - x[0]
+
+    return (
+        scipy.ndimage.gaussian_filter(
+            fermi + bg,
+            sigma=conv_width / x_scaling,
+        )
+        + offset
+    )
+
+
+def fit_fermi_edge(x, y, temp, **kwargs):
+    kb = 8.617e-5  # eV/K
+
+    def fe(x, ef):
+        return 1 / np.exp((x - ef) / (kb * temp))
+
+    def bg(x, a, b, ef):
+        return np.array([a * xx + b if xx <= ef else 0 for xx in x])
+
+    def fermi_edge_func(x, ef, a, b, c, conv_width, offset):
+        x_scaling = x[1] - x[0]
+
+        return (
+            scipy.ndimage.gaussian_filter(
+                c * (fe(x, ef) + bg(x, ef, a, b)), sigma=conv_width / x_scaling
+            )
+            + offset
+        )
+
+    return curve_fit(fermi_edge_func, x, y, **kwargs)
 
     return (line - x0) / gain

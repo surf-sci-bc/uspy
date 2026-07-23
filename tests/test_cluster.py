@@ -73,14 +73,23 @@ def main():
     plt.show()
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def pendry_stack():
+    # The original ...80-130.tif fixture this cache logic targeted no longer exists;
+    # the only available equivalent is ...80-140.tif (61 frames, vs. the >160 frames the
+    # original "cut out a few bad frames" indices assumed). Cache to .pickle -- the
+    # only extension uspy.dataobject.Loadable.save()/load() actually recognizes; the
+    # original ".lstk" extension is a leftover from the legacy uspy.leem.base_old API
+    # and is not supported by the current Loadable. Loading a cache also requires the
+    # LEEMStack.load() classmethod, not the constructor (which treats its argument as
+    # an image source/glob, not a pickle file, and raises ValueError for an unknown one).
+    cache_fname = TESTDATA_DIR + "pendried_stack.pickle"
     loaded = False
     try:
-        stack = base.LEEMStack(TESTDATA_DIR + "pendried_stack.lstk")
+        stack = base.LEEMStack.load(cache_fname)
         loaded = True
     except FileNotFoundError:
-        stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_RuO2_normed_aligned_80-130.tif")
+        stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_RuO2_normed_aligned_80-140.tif")
         stack.energy = np.linspace(3.0, 50.0, len(stack))
 
     X, _, _ = cluster.stack2vectors(stack, mask_outer=0.2) # cut away 20% on every side
@@ -88,16 +97,18 @@ def pendry_stack():
     if loaded:
         X = stack.pendry
     else:
-        # cut out a few bad frames
-        X = np.delete(X, list((range(10))) + [160], axis=1)
-        energy = np.delete(stack.energy, list((range(10))) + [160])
+        # cut out the first few frames (start of the energy ramp)
+        cutoff = list(range(10))
+        X = np.delete(X, cutoff, axis=1)
+        energy = np.delete(stack.energy, cutoff)
 
         X = cluster.pendryfy(X, energy)
         stack.pendry = X
-        stack.save(TESTDATA_DIR + "pendried_stack.lstk")
+        stack.save(cache_fname)
     return stack
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("n_components", [3, 12])
 def test_pca_pendry(pendry_stack, n_components):
     trafo, _, _ = cluster.component_analysis(
