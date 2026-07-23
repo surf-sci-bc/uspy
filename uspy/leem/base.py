@@ -1,6 +1,10 @@
 """
-Basic classes for Elmitec LEEM ".dat"-file parsing and data visualization.
+Basic classes for LEEM data parsing and data visualization.
+
+Parsing of specific file formats/endstations is delegated to a pluggable "reader" (see
+uspy.leem.readers) -- the Elmitec UKSOFT2001 ".dat" format is the default.
 """
+
 # pylint: disable=missing-docstring
 # pylint: disable=attribute-defined-outside-init
 # plyint: disable=access-member-before-definition
@@ -10,8 +14,6 @@ from typing import Any, Union, Optional
 from collections.abc import Iterable
 from numbers import Number
 from datetime import datetime
-import glob
-from pathlib import Path
 import warnings
 from tqdm.auto import tqdm
 import scipy.stats
@@ -20,10 +22,20 @@ import pandas as pd
 import numpy as np
 import cv2 as cv
 
-from uspy.utility import parse_bytes, parse_cp1252_until_null
 from uspy.dataobject import Image, ImageStack, StitchedLine
 from uspy.leem.utility import imgify
 from uspy.roi import ROI
+from uspy.leem.readers import LEEMReader, resolve_reader
+# Re-exported for backward compatibility -- the Elmitec binary parser and its lookup
+# tables now live in uspy.leem.readers.elmitec.
+from uspy.leem.readers.elmitec import (  # noqa: F401  pylint: disable=unused-import
+    parse_dat,
+    ATTR_NAMES,
+    HEADER_ONE,
+    HEADER_TWO,
+    VARIABLE_HEADER,
+    UNIT_CODES,
+)
 
 
 class TimeOrigin:
@@ -52,6 +64,11 @@ class LEEMImg(Image):
         "mcp": None,
         "dark_counts": 0,
         "warp_matrix": np.eye(3),
+        # Photon energy and a manual energy offset, used to compute binding_energy below.
+        # Only meaningful for readers that populate photon_energy (e.g. a synchrotron
+        # beamline reader); default to a LEED/LEEM electron gun with no photon energy.
+        "photon_energy": np.nan,
+        "energy_offset": 0,
     }
     _unit_defaults = {
         "energy": "eV",
@@ -67,19 +84,32 @@ class LEEMImg(Image):
         "x_position": "µm",
         "y_position": "µm",
         "binding_energy": "eV",
+        "photon_energy": "eV",
     }
     default_fields = ("temperature", "pressure", "energy", "fov")
 
     def __init__(
-        self, *args, time_origin: Union[TimeOrigin, Number] = None, **kwargs
+        self,
+        *args,
+        reader: Union[str, LEEMReader, None] = None,
+        time_origin: Union[TimeOrigin, Number] = None,
+        **kwargs,
     ) -> None:
+        source = args[0] if args else kwargs.get("source")
+        self._reader = resolve_reader(source, reader)
+        # gap-fill any reader-specific defaults (e.g. a beamline reader's photon_energy)
+        # that aren't already covered by this class' own _meta_defaults/_unit_defaults
+        for key, value in self._reader.meta_defaults.items():
+            self._meta.setdefault(key, value)
+        for key, value in self._reader.unit_defaults.items():
+            self._units.setdefault(key, value)
         if not isinstance(time_origin, TimeOrigin):
             time_origin = TimeOrigin(time_origin)
         super().__init__(*args, **kwargs)
         self._time_origin = time_origin  # is a list so it can be mutable
-        self.default_mask = ROI.circle(
-            x0=self.width // 2, y0=self.height // 2, radius=self.width // 2
-        )
+        self.default_mask = None  # ROI.circle(
+        #     x0=self.width // 2, y0=self.height // 2, radius=self.width // 2
+        # )
 
     def get_field_string(self, field: str, fmt: Optional[str] = None) -> str:
         """Get a string that contains the value and its unit. Some LEEM-specific fields
@@ -197,9 +227,9 @@ class LEEMImg(Image):
             self._source = None
             return dict(source.meta, **source.data)
         try:
-            if source.endswith(".dat"):
+            if self._reader.handles(source):
                 self._source = source
-                idict = parse_dat(source)
+                idict = self._reader.parse_image(source)
             else:
                 raise AttributeError
         except AttributeError:
@@ -219,10 +249,11 @@ class LEEMImg(Image):
             "mcp": self.mcp,
             "warp_matrix": self.warp_matrix,
             "dark_counts": self.dark_counts,
+            "reader": self._reader.name,
         }
 
     def __json_decode__(self, **attrs) -> None:
-        self.__init__(source=attrs["source"])
+        self.__init__(source=attrs["source"], reader=attrs.get("reader"))
         if attrs["mcp"]:
             self.normalize(
                 mcp=attrs["mcp"], dark_counts=attrs["dark_counts"], inplace=True
@@ -239,6 +270,17 @@ class LEEMImg(Image):
     @pressure.setter
     def pressure(self, value: Number) -> None:
         self._meta["pressure"] = value
+
+    @property
+    def kinetic_energy(self) -> Number:
+        """Alias of 'energy', the kinetic energy of the imaging electrons (in eV)."""
+        return self.energy
+
+    @property
+    def binding_energy(self) -> Number:
+        """Binding energy (in eV), meaningful when the image was recorded with a known
+        'photon_energy' (e.g. at a synchrotron beamline; see uspy.leem.readers)."""
+        return self.photon_energy - self.energy - self.energy_offset
 
     # @property
     # def resolution(self) -> Number:
@@ -274,44 +316,44 @@ class LEEMStack(ImageStack):
     _type = LEEMImg
 
     def __init__(
-        self, *args, time_origin: Optional[Union[TimeOrigin, Number]] = None, **kwargs
+        self,
+        *args,
+        reader: Union[str, LEEMReader, None] = None,
+        time_origin: Optional[Union[TimeOrigin, Number]] = None,
+        **kwargs,
     ) -> None:
+        source = args[0] if args else kwargs.get("source")
+        if reader is None:
+            # If constructed directly from a list of already-built LEEMImgs (rather than
+            # from a path/glob), inherit their reader instead of silently defaulting to
+            # Elmitec -- relevant if the stack is later virtualized/reconstructed.
+            try:
+                if not isinstance(source, str) and isinstance(source[0], LEEMImg):
+                    reader = source[0]._reader
+            except (TypeError, IndexError):
+                pass
+        self._reader = resolve_reader(source, reader)
         # initialize with np.nan for the first calls to self._single_construct
         self._time_origin = TimeOrigin(time_origin)
         super().__init__(*args, **kwargs)
+        self._reader.post_process_stack(self)
         # now we can access the 0th element and set the value
         if time_origin is None:
             self._time_origin.value = self[0].timestamp
 
     def _split_source(self, source: Union[str, Iterable]) -> list:
-        if isinstance(source, str):
-            fnames = []
-            if source.endswith(".dat"):  # .../path/*.dat
-                fnames = sorted(glob.glob(f"{source}"))
-            if not fnames:  # .../path/
-                fnames = sorted(glob.glob(f"{source}*.dat"))
-            if not fnames:  # .../path
-                fnames = sorted(glob.glob(f"{source}/*.dat"))
-
-            if fnames:
-                return fnames
+        fnames = self._reader.list_files(source)
+        if fnames:
+            return fnames
 
         try:
             return super()._split_source(source)
         except ValueError:
             raise ValueError(f"No files were found at path {source}")
 
-            if not fnames:  # if nothing works it might just be a list of filenames
-                try:
-                    return super()._split_source(source)
-                except ValueError:
-                    raise ValueError(f"No files were found at path {source}")
-            return fnames
-        return source
-
     def _single_construct(self, source: Any) -> LEEMImg:
         """Construct a single DataObject."""
-        return LEEMImg(source, time_origin=self._time_origin)
+        return LEEMImg(source, reader=self._reader, time_origin=self._time_origin)
 
     @property
     def time_origin(self) -> Number:
@@ -333,7 +375,12 @@ class LEEMStack(ImageStack):
             ):  # if virtual elements contains just sources not DataObjects
                 return self._single_construct(elements)
             return elements
-        return type(self)(elements, virtual=self.virtual, time_origin=self._time_origin)
+        return type(self)(
+            elements,
+            virtual=self.virtual,
+            time_origin=self._time_origin,
+            reader=self._reader,
+        )
 
     def align(
         self,
@@ -518,8 +565,11 @@ class LEEMStack(ImageStack):
 
         for index, img in enumerate(tqdm(stack)):
             # if an image is multiple times in a stack and inplace is True, it should not be
-            # normalized twice, so if the mcp is already the current mcp, it will not be processed
-            if img.mcp is None or not img.mcp == mcp:
+            # normalized twice, so if the mcp is already the current mcp, it will not be
+            # processed. img.mcp holds the *source* of the mcp it was last normalized
+            # against (see LEEMImg.normalize), so compare against mcp.source rather than
+            # the Image itself -- comparing to the Image would compare a str to an Image.
+            if img.mcp is None or img.mcp != mcp.source:
                 stack[index] = img.normalize(mcp=mcp, **kwargs)
 
         return stack
@@ -539,157 +589,7 @@ class IVCurve(StitchedLine):
         --------
         dataobject.StitchedLine
         """
-        print(*args)
-        print(**kwargs)
         super().__init__(*args, **kwargs, xaxis="energy")
-
-
-# Format: meta_key: (byte_position, encoding)
-HEADER_ONE = {
-    "_id": (0, "cp1252"),
-    "_size": (20, "short"),
-    "_version": (22, "short"),
-    "_bitsperpix": (24, "short"),
-    "width": (40, "short"),
-    "height": (42, "short"),
-    "_noimg": (44, "short"),
-    "_recipe_size": (46, "short"),
-}
-HEADER_TWO = {
-    "_isize": (0, "short"),
-    "_iversion": (2, "short"),
-    "_colorscale_low": (4, "short"),
-    "_colorscale_high": (6, "short"),
-    "time": (8, "time"),
-    "_mask_xshift": (16, "short"),
-    "_mask_yshift": (18, "short"),
-    "_usemask": (20, "bool"),
-    "_att_markupsize": (22, "short"),
-    "_spin": (24, "short"),
-}
-ATTR_NAMES = {
-    "timestamp": "time",
-    "energy": "Start Voltage",
-    "temperature": "Sample Temp.",
-    "pressure1": "Gauge #1",
-    "pressure2": "Gauge #2",
-    "objective": "Objective",
-    "emission": "Emission Cur.",
-}
-# Format: byte_position: (block_length, field_dict)
-# where field_dict is formatted like the above HEADER_ONE and HEADER_TWO
-VARIABLE_HEADER = {
-    255: (0, None),  # stop byte
-    100: (8, {"x_position": (0, "float"), "y_position": (4, "float")}),
-    228: (
-        8,
-        {"x_position": (0, "float"), "y_position": (4, "float")},
-    ),  # Image Version 8 of Elettra
-    # Average Images: 0 means no averaging, 255 means sliding average
-    104: (6, {"exposure": (0, "float"), "averaging": (4, "short")}),
-    105: (0, {"_img_title": (0, "cp1252")}),
-    242: (2, {"mirror_state": (0, "bool")}),
-    243: (4, {"screen_voltage": (0, "float")}),
-    244: (4, {"mcp_voltage": (0, "float")}),
-}
-UNIT_CODES = {
-    "1": "V",
-    "2": "mA",
-    "3": "A",
-    "4": "°C",
-    "5": "K",
-    "6": "mV",
-    "7": "pA",
-    "8": "nA",
-    "9": "\xb5A",
-    "B": "µm",
-}
-
-
-def parse_dat(fname: str, debug: bool = False) -> dict[str, Any]:
-    """Parse a UKSOFT2001 file."""
-    data = {}
-
-    def parse_block(block, field_dict):
-        for key, (pos, encoding) in field_dict.items():
-            data[key] = parse_bytes(block, pos, encoding)
-            if debug:
-                print(f"\t{key} -> {data[key]}")
-
-    with Path(fname).open("rb") as uk_file:
-        parse_block(uk_file.read(104), HEADER_ONE)  # first fixed header
-
-        if data["_recipe_size"] > 0:  # optional recipe
-            data["recipe"] = parse_bytes(
-                uk_file.read(data["_recipe_size"]), 0, "cp1252"
-            )
-            uk_file.seek(128 - data["_recipe_size"], 1)
-
-        parse_block(uk_file.read(26), HEADER_TWO)  # second fixed header
-
-        leemdata_version = parse_bytes(uk_file.read(2), 0, "short")
-        if leemdata_version != 2:
-            uk_file.seek(388, 1)
-        bit = uk_file.read(1)[0]
-        while bit != 255:
-            if debug:
-                print(bit)
-            if bit in VARIABLE_HEADER:  # fixed byte codes
-                block_length, field_dict = VARIABLE_HEADER[bit]
-                buffer = uk_file.read(block_length)
-                parse_block(buffer, field_dict)
-                if debug:
-                    print("\tknown")
-            elif bit in (106, 107, 108, 109, 234, 235, 236, 237):  # varian pressures
-                key = parse_cp1252_until_null(uk_file, debug)
-                data[f"{key}_unit"] = parse_cp1252_until_null(uk_file, debug)
-                data[key] = parse_bytes(uk_file.read(4), 0, "float")
-                if debug:
-                    print(f"\tknown: pressure {key} -> {data[key]}")
-            elif bit in (110, 238):  # field of view
-                fov_str = parse_cp1252_until_null(uk_file, debug)
-                try:
-                    data["fov"], data["preset"] = fov_str.split("\t")
-                except ValueError:
-                    data["fov"], data["preset"] = fov_str, ""
-                data["fov_cal"] = parse_bytes(uk_file.read(4), 0, "float")
-                if debug:
-                    print(f"\tfov: {fov_str}\n\tfov_cal: {data['fov_cal']}")
-            elif bit in (0, 1, 63, 66, 113, 128, 176, 216, 240, 232, 233):
-                if debug:
-                    print(f"unknown byte {bit}")
-            elif bit:  # self-labelled stuff
-                keyunit = parse_cp1252_until_null(uk_file, debug)
-                # For some b, the string is empty. They should go in the tuple above.
-                if not keyunit:
-                    bit = uk_file.read(1)[0]
-                    continue
-                data[f"{keyunit[:-1]}_unit"] = UNIT_CODES.get(keyunit[-1], "")
-                data[keyunit[:-1]] = parse_bytes(uk_file.read(4), 0, "float")
-                if debug:
-                    print(f"\tunknown: {keyunit[:-1]} -> {data[keyunit[:-1]]}")
-            bit = uk_file.read(1)[0]
-
-        size = data["width"] * data["height"]
-        uk_file.seek(-2 * size, 2)
-        image = np.fromfile(uk_file, dtype=np.uint16, sep="", count=size)
-        image = np.array(image, dtype=np.float32)
-        image = np.flipud(image.reshape((data["height"], data["width"])))
-        data["image"] = image
-
-    for new, old in ATTR_NAMES.items():
-        data[new] = data.pop(old, np.nan)
-        data[f"{new}_unit"] = data.pop(f"{old}_unit", "")
-    try:
-        if data["averaging"] == 0:
-            data["averaging"] = 1
-        elif data["averaging"] == 255:
-            data["averaging"] = 0
-    except KeyError:
-        pass
-    data["energy_unit"] = "eV"
-
-    return data
 
 
 def do_ecc_align(

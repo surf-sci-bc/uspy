@@ -45,6 +45,7 @@ setup(
         "netCDF4",
         "json_tricks",
         "setuptools_scm",  # see uspy/version.py
+        'tomli; python_version < "3.11"',  # tomllib is stdlib from 3.11 on
     ],
     package_data={"uspy.xps": ["rsf.db"]},
     python_requires="~=3.6",
