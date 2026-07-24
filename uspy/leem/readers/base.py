@@ -21,8 +21,9 @@ class LEEMReader:
     Base class for pluggable LEEM data readers.
 
     Subclasses must set a unique `name`; that automatically registers the subclass so it
-    can be selected by that name (via the `reader=` argument of `LEEMImg`/`LEEMStack`, or a
-    `uspy.toml` config file placed in the data folder -- see `resolve_reader`).
+    can be selected by that name (via the `reader=` argument of `LEEMImg`/`LEEMStack`, a
+    `set_reader(...)` session override, or a `uspy.toml` config file found via the config
+    search path -- see `resolve_reader`).
 
     Parameters
     ----------

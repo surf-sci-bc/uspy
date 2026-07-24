@@ -21,18 +21,21 @@ import uspy.plotting
 from uspy.plotting import *
 
 
-def plot_img(
-    img, *args, fields=("temperature", "pressure1", "energy", "fov"), **kwargs
-):
+def plot_img(img, *args, fields=None, **kwargs):
     """See uspy.plotting"""
     img = imgify(img)
     return uspy.plotting.plot_img(img, fields=fields, *args, **kwargs)
 
 
-def make_video(
-    stack, *args, fields=("temperature", "pressure1", "energy", "fov"), **kwargs
-):
+_UNSET = object()
+
+
+def make_video(stack, *args, fields=_UNSET, **kwargs):
     stack = stackify(stack)
+    # distinguish "fields not passed" (-> use the stack's configured defaults) from an
+    # explicit fields=None (-> uspy.plotting.make_video treats that as "no overlay")
+    if fields is _UNSET:
+        fields = stack[0].default_fields
     return uspy.plotting.make_video(stack, fields=fields, *args, **kwargs)
 
 

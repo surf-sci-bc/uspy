@@ -5,6 +5,7 @@
 # pylint: disable=protected-access
 
 import datetime
+import os
 import shutil
 import struct
 
@@ -12,13 +13,30 @@ import numpy as np
 import pytest
 
 from uspy.leem import base, elettra
-from uspy.leem.readers import ElettraReader, ElmitecReader, resolve_reader
+from uspy.leem.readers import (
+    ElettraReader,
+    ElmitecReader,
+    resolve_reader,
+    set_reader,
+    get_reader,
+    reset_reader,
+)
 from uspy.leem.readers.elmitec import parse_dat, ATTR_NAMES
+from uspy.leem.readers.smart import SmartReader
 from uspy.utility import parse_bytes
 
 from .conftest import TESTDATA_DIR
 
 ELETTRA_DAT = TESTDATA_DIR + "elettra.dat"
+
+
+@pytest.fixture(autouse=True)
+def _no_session_reader_leak():
+    """The session-wide `set_reader` override is deliberately global mutable state --
+    make sure no test can leak it into another."""
+    reset_reader()
+    yield
+    reset_reader()
 
 
 ### Default resolution (no reader given, no config file present) -> Elmitec
@@ -90,6 +108,198 @@ def test_no_config_file_defaults_to_elmitec(tmp_path):
     shutil.copy(ELETTRA_DAT, tmp_path / "elettra_000.dat")
     img = base.LEEMImg(str(tmp_path / "elettra_000.dat"))
     assert isinstance(img._reader, ElmitecReader)
+
+
+### Config search path: data-dir parent, cwd, and a global config directory (in addition
+### to the data folder itself, already covered above), plus their precedence and merging.
+
+
+def test_config_file_resolved_from_data_folder_parent(tmp_path):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    shutil.copy(ELETTRA_DAT, data_dir / "elettra_000.dat")
+    (tmp_path / "uspy.toml").write_text('[uspy]\nreader = "elettra"\n')
+
+    img = base.LEEMImg(str(data_dir / "elettra_000.dat"))
+    assert isinstance(img._reader, ElettraReader)
+
+
+def test_config_file_resolved_from_cwd(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    shutil.copy(ELETTRA_DAT, data_dir / "elettra_000.dat")
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    (cwd / "uspy.toml").write_text('[uspy]\nreader = "elettra"\n')
+    monkeypatch.chdir(cwd)
+
+    img = base.LEEMImg(str(data_dir / "elettra_000.dat"))
+    assert isinstance(img._reader, ElettraReader)
+
+
+def test_config_file_resolved_from_global_dir(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    shutil.copy(ELETTRA_DAT, data_dir / "elettra_000.dat")
+    global_dir = tmp_path / "xdg" / "uspy"
+    global_dir.mkdir(parents=True)
+    (global_dir / "uspy.toml").write_text('[uspy]\nreader = "elettra"\n')
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    monkeypatch.chdir(tmp_path)  # cwd itself must not carry a config file
+
+    img = base.LEEMImg(str(data_dir / "elettra_000.dat"))
+    assert isinstance(img._reader, ElettraReader)
+
+
+def test_config_search_path_precedence_data_dir_beats_others(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    shutil.copy(ELETTRA_DAT, data_dir / "elettra_000.dat")
+    (data_dir / "uspy.toml").write_text('[uspy]\nreader = "elettra"\n')
+    (tmp_path / "uspy.toml").write_text('[uspy]\nreader = "smart"\n')
+    global_dir = tmp_path / "xdg" / "uspy"
+    global_dir.mkdir(parents=True)
+    (global_dir / "uspy.toml").write_text('[uspy]\nreader = "smart"\n')
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+
+    img = base.LEEMImg(str(data_dir / "elettra_000.dat"))
+    assert isinstance(img._reader, ElettraReader)
+
+
+def test_config_search_path_precedence_parent_beats_cwd_and_global(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    shutil.copy(ELETTRA_DAT, data_dir / "elettra_000.dat")
+    (tmp_path / "uspy.toml").write_text('[uspy]\nreader = "elettra"\n')  # parent
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    (cwd / "uspy.toml").write_text('[uspy]\nreader = "smart"\n')
+    global_dir = tmp_path / "xdg" / "uspy"
+    global_dir.mkdir(parents=True)
+    (global_dir / "uspy.toml").write_text('[uspy]\nreader = "smart"\n')
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    monkeypatch.chdir(cwd)
+
+    img = base.LEEMImg(str(data_dir / "elettra_000.dat"))
+    assert isinstance(img._reader, ElettraReader)
+
+
+def test_config_search_path_layered_merge_reader_and_plotting(tmp_path, monkeypatch):
+    # global uspy.toml fixes the reader; the (more specific) data folder's uspy.toml
+    # only overrides plotting fields -- both should take effect together.
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    shutil.copy(ELETTRA_DAT, data_dir / "elettra_000.dat")
+    (data_dir / "uspy.toml").write_text(
+        '[uspy.plotting]\ndefault_fields = ["fov"]\n'
+    )
+    global_dir = tmp_path / "xdg" / "uspy"
+    global_dir.mkdir(parents=True)
+    (global_dir / "uspy.toml").write_text('[uspy]\nreader = "elettra"\n')
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    monkeypatch.chdir(tmp_path)
+
+    img = base.LEEMImg(str(data_dir / "elettra_000.dat"))
+    assert isinstance(img._reader, ElettraReader)
+    assert img.default_fields == ("fov",)
+
+
+### Programmatic session override (set_reader/get_reader/reset_reader)
+
+
+def test_set_reader_overrides_config_file(tmp_path):
+    shutil.copy(ELETTRA_DAT, tmp_path / "elettra_000.dat")
+    (tmp_path / "uspy.toml").write_text('[uspy]\nreader = "elmitec"\n')
+
+    set_reader("elettra")
+    img = base.LEEMImg(str(tmp_path / "elettra_000.dat"))
+    assert isinstance(img._reader, ElettraReader)
+
+
+def test_set_reader_accepts_instance_and_options():
+    reader = ElettraReader(energy_offset=1.5)
+    set_reader(reader)
+    assert get_reader() == (reader, {})
+    assert resolve_reader(ELETTRA_DAT) is reader
+
+    set_reader("elettra", energy_offset=2.5)
+    resolved = resolve_reader(ELETTRA_DAT)
+    assert isinstance(resolved, ElettraReader)
+    assert resolved.options == {"energy_offset": 2.5}
+
+
+def test_explicit_reader_argument_beats_set_reader():
+    set_reader("smart")
+    img = base.LEEMImg(ELETTRA_DAT, reader="elettra")
+    assert isinstance(img._reader, ElettraReader)
+
+
+def test_reset_reader_restores_config_resolution(tmp_path):
+    shutil.copy(ELETTRA_DAT, tmp_path / "elettra_000.dat")
+    (tmp_path / "uspy.toml").write_text('[uspy]\nreader = "elettra"\n')
+
+    set_reader("smart")
+    reset_reader()
+    assert get_reader() == (None, {})
+    img = base.LEEMImg(str(tmp_path / "elettra_000.dat"))
+    assert isinstance(img._reader, ElettraReader)
+
+
+### Config-file-driven plotting field defaults (uspy.toml [uspy.plotting])
+
+
+def test_no_config_file_keeps_elmitec_plotting_defaults(img_fname):
+    img = base.LEEMImg(img_fname)
+    assert img.default_fields == ("temperature", "pressure", "energy", "fov")
+    assert img.meta_fields == ("temperature",)
+    assert img.print_fields == (
+        "energy",
+        "temperature",
+        "pressure1",
+        "pressure2",
+        "objective",
+        "fov",
+        "exposure",
+        "averaging",
+        "width",
+        "height",
+    )
+
+
+def test_config_file_overrides_default_fields(tmp_path):
+    shutil.copy(ELETTRA_DAT, tmp_path / "elettra_000.dat")
+    (tmp_path / "uspy.toml").write_text(
+        '[uspy.plotting]\ndefault_fields = ["energy", "fov"]\n'
+    )
+    img = base.LEEMImg(str(tmp_path / "elettra_000.dat"))
+    assert img.default_fields == ("energy", "fov")
+    # keys not set in the config file keep their Elmitec fallback
+    assert img.meta_fields == ("temperature",)
+
+
+def test_config_file_partial_override_keeps_other_defaults(tmp_path):
+    shutil.copy(ELETTRA_DAT, tmp_path / "elettra_000.dat")
+    (tmp_path / "uspy.toml").write_text(
+        '[uspy.plotting]\nmeta_fields = ["pressure"]\n'
+    )
+    img = base.LEEMImg(str(tmp_path / "elettra_000.dat"))
+    assert img.meta_fields == ("pressure",)
+    assert img.default_fields == ("temperature", "pressure", "energy", "fov")
+    assert img.print_fields[0] == "energy"
+
+
+def test_config_file_plotting_fields_propagate_through_stack(tmp_path):
+    shutil.copy(ELETTRA_DAT, tmp_path / "elettra_000.dat")
+    shutil.copy(ELETTRA_DAT, tmp_path / "elettra_001.dat")
+    (tmp_path / "uspy.toml").write_text(
+        '[uspy.plotting]\ndefault_fields = ["fov"]\nprint_fields = ["energy"]\n'
+    )
+
+    stack = base.LEEMStack(str(tmp_path))
+    assert len(stack) == 2
+    for img in stack:
+        assert img.default_fields == ("fov",)
+        assert img.print_fields == ("energy",)
 
 
 ### Registry
@@ -328,6 +538,60 @@ def test_xpeem_config_file_resolution(tmp_path):
     assert len(stack) == 3
     # beamline sidecar metadata is picked up per-image even without a tracefile
     assert stack[0].photon_energy == pytest.approx(249.989686773)
+
+
+### Real SMART fixture (testdata/bessy/0409ac*.hdf): a "SCAN_MODE = TIME" series that didn't
+### fit in a single HDF4 file, split by SMART into "0409ac.hdf" (first part) + "0409ac_1.hdf"
+### + "0409ac_2.hdf" (continuations) -- an end-to-end check that globbing/reading a split scan
+### by its basename reassembles one correctly-ordered stack. These fixtures are large (~1.15GB
+### each) and not tracked in the testdata submodule, so this section skips cleanly when absent.
+
+BESSY_SPLIT_BASE = TESTDATA_DIR + "bessy/0409ac"
+
+pytestmark_bessy_split = pytest.mark.skipif(
+    not os.path.exists(BESSY_SPLIT_BASE + ".hdf"),
+    reason="testdata/bessy/0409ac*.hdf fixtures not present locally",
+)
+
+
+@pytestmark_bessy_split
+@pytest.mark.slow
+def test_bessy_split_scan_basename_merges_all_parts_in_order():
+    # the un-suffixed base file sorts before its "_1"/"_2" siblings under natsort (since
+    # "." < "_"), so a bare basename globs and concatenates the parts in acquisition order
+    sources = SmartReader().list_files(BESSY_SPLIT_BASE)
+    paths = list(dict.fromkeys(path for path, _index in sources))
+    assert paths == [
+        BESSY_SPLIT_BASE + ".hdf",
+        BESSY_SPLIT_BASE + "_1.hdf",
+        BESSY_SPLIT_BASE + "_2.hdf",
+    ]
+    assert len(sources) == 900  # 300 frames/file * 3 files
+
+
+@pytestmark_bessy_split
+@pytest.mark.slow
+def test_bessy_split_scan_exact_base_file_loads_only_that_file():
+    # known, documented limitation: the exact "<base>.hdf" path is not expanded to its
+    # siblings -- only the basename/glob form loads a whole split scan (see the module
+    # docstring of uspy.leem.readers.smart)
+    sources = SmartReader().list_files(BESSY_SPLIT_BASE + ".hdf")
+    assert len(sources) == 300
+    assert {path for path, _index in sources} == {BESSY_SPLIT_BASE + ".hdf"}
+
+
+@pytestmark_bessy_split
+@pytest.mark.slow
+def test_bessy_split_scan_virtual_stack_length_and_order():
+    # virtual=True keeps elements as unloaded (path, frame_index) sources, so this check
+    # doesn't have to load ~7GB of pixel data just to confirm the merge is correct
+    stack = base.LEEMStack(BESSY_SPLIT_BASE, reader="smart", virtual=True)
+    assert isinstance(stack._reader, SmartReader)
+    assert len(stack) == 900
+    # timestamps are per-file (not per-frame), so they step up once per file boundary but
+    # must never go backwards across the seams between parts
+    timestamps = [stack[i].timestamp for i in (0, 299, 300, 599, 600, 899)]
+    assert all(a <= b for a, b in zip(timestamps, timestamps[1:]))
 
 
 ### parse_dat: the Elmitec UKSOFT2001 binary format parser (uspy.leem.readers.elmitec)

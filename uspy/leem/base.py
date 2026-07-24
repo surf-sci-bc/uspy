@@ -25,7 +25,7 @@ import cv2 as cv
 from uspy.dataobject import Image, ImageStack, StitchedLine
 from uspy.leem.utility import imgify
 from uspy.roi import ROI
-from uspy.leem.readers import LEEMReader, resolve_reader
+from uspy.leem.readers import LEEMReader, resolve_reader, resolve_plotting_fields
 # Re-exported for backward compatibility -- the Elmitec binary parser and its lookup
 # tables now live in uspy.leem.readers.elmitec.
 from uspy.leem.readers.elmitec import (  # noqa: F401  pylint: disable=unused-import
@@ -87,6 +87,19 @@ class LEEMImg(Image):
         "photon_energy": "eV",
     }
     default_fields = ("temperature", "pressure", "energy", "fov")
+    meta_fields = ("temperature",)
+    print_fields = (
+        "energy",
+        "temperature",
+        "pressure1",
+        "pressure2",
+        "objective",
+        "fov",
+        "exposure",
+        "averaging",
+        "width",
+        "height",
+    )
 
     def __init__(
         self,
@@ -97,6 +110,21 @@ class LEEMImg(Image):
     ) -> None:
         source = args[0] if args else kwargs.get("source")
         self._reader = resolve_reader(source, reader)
+        # resolve per-instance plotting-field defaults from a uspy.toml, if present --
+        # object.__setattr__ is required here since default_fields/meta_fields/print_fields
+        # are plain class attributes: a normal `self.x = ...` would be routed by
+        # DataObject.__setattr__ into self._meta instead of overriding the class attribute
+        # (which normal attribute lookup would keep returning, bypassing __getattr__).
+        plotting_fields = resolve_plotting_fields(
+            source,
+            {
+                "default_fields": type(self).default_fields,
+                "meta_fields": type(self).meta_fields,
+                "print_fields": type(self).print_fields,
+            },
+        )
+        for key, value in plotting_fields.items():
+            object.__setattr__(self, key, value)
         # gap-fill any reader-specific defaults (e.g. a beamline reader's photon_energy)
         # that aren't already covered by this class' own _meta_defaults/_unit_defaults
         for key, value in self._reader.meta_defaults.items():

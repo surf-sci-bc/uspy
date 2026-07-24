@@ -1,0 +1,31 @@
+# Baseline uspy.toml for Elmitec UKSOFT2001 ".dat" data -- the uspy default, so the
+# [uspy] table below is only needed if you want to be explicit about it or to override
+# the default plotting fields.
+#
+# To use: copy this file, unchanged or edited to taste, into the folder that contains
+# your .dat files, named exactly "uspy.toml".
+
+[uspy]
+reader = "elmitec"
+
+[uspy.plotting]
+# Metadata fields shown as text overlays by plot_img()/make_video() (max 4: topleft,
+# topright, bottomleft, bottomright).
+default_fields = ["temperature", "pressure", "energy", "fov"]
+
+# Single field plotted over time by plot_meta().
+meta_fields = ["temperature"]
+
+# Table columns printed by print_meta().
+print_fields = [
+    "energy",
+    "temperature",
+    "pressure1",
+    "pressure2",
+    "objective",
+    "fov",
+    "exposure",
+    "averaging",
+    "width",
+    "height",
+]

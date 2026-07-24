@@ -1,0 +1,36 @@
+# Baseline uspy.toml for the SMART photoemission microscope at BESSY (HDF4 files, see
+# uspy.leem.readers.smart). SMART metadata has no temperature/pressure/fov/objective/
+# emission -- the default plotting fields below only reference fields SMART actually
+# provides.
+#
+# To use: copy this file, unchanged or edited to taste, into the folder that contains
+# your .hdf files, named exactly "uspy.toml".
+
+[uspy]
+reader = "smart"
+
+[uspy.options]
+# Manual calibration offset subtracted when computing
+# binding_energy = photon_energy - energy - energy_offset. Leave at 0.0 until
+# calibrated against a known reference (e.g. the Fermi edge).
+energy_offset = 0.0
+
+[uspy.plotting]
+# Metadata fields shown as text overlays by plot_img()/make_video() (max 4: topleft,
+# topright, bottomleft, bottomright).
+default_fields = ["energy", "photon_energy", "exposure", "scan_mode"]
+
+# Single field plotted over time by plot_meta().
+meta_fields = ["energy"]
+
+# Table columns printed by print_meta().
+print_fields = [
+    "energy",
+    "photon_energy",
+    "binding_energy",
+    "exposure",
+    "averaging",
+    "scan_mode",
+    "width",
+    "height",
+]

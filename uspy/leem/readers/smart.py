@@ -16,9 +16,13 @@ axis given by `MICRO_START_1`/`MICRO_END_1`/`POINTS_1` in the file description. 
 element is therefore addressed as a `(path, frame_index)` tuple rather than a bare path.
 
 Very long scans that don't fit in a single file are split by SMART into "<base>.hdf",
-"<base>_1.hdf", "<base>_2.hdf", ... . This reader does *not* auto-discover and concatenate
+"<base>_1.hdf", "<base>_2.hdf", ... -- note the *first* part is the un-suffixed "<base>.hdf";
+only the continuations get a "_N" suffix. This reader does *not* auto-discover and concatenate
 those siblings -- `list_files()` only expands the frames of the file(s) it is actually given
-(a single file, an explicit list, a glob, or a folder of files).
+(a single file, an explicit list, a glob, or a folder of files). To load a whole split scan as
+one stack, pass the **basename** ("<base>", no extension) or a "<base>*.hdf" glob: `natsort`
+sorts the un-suffixed base file before its numbered siblings (since "." < "_"), so the parts
+concatenate in acquisition order. Passing the exact "<base>.hdf" path loads only that one file.
 
 Reading files uses the optional `pyhdf` package (which wraps the HDF4 C library) when it is
 installed -- it is the preferred, battle-tested backend. `pyhdf` is awkward to install on

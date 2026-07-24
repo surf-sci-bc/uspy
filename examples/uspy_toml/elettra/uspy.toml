@@ -1,0 +1,38 @@
+# Baseline uspy.toml for the Nanospectroscopy beamline at Elettra -- ".dat" or ".tif"
+# images with sidecar "*.camera.txt"/"*.microscope.txt"/"*.beamline.txt" (and, for
+# stacks, a shared "*.trace.txt") files in the same folder (see
+# uspy.leem.readers.elettra).
+#
+# To use: copy this file, unchanged or edited to taste, into the folder that contains
+# your data (and its sidecar files), named exactly "uspy.toml".
+
+[uspy]
+reader = "elettra"
+
+[uspy.options]
+# Manual calibration offset subtracted when computing
+# binding_energy = photon_energy - energy - energy_offset. Leave at 0.0 until
+# calibrated against a known reference (e.g. the Fermi edge).
+energy_offset = 0.0
+
+[uspy.plotting]
+# Metadata fields shown as text overlays by plot_img()/make_video() (max 4: topleft,
+# topright, bottomleft, bottomright).
+default_fields = ["temperature", "photon_energy", "energy", "objective"]
+
+# Single field plotted over time by plot_meta().
+meta_fields = ["photon_energy"]
+
+# Table columns printed by print_meta().
+print_fields = [
+    "energy",
+    "photon_energy",
+    "binding_energy",
+    "temperature",
+    "objective",
+    "emission",
+    "exposure",
+    "averaging",
+    "width",
+    "height",
+]

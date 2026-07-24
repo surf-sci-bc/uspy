@@ -426,10 +426,12 @@ def plot_mov(stack, skip=None, ncols=4, virtual=True, dpi=100, **kwargs):
     return axes.flatten()
 
 
-def plot_meta(stack, fields="temperature", axes=None):
+def plot_meta(stack, fields=None, axes=None):
     """Plots some metadata of the stack over time. Returns an array of the
     axes objects."""
     stack = stackify(stack)
+    if fields is None:
+        fields = stack[0].meta_fields
     if isinstance(fields, str):
         fields = [fields]
     if axes is None:
@@ -459,28 +461,17 @@ def plot_meta(stack, fields="temperature", axes=None):
     return axes
 
 
-def print_meta(
-    stack,
-    fields=(
-        "energy",
-        "temperature",
-        "pressure1",
-        "pressure2",
-        "objective",
-        "fov",
-        "exposure",
-        "averaging",
-        "width",
-        "height",
-    ),
-):
+def print_meta(stack, fields=None):
     """Prints metadata of a stack as a table."""
-    if isinstance(fields, str):
-        fields = [fields]
     try:
         stack = stackify(stack)
     except FileNotFoundError:
         stack = stackify([imgify(stack)])
+
+    if fields is None:
+        fields = stack[0].print_fields
+    if isinstance(fields, str):
+        fields = [fields]
 
     table = []
     for img in stack:
