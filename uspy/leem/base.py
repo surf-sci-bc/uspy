@@ -22,7 +22,8 @@ import pandas as pd
 import numpy as np
 import cv2 as cv
 
-from uspy.dataobject import Image, ImageStack, StitchedLine
+from uspy.dataobject import Image, ImageStack
+from uspy.derived import StitchedLine
 from uspy.leem.utility import imgify
 from uspy.roi import ROI
 from uspy.leem.readers import LEEMReader, resolve_reader, resolve_plotting_fields
@@ -615,7 +616,7 @@ class IVCurve(StitchedLine):
 
         See Also
         --------
-        dataobject.StitchedLine
+        uspy.derived.StitchedLine
         """
         super().__init__(*args, **kwargs, xaxis="energy")
 

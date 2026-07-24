@@ -29,7 +29,8 @@ setup(
         "pandas",
         "scikit-image",
         "scikit-learn",
-        "scikit-video",
+        #"scikit-video",
+        "scikit-video @ git+https://github.com/scikit-video/scikit-video.git@v1.3.0", # >= 1.1.12 for compatibility with numpy
         "symmetrize",
         "imageio",
         "tifffile",

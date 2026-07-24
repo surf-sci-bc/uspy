@@ -22,6 +22,7 @@ import skvideo.io
 from IPython.display import display, Video
 
 import uspy.dataobject as do
+import uspy.derived as derived
 import uspy.roi as rois
 from uspy.leem.utility import stackify, imgify
 from uspy.leem.driftnorm import normalize_image
@@ -362,6 +363,7 @@ def make_video(
             data = -data + data.max()
 
         if fields:
+            data = cv.normalize(data, None, 0, 255, cv.NORM_MINMAX, dtype=cv.CV_8U)
             data = cv.cvtColor(data, cv.COLOR_GRAY2RGB)
             for i, field in enumerate(fields):
                 if field is None:
@@ -569,16 +571,16 @@ def plot_intensity(
     """
 
     if isinstance(stack, Sequence):
-        line = do.StitchedLine(stack, roi, xaxis)
+        line = derived.StitchedLine(stack, roi, xaxis)
         line.color = roi[0].color
         line.label = roi[0].label
     elif isinstance(roi, Sequence):
-        line = [do.IntensityLine(stack, roi, xaxis) for roi in roi]
+        line = [derived.IntensityLine(stack, roi, xaxis) for roi in roi]
         for li, ro in zip(line, roi):
             li.color = ro.color
             li.label = ro.label
     else:
-        line = do.IntensityLine(stack, roi, xaxis)
+        line = derived.IntensityLine(stack, roi, xaxis)
         line.color = roi.color
         line.label = roi.label
 
@@ -685,7 +687,7 @@ def waterfall(
     # wf = np.stack([profile.apply(img) for img in stack])
     # y = getattr(stack, yaxis)
 
-    wf = do.Waterfall(stack, profile, yaxis)
+    wf = derived.Waterfall(stack, profile, yaxis)
 
     if interpolate:
         nx, ny = kwargs.pop("npoints", (None, None))

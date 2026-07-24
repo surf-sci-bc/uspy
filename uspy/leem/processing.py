@@ -19,7 +19,8 @@ import scipy.signal
 import scipy.ndimage
 import skimage.measure
 from uspy import roi as rois
-from uspy.dataobject import DataObject, IntensityLine
+from uspy.dataobject import DataObject
+from uspy.derived import IntensityLine
 from uspy.leem.base import LEEMStack, LEEMImg
 from symmetrize import pointops as po, tps, sym
 from scipy.optimize import curve_fit
