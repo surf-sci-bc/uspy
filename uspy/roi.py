@@ -6,10 +6,12 @@ from __future__ import annotations
 from typing import Any, Sequence, Union, Optional
 from collections.abc import Iterable
 
-import cv2
 import numpy as np
 import matplotlib as mpl
+from matplotlib.path import Path as MplPath
+from matplotlib.patches import PathPatch
 from scipy import ndimage
+from skimage.draw import ellipse as draw_ellipse, polygon as draw_polygon, rectangle as draw_rectangle
 from skimage.measure import profile_line
 
 import uspy.dataobject as do
@@ -94,18 +96,22 @@ class ROI(StyledObject):
         self._center_buffer = True
 
     def _apply_params(self, shape: Optional[str] = "circle", **kwargs):
-        """Convert a geometric rectangular or elliptic description to polygon contour.
+        """Convert a geometric rectangular or elliptic description to a boolean mask.
         Arguments belonging to the shapes:
             - circle: radius
             - ellipse: width, height, rotation
             - square: width, rotation
             - rectangle: width, height, rotation
+            - point: (none)
+            - polygon: corners
         where radius, width and height are in pixels; rotation is in degrees (anti-clockwise).
+        Coordinates follow the array/position convention used throughout this class: width/x
+        maps to columns, height/y maps to rows.
         """
         if shape == "point":
             self._ref_point = np.array([0, 0])
-            array = np.array([[1]])
-            return
+            self.array = np.array([[True]])
+            return self.array
         elif shape != "polygon":
             if "radius" in kwargs:
                 if "width" in kwargs:
@@ -114,49 +120,48 @@ class ROI(StyledObject):
             else:
                 width = kwargs.pop("width")
             height = kwargs.pop("height", width)
+            # square canvas so shapes don't get clipped when rotated below
             max_extent = int(np.sqrt(width**2 + height**2))
+            mask = np.zeros((max_extent, max_extent), dtype=bool)
         elif shape == "polygon":
             corners = kwargs.pop("corners")
             width = np.max(corners[:, 0]) - np.min(corners[:, 0])
             height = np.max(corners[:, 1]) - np.min(corners[:, 1])
-            max_extent = max([int(width), int(height)])
+            # polygons never rotate, so the canvas can match their actual
+            # (height, width) extent exactly instead of being padded square --
+            # padding it square let draw_polygon's boundary-inclusive
+            # rasterization leak an extra row/col on the smaller dimension
+            # whenever width != height (that extra edge only got clipped away
+            # by the array bound when width == height happened to match the
+            # square canvas side).
+            mask = np.zeros((int(np.ceil(height)), int(np.ceil(width))), dtype=bool)
 
-        mask = np.zeros((max_extent, max_extent))
         rotation = kwargs.pop("rotation", 0)
         if shape in ("circle", "ellipse"):
             self._ref_point = np.array([width / 2, height / 2])
-            array = cv2.ellipse(
-                mask,  # mask,
-                center=tuple(self._ref_point.astype(int)),
-                axes=(width // 2, height // 2),
-                angle=rotation,
-                startAngle=0,
-                endAngle=360,
-                color=1,
-                thickness=-1,
+            rows, cols = draw_ellipse(
+                height / 2,
+                width / 2,
+                height / 2,
+                width / 2,
+                shape=mask.shape,
+                rotation=np.deg2rad(rotation),
             )
+            mask[rows, cols] = True
         elif shape in ("square", "rectangle"):
             self._ref_point = np.array([width / 2, height / 2])
-            array = cv2.rectangle(
-                mask,  # mask,
-                pt1=tuple(self._ref_point.astype(int)),
-                pt2=(width, height),
-                color=1,
-                thickness=-1,
-            )
-            array = ndimage.rotate(array, rotation)
+            rows, cols = draw_rectangle((0, 0), extent=(height, width), shape=mask.shape)
+            mask[rows, cols] = True
+            if rotation:
+                mask = ndimage.rotate(mask.astype(float), rotation, reshape=False) > 0.5
         elif shape == "polygon":
-            # self._ref_point = self.position
-            array = cv2.fillPoly(
-                mask, pts=[corners.astype(np.int32)], color=(255, 0, 0)
-            )
-
-            # raise NotImplementedError
+            rows, cols = draw_polygon(corners[:, 1], corners[:, 0], shape=mask.shape)
+            mask[rows, cols] = True
         else:
             raise ValueError(f"Unknown shape {shape}")
 
-        self.array = array.astype(bool)
-        return array.astype(bool)
+        self.array = mask
+        return self.array
 
     @property
     def array(self) -> np.ndarray:
@@ -177,12 +182,12 @@ class ROI(StyledObject):
 
     @classmethod
     def circle(cls, x0: int, y0: int, **kwargs) -> ROI:
-        """Construct a point ROI."""
+        """Construct a circular ROI."""
         return cls(x0, y0, source="circle", **kwargs)
 
     @classmethod
     def ellipse(cls, x0: int, y0: int, **kwargs) -> ROI:
-        """Construct a point ROI."""
+        """Construct an elliptic ROI."""
         return cls(x0, y0, source="ellipse", **kwargs)
 
     @classmethod
@@ -197,8 +202,7 @@ class ROI(StyledObject):
 
     @classmethod
     def from_array(cls, array: Iterable, x0: int = 0, y0: int = 0, **kwargs) -> ROI:
-        # def from_array(cls, array: Iterable, **kwargs) -> ROI:
-        """Construct a polygonic ROI from a list of corners. Seems Superfluous?????"""
+        """Construct a ROI directly from a boolean mask array."""
         return cls(x0, y0, source=array, **kwargs)
 
     def apply(
@@ -215,7 +219,7 @@ class ROI(StyledObject):
 
     def pad_to(self, width: int, height: int) -> np.ndarray:
         """Return the the mask padded to a given extent."""
-        if self._mask_buffer.shape == (height, width):
+        if self._mask_buffer.shape == (width, height):
             return self._mask_buffer
         # find sizes and corners. The low corner is the difference between the mask's
         # reference point and the position:
@@ -270,7 +274,25 @@ class ROI(StyledObject):
         ax.imshow(array, cmap=self.cmap, alpha=self.style.get("alpha", 0.5))
 
     def __add__(self, other: ROI) -> ROI:
-        return ROI.from_array(self.array + other.array)
+        """Return the union of two ROIs as a new ROI, placed correctly according
+        to each ROI's position (works for differently sized/positioned ROIs)."""
+        origin1, origin2 = self.origin, other.origin
+        # extents in (x, y) order to match position/origin:
+        extent1 = np.array(self.array.shape)[::-1]
+        extent2 = np.array(other.array.shape)[::-1]
+
+        low = np.minimum(origin1, origin2)
+        high = np.maximum(origin1 + extent1, origin2 + extent2)
+        size_xy = np.ceil(high - low).astype(int)
+
+        canvas = np.zeros(size_xy[::-1], dtype=bool)
+        for roi, origin in ((self, origin1), (other, origin2)):
+            off_x, off_y = np.round(origin - low).astype(int)
+            arr = roi.array
+            canvas[off_y : off_y + arr.shape[0], off_x : off_x + arr.shape[1]] |= arr
+
+        x0, y0 = low
+        return ROI.from_array(canvas, x0=x0, y0=y0)
 
 
 class Profile(StyledObject):
@@ -299,13 +321,71 @@ class Profile(StyledObject):
 
         return ret_val
 
+    @staticmethod
+    def _add_ring(all_verts: list, all_codes: list, ring_points: np.ndarray) -> None:
+        """Append a closed polygon ring to the given vertex/code lists, forcing
+        counter-clockwise winding so that a nonzero-winding fill never cancels an
+        overlap between rings into a hole."""
+        ring_points = np.asarray(ring_points, dtype=float)
+        signed_area = np.sum(
+            ring_points[:, 0] * np.roll(ring_points[:, 1], -1)
+            - np.roll(ring_points[:, 0], -1) * ring_points[:, 1]
+        )
+        if signed_area < 0:
+            ring_points = ring_points[::-1]
+        all_verts.extend(ring_points)
+        all_verts.append(ring_points[0])
+        all_codes.append(MplPath.MOVETO)
+        all_codes.extend([MplPath.LINETO] * (len(ring_points) - 1))
+        all_codes.append(MplPath.CLOSEPOLY)
+
+    def _band_path(self) -> Optional[MplPath]:
+        """Build a single compound Path for the whole profile band: one rectangle
+        per segment (width `self.width`, matching the region `apply()` averages
+        over via `profile_line`) plus a disk at each interior vertex to round the
+        join between segments. Rendering this as one Path/patch (rather than one
+        polygon per segment) avoids gaps on the outer side of a corner and, since
+        alpha is applied once, avoids a darker double-blended seam on the inner
+        side. Returns None if there is no well-defined segment to draw."""
+        points = [np.asarray(p, dtype=float) for p in self.points]
+        # drop consecutive duplicates: zero-length segments have no direction
+        deduped = points[:1]
+        for point in points[1:]:
+            if np.linalg.norm(point - deduped[-1]) > 0:
+                deduped.append(point)
+        points = deduped
+        if len(points) < 2:
+            return None
+
+        half_width = self.width / 2
+        all_verts: list = []
+        all_codes: list = []
+
+        for p0, p1 in zip(points, points[1:]):
+            direction = p1 - p0
+            normal = np.array([-direction[1], direction[0]])
+            normal = normal / np.linalg.norm(normal) * half_width
+            self._add_ring(all_verts, all_codes, [p0 + normal, p1 + normal, p1 - normal, p0 - normal])
+
+        for vertex in points[1:-1]:  # interior joints only; endpoints get flat caps
+            theta = np.linspace(0, 2 * np.pi, 32, endpoint=False)
+            disk = vertex + half_width * np.column_stack([np.cos(theta), np.sin(theta)])
+            self._add_ring(all_verts, all_codes, disk)
+
+        return MplPath(all_verts, all_codes)
+
     def plot(self, ax):
+        """Plot the profile true-to-size in data coordinates: a single filled band
+        `self.width` pixels wide (matching the region `apply()` averages over via
+        `profile_line`), with rounded joins where a multi-segment profile changes
+        direction, plus a thin centerline marking the sampled path. Unlike a plain
+        `ax.plot(..., linewidth=self.width)`, this band's thickness is in
+        data/pixel units, not typographic points, so it stays true-to-size across
+        zoom levels and figure sizes."""
+        alpha = self.style.get("alpha", 0.5)
+        band_path = self._band_path()
+        if band_path is not None:
+            ax.add_patch(PathPatch(band_path, facecolor=self.color, edgecolor="none", alpha=alpha))
         xvalues = [point[0] for point in self.points]
         yvalues = [point[1] for point in self.points]
-        ax.plot(
-            xvalues,
-            yvalues,
-            linewidth=self.width,
-            color=self.color,
-            alpha=self.style.get("alpha", 0.5),
-        )
+        ax.plot(xvalues, yvalues, color=self.color, linewidth=1, alpha=alpha)
