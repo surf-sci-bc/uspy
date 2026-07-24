@@ -18,6 +18,7 @@ import scipy.constants as sc
 import scipy.signal
 import scipy.ndimage
 import skimage.measure
+from skimage.feature import peak_local_max
 from uspy import roi as rois
 from uspy.dataobject import DataObject
 from uspy.derived import IntensityLine
@@ -67,6 +68,40 @@ def fit_2d_gaussian(img, roi):
     return out
 
 
+def find_reflections(img, n, min_distance=10, threshold_rel=0.1, **kwds):
+    """
+    Automatically detect the `n` brightest reflections (diffraction spots) in a
+    LEED/LEEM image, e.g. to obtain the `pks` argument of `correct_img_distortion`.
+
+    Args:
+        img: LEEMImg/Image (or anything exposing `.image`), or a raw 2D array.
+        n: number of reflections to detect. Include the central spot if the
+            result is passed on to `correct_img_distortion`.
+        min_distance: minimum pixel distance enforced between detected peaks.
+        threshold_rel: minimum peak intensity, relative to the image maximum.
+        **kwds: further keyword arguments passed to
+            `skimage.feature.peak_local_max`.
+
+    Returns:
+        (n, 2) array of (row, col) pixel coordinates, ordered from brightest to
+        dimmest.
+    """
+    pixels = img.image if hasattr(img, "image") else np.asarray(img)
+    coords = peak_local_max(
+        pixels,
+        num_peaks=n,
+        min_distance=min_distance,
+        threshold_rel=threshold_rel,
+        **kwds,
+    )
+    if len(coords) < n:
+        raise ValueError(
+            f"Only found {len(coords)} reflection(s) matching the given "
+            f"criteria, expected {n}. Try lowering min_distance/threshold_rel."
+        )
+    return coords
+
+
 def correct_img_distortion(stack, pks: list, symmetry="hexagonal", rot=None):
     """
     Image distortion corrections using thin plate splines.
@@ -79,29 +114,64 @@ def correct_img_distortion(stack, pks: list, symmetry="hexagonal", rot=None):
         multidimensional photoemission spectroscopy.
         Ultramicroscopy 202 (2019), 133-139
         https://doi.org/10.1016/j.ultramic.2019.04.004
+
+    Args:
+        stack: LEEMImg or LEEMStack to correct.
+        pks: pixel coordinates (row, col) of the reflections, including the
+            center spot (e.g. from `find_reflections`).
+        symmetry: target symmetry of the reflection pattern around the center
+            spot. One of:
+                "hexagonal" -- 6 equivalent reflections, 60 deg apart (default).
+                "square" -- 4 equivalent reflections, 90 deg apart.
+                "rectangular" -- 4 reflections forming two opposing pairs with
+                    two independent, alternating center-vertex distances.
+                anything else -- `rot` must give the inter-vertex rotation
+                    angles explicitly, as accepted by
+                    `symmetrize.sym.rotVertexGenerator`.
+        rot: inter-vertex rotation angles, only used when `symmetry` is not one
+            of the built-in options above.
     """
 
     pcent, psur = po.pointset_center(pks, method="centroidnn")
     psur_ord = po.pointset_order(psur, direction="ccw")
+    cvd = po.cvdist(psur_ord, pcent)
 
     if symmetry == "hexagonal":
-        arot = (
-            np.ones(
-                5,
+        arot = np.full(5, 60.0)
+        scale = 1
+    elif symmetry == "square":
+        arot = np.full(3, 90.0)
+        scale = 1
+    elif symmetry == "rectangular":
+        if len(psur_ord) != 4:
+            raise ValueError(
+                "'rectangular' symmetry requires exactly 4 surrounding "
+                f"reflections, got {len(psur_ord)}."
             )
-            * 60
-        )
+        arot = np.full(3, 90.0)
+        # opposite spots (0 & 2, 1 & 3) share a center-vertex distance; the two
+        # pairs alternate between the rectangle's two independent side lengths.
+        side_a = (cvd[0] + cvd[2]) / 2
+        side_b = (cvd[1] + cvd[3]) / 2
+        ratio = side_b / side_a
+        scale = np.array([ratio, 1.0, ratio])
     else:
-        arot = np.array(rot)
+        if rot is None:
+            raise ValueError(
+                "`rot` (inter-vertex rotation angles) must be given for "
+                f"symmetry={symmetry!r}."
+            )
+        arot = np.asarray(rot)
+        scale = 1
 
-    mcvd = po.cvdist(psur_ord, pcent).mean()
+    mcvd = cvd.mean()
     ptargs = sym.rotVertexGenerator(
         pcent,
         fixedvertex=psur_ord[0, :],
         cvd=mcvd,
         arot=arot,
         direction=-1,
-        scale=1,
+        scale=scale,
         ret="all",
     )
 
@@ -113,16 +183,27 @@ def correct_img_distortion(stack, pks: list, symmetry="hexagonal", rot=None):
     interp_order = 3  # interpolation order
 
     for img, warped_img in zip(stack, warped_stack):
+        # symmetrize's 2D TPS routine (tps.tpsWarping with axis=None) defaults
+        # output_region to (0, 0, ncols, nrows) but samples it against the
+        # array using the opposite axis order, which only cancels out for a
+        # square image. For a non-square image this evaluates the warp over
+        # the wrong coordinate range and corrupts the result (not just the
+        # output shape). Passing the matching (row, col)-ordered
+        # output_region keeps the landmarks (native (row, col), see above)
+        # and the image in one consistent convention for any aspect ratio, so
+        # no transposing of either is needed.
+        nr, nc = img.image.shape
         img_warped, spline_warp = tps.tpsWarping(
             psur_ord,
             ptargs,
-            img.image.T,  # .T because symmetrize expects a different x,y convention
+            img.image,
             None,
             interp_order,
             ret="all",
+            output_region=(0, 0, nr, nc),
         )
 
-        warped_img.image = img_warped.T
+        warped_img.image = img_warped
         warped_img.spline_warp = spline_warp
 
     if len(warped_stack) == 1:
