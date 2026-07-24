@@ -50,6 +50,14 @@ setup(
     package_data={"uspy.xps": ["rsf.db"]},
     python_requires="~=3.6",
     tests_require=["pytest", "pytest-cov"],
+    # pyhdf wraps the HDF4 C library and is used only by the SMART/BESSY reader
+    # (uspy.leem.readers.smart) to read HDF4 files. It is an optional *accelerator*, not a
+    # requirement: that reader falls back to a built-in pure-Python HDF4 parser when pyhdf is
+    # absent, so this extra is only worth installing where the fallback is too slow or a file
+    # uses compressed/chunked storage. pip alone can't install pyhdf on macOS/Windows -- get
+    # the native library via e.g. "conda install -c conda-forge pyhdf", or "brew install hdf4"
+    # before "pip install uspy[smart]".
+    extras_require={"smart": ["pyhdf"]},
 )
 
 ### Additional packages

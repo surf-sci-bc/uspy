@@ -35,8 +35,9 @@ except ModuleNotFoundError:  # pragma: no cover
 from uspy.leem.readers.base import LEEMReader
 from uspy.leem.readers.elmitec import ElmitecReader
 from uspy.leem.readers.elettra import ElettraReader
+from uspy.leem.readers.smart import SmartReader
 
-__all__ = ["LEEMReader", "ElmitecReader", "ElettraReader", "resolve_reader"]
+__all__ = ["LEEMReader", "ElmitecReader", "ElettraReader", "SmartReader", "resolve_reader"]
 
 CONFIG_FILENAME = "uspy.toml"
 
