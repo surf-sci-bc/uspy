@@ -16,7 +16,6 @@ from numbers import Number
 from datetime import datetime
 import warnings
 from tqdm.auto import tqdm
-import scipy.stats
 import pandas as pd
 
 import numpy as np
@@ -495,18 +494,35 @@ class LEEMStack(ImageStack):
         self,
         inplace: bool = False,
         mask: Union[bool, np.ndarray, None] = True,
-        template=None,
-        sanity=True,
+        template: Union[int, Image, None] = None,
+        sanity: bool = True,
         **kwargs,
     ) -> LEEMStack:
         """
         Image registration of the stack
 
-        The images of the stack are registered subsequently by calling Image.find_warp_matrix() for
-        each image and finally warping them using Image.warp(). After inital registration the
-        results are checked for sanity by checking if some translation shifts are more than
-        3 standard deviations away from the mean shift. If so, the values are interpolated from a
-        spline, over the whole stack. The same is true if the initial alignment fails.
+        By default (``template=None``) the images of the stack are registered
+        sequentially: each image is aligned to its predecessor by calling
+        ``Image.find_warp_matrix()``, and the resulting shifts are accumulated so
+        every warp matrix is relative to the first image. Alternatively, passing
+        ``template`` aligns every image directly against that one fixed image
+        instead -- useful when drift between neighboring frames is small relative to
+        noise but the whole stack drifts relative to a known reference.
+
+        After initial registration, the recovered translation shifts (dx, dy) are
+        checked for sanity using a robust (median/MAD-based) outlier score (see
+        `_modified_zscore`) -- unlike a classic mean/std z-score, this does not get
+        skewed (and so does not miss outliers) when one shift is extremely far off.
+        Outliers, together with any frame where registration raised an exception,
+        are replaced by interpolating (and, for boundary
+        frames, extrapolating) over the remaining valid shifts -- this is the
+        expected, routine path (not an error), so it is only printed, never raised
+        as a warning; the spline order automatically adapts to the number of valid
+        frames so short stacks don't crash. If too few valid frames remain to
+        interpolate at all, this is the unexpected, unrecoverable case: the affected
+        frames fall back to identity (no shift) and a ``UserWarning`` names them and
+        the fallback used. Finally the resulting warp matrices are applied via
+        ``Image.warp()``.
 
         Parameters
         ----------
@@ -525,6 +541,15 @@ class LEEMStack(ImageStack):
             - If 'False' or 'None' no mask is used during registration
             - If np.ndarray the array must be of dtype=np.uint8 and contain the mask that should be
               applied
+        template : int, Image or None, default None
+            If given, every image is aligned directly against this fixed reference
+            image instead of sequentially against its predecessor. An int is used as
+            an index into 'stack' (e.g. 'template=0' aligns against the first
+            image); an 'Image' is used directly. Template alignment is less
+            battle-tested than the default sequential alignment, so a caution is
+            raised -- sanity-check the result.
+        sanity : bool, default True
+            Whether to run the z-score outlier check described above.
 
         **kwargs
             Additional keyword arguments are passed through to Image.find_warp_matrix
@@ -534,16 +559,41 @@ class LEEMStack(ImageStack):
         LEEMStack
             LEEMStack with aligned images. The stack itself is returned when 'inplace' = True
 
+        Raises
+        ------
+        ValueError
+            If the stack is empty.
+        TypeError
+            If 'template' is neither an int, an Image, nor None.
+        IndexError
+            If 'template' is an int outside the stack's range.
+
         See Also
         --------
         find_warp_matrix
         LEEMImg.warp
         """
+        if len(self) == 0:
+            raise ValueError("Cannot align an empty stack.")
 
         if inplace:
             stack = self
         else:
             stack = self.copy()
+
+        if len(stack) == 1:
+            # Nothing to register against -- leave the single frame as-is (identity
+            # warp) instead of feeding a 1-point array into the interpolation code
+            # below, which needs at least 2 valid points.
+            stack[0].warp(warp_matrix=np.eye(3, dtype=np.float32), inplace=True)
+            return stack
+
+        if sanity and kwargs.get("trafo", "translation") != "translation":
+            warnings.warn(
+                "align(): sanity-checking only inspects the recovered translation "
+                f"(dx, dy) -- rotation/scale/shear from trafo={kwargs.get('trafo')!r} "
+                "are not sanity-checked."
+            )
 
         if mask:
             roi = ROI.circle(
@@ -554,82 +604,61 @@ class LEEMStack(ImageStack):
             mask = (~np.ma.getmaskarray(roi.apply(stack[0]).image)).astype(np.uint8)
         else:
             mask = None
-        # List of all warp matrices
-        warp_matrices = [np.eye(3, dtype=np.float32)]
 
         if template is None:
+            # List of all warp matrices, relative to the first image. The first
+            # image's own warp is always the trivial identity -- it is never run
+            # through find_warp_matrix.
+            warp_matrices = [np.eye(3, dtype=np.float32)]
             for index, (img1, img2) in enumerate(zip(tqdm(stack[1:]), stack)):
                 try:
                     warp_matrix = img1.find_warp_matrix(img2, mask=mask, **kwargs)
-                except:
-                    print(f"Alginment failed on Image {index}. Will interpolate later")
-                    # warp_matrix = warp_matrices[-1]
-                    warp_matrix = np.eye(3, 3)
+                except Exception:
+                    print(
+                        f"Alignment failed on Image {index + 1}. Will interpolate later"
+                    )
+                    warp_matrix = np.eye(3, dtype=np.float32)
                     warp_matrix[0:2, 2] = np.nan
-
-                # img1.warp(warp_matrix, inplace = True)
                 warp_matrices.append(warp_matrix)
         else:
-            warnings.warn("Aligning against template is considered unstable!")
-            try:
+            if isinstance(template, (int, np.integer)):
                 template = stack[template]
-            except:
-                pass
+            elif not isinstance(template, Image):
+                raise TypeError(
+                    "template must be an int index into the stack, an Image, or "
+                    f"None, got {type(template)}"
+                )
+            warnings.warn(
+                "align(): aligning against a fixed template is less battle-tested "
+                "than the default sequential alignment -- sanity-check the result."
+            )
+            # Every image (including the template's own frame) is aligned directly
+            # and independently against the template, so each warp matrix is already
+            # absolute -- unlike sequential mode, these must NOT be cumulatively
+            # composed further down.
+            warp_matrices = []
             for index, img in enumerate(stack):
                 try:
                     warp_matrix = img.find_warp_matrix(template, mask=mask, **kwargs)
-                except:
-                    print(f"Alginment failed on Image {index}. Will interpolate later")
-                    # warp_matrix = warp_matrices[-1]
-                    warp_matrix = np.eye(3, 3)
+                except Exception:
+                    print(f"Alignment failed on Image {index}. Will interpolate later")
+                    warp_matrix = np.eye(3, dtype=np.float32)
                     warp_matrix[0:2, 2] = np.nan
-                if len(warp_matrices) > 0:
-                    warp_matrix = np.linalg.inv(warp_matrices[-1]) @ warp_matrix
-                else:
-                    warp_matrix = np.eye(3, 3)
                 warp_matrices.append(warp_matrix)
-
-            # When aligning against template the translations are absolute to the template, so
-            # they are relative to first image
-            # T = M_1 * img_1 => M_2*img2 = M_2*img2 => img2 = M_2^-1*M_1*img1
 
         dx = np.array([matrix[0, 2] for matrix in warp_matrices])
         dy = np.array([matrix[1, 2] for matrix in warp_matrices])
 
-        if sanity:
-
-            # Check sanity. Are some aligns outside 3 std dev, then they are most likely wrong.
-            # Outliners are replaced with np.nan
-            # Calculate zscore of dx,dy
-
-            dx_z = np.abs(scipy.stats.zscore(dx, nan_policy="omit"))
-            dy_z = np.abs(scipy.stats.zscore(dy, nan_policy="omit"))
-
-            for index, value in enumerate((dx_z > 3) | (dy_z > 3)):
-                if value:
-                    print(f"Align {index} to far out")
-
-            dx[(dx_z > 3) | (dy_z > 3)] = np.nan
-            dy[(dx_z > 3) | (dy_z > 3)] = np.nan
-
-        # Interpolate over valid points and recalculate invalid points.
-        # Interpolation cannot handle nan, so first the nan values have to be converted to a
-        # numerical value and then the weight is set to zero.
-
-        # Check if dx and dy have nan values at same positions
-        np.testing.assert_array_equal(np.isnan(dx), np.isnan(dy))
-
-        # Pandas interpolates over nan values
-        dx = pd.Series(dx).interpolate("spline", order=3)
-        dy = pd.Series(dy).interpolate("spline", order=3)
+        dx, dy = _resolve_shifts(dx, dy, sanity=sanity)
 
         for index, (x, y) in enumerate(zip(dx, dy)):
             warp_matrices[index][0, 2] = x
             warp_matrices[index][1, 2] = y
 
-        # calculate the warp matrices with respect to the position of first image
-        for index, matrix in enumerate(warp_matrices[1:]):
-            warp_matrices[index + 1] = matrix @ warp_matrices[index]
+        if template is None:
+            # calculate the warp matrices with respect to the position of first image
+            for index, matrix in enumerate(warp_matrices[1:]):
+                warp_matrices[index + 1] = matrix @ warp_matrices[index]
 
         # apply warp matrices to image
         for warp_matrix, img in zip(warp_matrices, stack):
@@ -922,3 +951,178 @@ def do_ecc_align(
     warp_matrix = np.append(warp_matrix, [[0, 0, 1]], axis=0)
 
     return warp_matrix
+
+
+#: Threshold on the robust (modified) z-score above which a shift is rejected as a
+#: registration outlier -- see `_modified_zscore`. Deliberately high (rather than the
+#: textbook 3.5): a genuine registration failure lands orders of magnitude beyond the
+#: robust scale (score in the tens-hundreds), so a high, well-separated threshold
+#: catches real failures while keeping the false-positive rate on clean data low, even
+#: for the large, mutually-independent frame-to-frame shifts a stack can legitimately
+#: have. Empirically chosen; adjust if real-world data needs more/less sensitivity.
+_OUTLIER_ZSCORE_THRESHOLD = 8.0
+
+
+def _modified_zscore(x: np.ndarray) -> np.ndarray:
+    """Robust (median/MAD-based) z-score, used by `_resolve_shifts` to flag
+    registration outliers.
+
+    Unlike the classic mean/std z-score, this is not inflated -- and so not
+    self-masked -- by the very outliers it's meant to detect: a single huge outlier
+    drags the mean and inflates the std enough that both its own z-score and other,
+    smaller outliers' z-scores can fall back under the detection threshold
+    ("masking"/"swamping"). The median and MAD (median absolute deviation) are far
+    less sensitive to extreme values, so this keeps working regardless of an
+    outlier's magnitude or how many there are.
+
+    If more than half the values are identical, the MAD itself collapses to 0 (a
+    plain division would produce inf/nan); the mean absolute deviation is used as a
+    fallback scale in that case, and only if all values are exactly identical does
+    this return all zeros (no possible outliers).
+
+    Parameters
+    ----------
+    x : np.ndarray
+        Values to score. nan entries stay nan (so they never exceed a threshold).
+
+    Returns
+    -------
+    np.ndarray
+        Non-negative robust z-scores, same shape as 'x'.
+    """
+    x = np.asarray(x, dtype=float)
+    med = np.nanmedian(x)
+    abs_dev = np.abs(x - med)
+    mad = np.nanmedian(abs_dev)
+    if mad > 0:
+        return np.abs(0.6745 * (x - med) / mad)
+    meanad = np.nanmean(abs_dev)
+    if meanad > 0:
+        return np.abs((x - med) / (1.253314 * meanad))
+    return np.zeros_like(x)
+
+
+def _resolve_shifts(
+    dx: np.ndarray, dy: np.ndarray, sanity: bool = True
+) -> tuple[np.ndarray, np.ndarray]:
+    """Cleans up raw x/y translation shifts coming out of pairwise/template
+    registration, used by `LEEMStack.align()`.
+
+    A failed registration is expected to mark both components of a frame as nan;
+    this is unified (rather than asserted) so a partial failure can't crash. When
+    'sanity' is set, shifts whose robust (median/MAD-based) z-score (see
+    `_modified_zscore`) exceeds `_OUTLIER_ZSCORE_THRESHOLD` are additionally flagged
+    as outliers and replaced with nan -- this is the expected, routine path (not an
+    error), so it is only printed, never raised as a warning.
+
+    All nan gaps (whether from failed registration or outlier rejection) are then
+    filled by interpolation, with the spline order adapted to the number of valid
+    (non-nan) frames so that short stacks don't crash pandas' interpolation (which
+    needs at least 'order + 1' points). Leading/trailing nan (boundary frames) are
+    extrapolated rather than left as nan. If there are too few valid points to
+    interpolate/extrapolate at all (0 or 1), this is the unexpected, unrecoverable
+    case: the affected frames fall back to identity (zero shift) and a warning names
+    the frames and the fallback used.
+
+    Parameters
+    ----------
+    dx, dy : np.ndarray
+        Raw per-frame x/y translation shifts, with nan marking a failed registration.
+    sanity : bool, optional
+        Whether to run the z-score outlier check, by default True.
+
+    Returns
+    -------
+    (np.ndarray, np.ndarray)
+        Cleaned up dx, dy with no remaining nan.
+    """
+    dx = np.array(dx, dtype=float)
+    dy = np.array(dy, dtype=float)
+    n = len(dx)
+
+    # A failed registration should mark both components -- unify the two nan masks
+    # instead of asserting they already match, so a registration that only marked one
+    # component as nan doesn't crash the whole alignment.
+    bad = np.isnan(dx) | np.isnan(dy)
+    dx[bad] = np.nan
+    dy[bad] = np.nan
+
+    if sanity:
+        n_valid = int((~np.isnan(dx)).sum())
+        # A robust z-score needs a handful of points to be meaningful -- skip it on
+        # very short input. Unlike the classic mean/std z-score, the degenerate
+        # (constant/near-constant) case is already handled inside _modified_zscore
+        # itself (falls back to mean-absolute-deviation scaling, or returns all
+        # zeros if truly constant), so no separate std > 0 guard is needed here.
+        if n_valid >= 4:
+            dx_z = _modified_zscore(dx)
+            dy_z = _modified_zscore(dy)
+            outliers = (dx_z > _OUTLIER_ZSCORE_THRESHOLD) | (
+                dy_z > _OUTLIER_ZSCORE_THRESHOLD
+            )
+            for index in np.where(outliers)[0]:
+                print(f"Align {index} too far out")
+            dx[outliers] = np.nan
+            dy[outliers] = np.nan
+
+    valid = ~np.isnan(dx)
+    n_valid = int(valid.sum())
+
+    if n_valid == n:
+        return dx, dy
+
+    if n_valid == 0:
+        warnings.warn(
+            "align(): no frame could be registered -- falling back to identity (no "
+            "shift) for the entire stack."
+        )
+        return np.zeros(n), np.zeros(n)
+
+    if n_valid == 1:
+        # A single valid point can't be interpolated or extrapolated (even a linear
+        # fit needs >= 2 points) -- keep that one frame's own shift and fall back to
+        # identity for the rest.
+        bad_idx = list(np.where(~valid)[0])
+        warnings.warn(
+            f"align(): only one frame could be registered -- frame(s) {bad_idx} "
+            "could not be recovered and fall back to identity (no shift)."
+        )
+        dx = np.where(valid, dx, 0.0)
+        dy = np.where(valid, dy, 0.0)
+        return dx, dy
+
+    # Interpolate (and extrapolate leading/trailing gaps) over the valid points.
+    # Pandas' spline interpolation needs at least 'order + 1' points, so the order
+    # is capped by the number of valid points instead of a hard-coded 3.
+    order = min(3, n_valid - 1)
+    try:
+        dx_filled = (
+            pd.Series(dx)
+            .interpolate("spline", order=order, limit_direction="both")
+            .to_numpy()
+        )
+        dy_filled = (
+            pd.Series(dy)
+            .interpolate("spline", order=order, limit_direction="both")
+            .to_numpy()
+        )
+    except Exception:
+        # Defensive fallback in case the spline fit is numerically unhappy with a
+        # particular arrangement of points: plain linear interpolation with flat
+        # (nearest-valid-value) extrapolation at the boundaries never raises.
+        idx = np.arange(n)
+        valid_idx = idx[valid]
+        dx_filled = np.interp(idx, valid_idx, dx[valid])
+        dy_filled = np.interp(idx, valid_idx, dy[valid])
+
+    residual = np.isnan(dx_filled) | np.isnan(dy_filled)
+    if residual.any():
+        bad_idx = list(np.where(residual)[0])
+        warnings.warn(
+            f"align(): frame(s) {bad_idx} could not be recovered by interpolation -- "
+            "falling back to identity (no shift) for them."
+        )
+        dx_filled[residual] = 0.0
+        dy_filled[residual] = 0.0
+
+    return dx_filled, dy_filled

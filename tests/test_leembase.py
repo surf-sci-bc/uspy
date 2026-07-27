@@ -160,9 +160,19 @@ def test_stack_align(short_stack):
     stack = short_stack
     template = stack[0].copy()
 
-    # create Stack with artificial shifts
-    x = np.random.rand(len(stack)) * 20 - 10
-    y = np.random.rand(len(stack)) * 20 - 10
+    # create Stack with artificial shifts -- seeded (rather than the previous bare
+    # np.random.rand) so this is deterministic: the sanity check's robust z-score
+    # (see _modified_zscore) can actually fire on a stack this short (unlike the old
+    # classic mean/std z-score, which is mathematically bounded below its own
+    # threshold for <= 10 points and so was a silent no-op here). These synthetic
+    # shifts are large and mutually independent -- an adversarial pattern for any
+    # global outlier detector -- so an unseeded run could occasionally flag a
+    # legitimate frame as an outlier and fail the atol=0.5 assertion below. Seed 7
+    # was checked (both against real ECC recovery on this fixture and against the
+    # outlier threshold) to have a comfortable margin on both counts.
+    rng = np.random.default_rng(7)
+    x = rng.random(len(stack)) * 20 - 10
+    y = rng.random(len(stack)) * 20 - 10
     x[0] = y[0] = 0
 
     for dx, dy, img in zip(x, y, stack):
@@ -229,10 +239,436 @@ def test_stack_align_outlier_rejection(monkeypatch):
 
 
 def test_stack_align_template_warns(short_stack):
+    """Template alignment is fixed (see test_stack_align_template_recovers_shifts) but
+    still less battle-tested than sequential alignment, so it keeps a soft caution --
+    no longer the old "unstable" wording, since the underlying math bug is fixed."""
     stack = short_stack.copy()
-    with pytest.warns(UserWarning, match="unstable"):
+    with pytest.warns(UserWarning, match="template"):
         aligned = stack.align(template=0, mask=False)
     assert aligned.warp_matrix.shape == (len(stack), 3, 3)
+
+
+def test_stack_align_template_recovers_shifts():
+    """Aligning against a fixed template should recover each frame's absolute shift
+    directly -- unlike sequential mode, these must NOT be cumulatively composed.
+    Regression test for the double-composition bug (inv(prev) @ current, then
+    additionally cumulatively multiplied by the sequential-mode loop)."""
+    n = 10
+    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")[0:n]
+    template = stack[0].copy()
+
+    rng = np.random.default_rng(1)
+    x = rng.uniform(-10, 10, n)
+    y = rng.uniform(-10, 10, n)
+    x[0] = y[0] = 0
+
+    for dx, dy, img in zip(x, y, stack):
+        warp = np.array([[1, 0, dx], [0, 1, dy], [0, 0, 1]])
+        img.image = cv.warpPerspective(
+            template.image,
+            warp,
+            img.image.shape[::-1],
+            flags=cv.INTER_CUBIC,
+        )
+
+    with pytest.warns(UserWarning, match="template"):
+        aligned_by_index = stack.copy().align(template=0, mask=False)
+    dx = aligned_by_index.warp_matrix[:, 0, 2]
+    dy = aligned_by_index.warp_matrix[:, 1, 2]
+    np.testing.assert_allclose(x, dx, atol=0.5)
+    np.testing.assert_allclose(y, dy, atol=0.5)
+
+    # Passing the template Image directly should give the same result as an index.
+    with pytest.warns(UserWarning, match="template"):
+        aligned_by_image = stack.copy().align(template=template, mask=False)
+    dx_img = aligned_by_image.warp_matrix[:, 0, 2]
+    dy_img = aligned_by_image.warp_matrix[:, 1, 2]
+    np.testing.assert_allclose(x, dx_img, atol=0.5)
+    np.testing.assert_allclose(y, dy_img, atol=0.5)
+
+
+def test_stack_align_template_out_of_range():
+    """An out-of-range template index should raise a clear error instead of being
+    swallowed by a bare except and passed through to OpenCV as a raw int."""
+    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")[0:5]
+    with pytest.raises(IndexError):
+        stack.align(template=999, mask=False)
+
+
+def test_stack_align_template_bad_type():
+    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")[0:5]
+    with pytest.raises(TypeError):
+        stack.align(template="not a template", mask=False)
+
+
+def test_stack_align_single_frame():
+    """A 1-frame stack has nothing to register against -- align() should return it
+    unchanged with an identity warp instead of crashing (a 1-point array previously
+    reached pandas' spline interpolation, which requires >= 2 points)."""
+    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")[0:1]
+    original = stack[0].image.copy()
+    aligned = stack.align(mask=False)
+    assert len(aligned) == 1
+    np.testing.assert_array_equal(aligned.warp_matrix[0], np.eye(3))
+    np.testing.assert_allclose(aligned[0].image, original, atol=1e-3)
+
+
+@pytest.mark.parametrize("n", [2, 3])
+def test_stack_align_small_stack(n):
+    """Stacks too short for a 4-point cubic spline (the sanity/interpolation code's
+    former hard-coded order=3) should still align without raising, using real ECC
+    registration (typically no gaps at all -- see test_stack_align_small_stack_with_gap
+    for the case that actually forces < 4 valid points)."""
+    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")[0:n]
+    aligned = stack.align(mask=False)
+    assert aligned.warp_matrix.shape == (n, 3, 3)
+    assert not np.isnan(aligned.warp_matrix).any()
+
+
+def test_stack_align_small_stack_with_gap(monkeypatch):
+    """A 3-frame stack with one interior failure has only 2 valid points (frame 0's
+    trivial identity + frame 2's successful registration) -- pandas' spline with a
+    hard-coded order=3 needs >= 4 points and raises 'error (m>k)'. The order must
+    adapt to the number of valid points instead."""
+    n = 3
+    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")[0:n]
+
+    def fake_find_warp_matrix(self, template, **kwargs):
+        # First pairwise call (frame 1 vs frame 0) fails; frame 2 vs frame 1 succeeds.
+        if not hasattr(fake_find_warp_matrix, "called"):
+            fake_find_warp_matrix.called = True
+            raise RuntimeError("simulated ECC failure")
+        matrix = np.eye(3, dtype=np.float32)
+        matrix[0, 2] = 2.0
+        matrix[1, 2] = 3.0
+        return matrix
+
+    monkeypatch.setattr(base.LEEMImg, "find_warp_matrix", fake_find_warp_matrix)
+    aligned = stack.align(mask=False)
+    assert aligned.warp_matrix.shape == (n, 3, 3)
+    assert not np.isnan(aligned.warp_matrix).any()
+
+
+def test_stack_align_boundary_failure_extrapolated(monkeypatch):
+    """A failure on the first or last frame previously left NaN in the final warp
+    matrix (pandas' default interpolate() does not extrapolate leading NaNs). This is
+    only reachable via template mode: in sequential mode frame 0's warp is always the
+    trivial (never-computed) identity, so a genuine *leading* failure can't occur.
+    Boundary frames should now be extrapolated instead of leaking NaN."""
+    n = 10
+    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")[0:n]
+
+    rng = np.random.default_rng(2)
+    raw_dx = rng.normal(0, 1, n)
+    raw_dy = rng.normal(0, 1, n)
+    fail_indices = {0, n - 1}  # first and last frame, both aligned to the template
+
+    calls = {"i": 0}
+
+    def fake_find_warp_matrix(self, template, **kwargs):
+        i = calls["i"]
+        calls["i"] += 1
+        if i in fail_indices:
+            raise RuntimeError("simulated ECC failure")
+        matrix = np.eye(3, dtype=np.float32)
+        matrix[0, 2] = raw_dx[i]
+        matrix[1, 2] = raw_dy[i]
+        return matrix
+
+    monkeypatch.setattr(base.LEEMImg, "find_warp_matrix", fake_find_warp_matrix)
+    with pytest.warns(UserWarning, match="template"):
+        aligned = stack.align(template=0, mask=False)
+
+    assert not np.isnan(aligned.warp_matrix).any()
+
+
+def test_stack_align_recoverable_failure_prints_not_warns(monkeypatch, capfd, recwarn):
+    """A single ECC failure that interpolation can still recover from is the routine,
+    expected path (like statistical outlier rejection) -- it should be printed, not
+    surfaced as a UserWarning that would clutter notebooks."""
+    n = 10
+    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")[0:n]
+
+    rng = np.random.default_rng(3)
+    raw_dx = rng.normal(0, 1, n)
+    raw_dy = rng.normal(0, 1, n)
+    raw_dx[0] = raw_dy[0] = 0.0
+    fail_index = 5
+
+    calls = {"i": 0}
+
+    def fake_find_warp_matrix(self, template, **kwargs):
+        i = calls["i"] + 1
+        calls["i"] += 1
+        if i == fail_index:
+            raise RuntimeError("simulated ECC failure")
+        matrix = np.eye(3, dtype=np.float32)
+        matrix[0, 2] = raw_dx[i]
+        matrix[1, 2] = raw_dy[i]
+        return matrix
+
+    monkeypatch.setattr(base.LEEMImg, "find_warp_matrix", fake_find_warp_matrix)
+    aligned = stack.align(mask=False)
+
+    out, _err = capfd.readouterr()
+    assert "failed" in out.lower()
+    assert not any(issubclass(w.category, UserWarning) for w in recwarn.list)
+    assert not np.isnan(aligned.warp_matrix).any()
+
+
+def test_stack_align_sequential_all_fail_falls_back_to_identity(monkeypatch):
+    """If every pairwise registration fails, only the (trivial, never-computed)
+    identity of the first frame remains valid -- a single valid point can't be
+    interpolated, so the rest should warn and fall back to identity rather than
+    crash or silently propagate nan."""
+    n = 5
+    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")[0:n]
+
+    def always_fail(self, template, **kwargs):
+        raise RuntimeError("simulated ECC failure")
+
+    monkeypatch.setattr(base.LEEMImg, "find_warp_matrix", always_fail)
+    with pytest.warns(UserWarning, match="identity"):
+        aligned = stack.align(mask=False)
+
+    dx = aligned.warp_matrix[:, 0, 2]
+    dy = aligned.warp_matrix[:, 1, 2]
+    np.testing.assert_allclose(dx, 0)
+    np.testing.assert_allclose(dy, 0)
+
+
+def test_stack_align_template_all_fail_returns_zeros(monkeypatch):
+    """In template mode every frame (including the template's own trivial
+    self-alignment) goes through find_warp_matrix -- if all of them fail, there is no
+    valid point at all, and the whole stack should fall back to identity with a
+    warning rather than crash or produce all-nan warp matrices."""
+    n = 5
+    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")[0:n]
+
+    def always_fail(self, template, **kwargs):
+        raise RuntimeError("simulated ECC failure")
+
+    monkeypatch.setattr(base.LEEMImg, "find_warp_matrix", always_fail)
+    with pytest.warns(UserWarning):
+        aligned = stack.align(template=0, mask=False)
+
+    assert not np.isnan(aligned.warp_matrix).any()
+    np.testing.assert_allclose(aligned.warp_matrix[:, 0, 2], 0)
+    np.testing.assert_allclose(aligned.warp_matrix[:, 1, 2], 0)
+
+
+def test_stack_align_does_not_modify_source():
+    """align(inplace=False) (the default) must never mutate the original stack's
+    image data -- project rule: never modify source data."""
+    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")[0:5]
+    originals = [img.image.copy() for img in stack]
+    original_warp_matrices = [img.warp_matrix.copy() for img in stack]
+
+    stack.align(mask=False)
+
+    for img, original in zip(stack, originals):
+        np.testing.assert_array_equal(img.image, original)
+    for img, original_wm in zip(stack, original_warp_matrices):
+        np.testing.assert_array_equal(img.warp_matrix, original_wm)
+
+
+# Note: an "align() on an empty stack" test is not included here -- constructing an
+# empty LEEMStack at all (e.g. via `stack[0:0]`) currently crashes with IndexError
+# inside DataObjectStack.__init__ (uspy/dataobject/base.py:303,
+# `isinstance(source[0], self._type)` with source=[]), which is a pre-existing bug
+# unrelated to align() and out of scope here. align() still guards len(self) == 0
+# defensively (raising a clear ValueError) in case that upstream limitation is ever
+# lifted, or a subclass/virtual stack allows empty construction some other way.
+
+
+### _resolve_shifts (shift cleanup helper used by align())
+
+
+def test_resolve_shifts_no_nan_passthrough():
+    """Small, non-outlying variation with no failures should pass through unchanged
+    (no spline interpolation should even run)."""
+    rng = np.random.default_rng(4)
+    dx = rng.normal(0, 1, 10)
+    dy = rng.normal(0, 1, 10)
+    dx_out, dy_out = base._resolve_shifts(dx.copy(), dy.copy(), sanity=True)
+    np.testing.assert_array_equal(dx_out, dx)
+    np.testing.assert_array_equal(dy_out, dy)
+
+
+def test_resolve_shifts_interior_nan_interpolated():
+    dx = np.array([0.0, 1.0, np.nan, 3.0, 4.0, 5.0])
+    dy = np.array([0.0, 2.0, np.nan, 6.0, 8.0, 10.0])
+    dx_out, dy_out = base._resolve_shifts(dx, dy, sanity=False)
+    assert not np.isnan(dx_out).any()
+    assert not np.isnan(dy_out).any()
+    assert abs(dx_out[2] - 2.0) < 0.5
+    assert abs(dy_out[2] - 4.0) < 0.5
+
+
+def test_resolve_shifts_leading_trailing_extrapolated():
+    """Boundary NaNs (first/last frame failed) should be extrapolated, not left as
+    NaN -- pandas' default interpolate() does not extrapolate on its own."""
+    dx = np.array([np.nan, 1.0, np.nan, np.nan, 4.0])
+    dy = np.array([np.nan, 10.0, np.nan, np.nan, 40.0])
+    dx_out, dy_out = base._resolve_shifts(dx, dy, sanity=False)
+    np.testing.assert_allclose(dx_out, [0.0, 1.0, 2.0, 3.0, 4.0], atol=1e-8)
+    np.testing.assert_allclose(dy_out, [0.0, 10.0, 20.0, 30.0, 40.0], atol=1e-8)
+
+
+@pytest.mark.parametrize("n_valid", [2, 3])
+def test_resolve_shifts_few_valid_points_no_crash(n_valid):
+    """2 or 3 valid points used to reach pandas' hard-coded spline order=3, which
+    requires >= 4 points and raises. The order must adapt instead."""
+    n = 6
+    dx = np.full(n, np.nan)
+    dy = np.full(n, np.nan)
+    valid_idx = np.linspace(0, n - 1, n_valid, dtype=int)
+    dx[valid_idx] = np.arange(n_valid, dtype=float)
+    dy[valid_idx] = np.arange(n_valid, dtype=float) * 2
+    dx_out, dy_out = base._resolve_shifts(dx, dy, sanity=False)
+    assert not np.isnan(dx_out).any()
+    assert not np.isnan(dy_out).any()
+    # the originally-valid points must be preserved exactly
+    np.testing.assert_allclose(dx_out[valid_idx], dx[valid_idx])
+    np.testing.assert_allclose(dy_out[valid_idx], dy[valid_idx])
+
+
+def test_resolve_shifts_single_valid_point_identity_fallback():
+    """A single valid point can't be interpolated or extrapolated (needs >= 2 points
+    even for a linear fit) -- the rest must fall back to identity, with a warning
+    naming the fallback used."""
+    n = 5
+    dx = np.full(n, np.nan)
+    dy = np.full(n, np.nan)
+    dx[2] = 7.0
+    dy[2] = -3.0
+    with pytest.warns(UserWarning, match="identity"):
+        dx_out, dy_out = base._resolve_shifts(dx, dy, sanity=False)
+    expected_dx = np.zeros(n)
+    expected_dx[2] = 7.0
+    expected_dy = np.zeros(n)
+    expected_dy[2] = -3.0
+    np.testing.assert_array_equal(dx_out, expected_dx)
+    np.testing.assert_array_equal(dy_out, expected_dy)
+
+
+def test_resolve_shifts_all_nan_returns_zeros_with_warning():
+    n = 5
+    dx = np.full(n, np.nan)
+    dy = np.full(n, np.nan)
+    with pytest.warns(UserWarning):
+        dx_out, dy_out = base._resolve_shifts(dx, dy, sanity=False)
+    np.testing.assert_array_equal(dx_out, np.zeros(n))
+    np.testing.assert_array_equal(dy_out, np.zeros(n))
+
+
+def test_resolve_shifts_constant_input_no_false_outliers(capfd, recwarn):
+    """Zero standard deviation (e.g. a perfectly static stack) must not divide by
+    zero in the z-score sanity check or raise/warn/print spuriously."""
+    n = 8
+    dx = np.zeros(n)
+    dy = np.zeros(n)
+    dx_out, dy_out = base._resolve_shifts(dx, dy, sanity=True)
+    out, _err = capfd.readouterr()
+    assert out == ""
+    assert not any(issubclass(w.category, UserWarning) for w in recwarn.list)
+    np.testing.assert_array_equal(dx_out, dx)
+    np.testing.assert_array_equal(dy_out, dy)
+
+
+def test_resolve_shifts_outlier_rejected_and_interpolated(capfd):
+    """A gross outlier among enough valid points should be rejected by the sanity
+    check (printed, not warned -- outlier rejection is the expected, routine path,
+    not an error) and recovered by interpolation. Uses the robust (median/MAD-based)
+    outlier score, which -- unlike a classic mean/std z-score -- does not get
+    inflated (and thereby self-masked) by the outlier's own magnitude, so a clearly
+    huge outlier is used here rather than a deliberately moderate one."""
+    n = 15
+    rng = np.random.default_rng(5)
+    dx = rng.normal(0, 1, n)
+    dy = rng.normal(0, 1, n)
+    dx[5] = 1000.0
+    dy[5] = -1000.0
+    dx_out, dy_out = base._resolve_shifts(dx, dy, sanity=True)
+    out, _err = capfd.readouterr()
+    assert "5" in out
+    assert abs(dx_out[5]) < 5
+    assert abs(dy_out[5]) < 5
+
+
+### Robust outlier detection (_modified_zscore / masking-resistant sanity check)
+
+
+def test_modified_zscore_huge_outlier_not_self_masked():
+    """The classic mean/std z-score can be inflated by an extreme value enough that
+    the value's own z-score drops back below the detection threshold ("self-
+    masking"). The median/MAD-based modified z-score should not have this problem:
+    a huge outlier should score very high, and the rest of the (well-behaved) data
+    should score low."""
+    rng = np.random.default_rng(7)
+    x = rng.normal(0, 1, 20)
+    x[10] = 1e6
+    scores = base._modified_zscore(x)
+    assert scores[10] > 100
+    other = np.delete(scores, 10)
+    assert (other < 5).all()
+
+
+def test_modified_zscore_constant_and_mad_zero():
+    """All-identical input has MAD == 0 -- must not divide by zero, and (correctly)
+    reports no outliers. Mostly-identical input plus one clear outlier collapses MAD
+    to 0 too (the median absolute deviation is dominated by the many zero
+    deviations), so the helper must fall back to mean-absolute-deviation scaling
+    instead of returning nonsense/nan/inf."""
+    constant = np.full(10, 3.0)
+    scores = base._modified_zscore(constant)
+    assert np.isfinite(scores).all()
+    np.testing.assert_array_equal(scores, np.zeros(10))
+
+    mostly_constant = np.zeros(10)
+    mostly_constant[3] = 50.0
+    scores = base._modified_zscore(mostly_constant)
+    assert np.isfinite(scores).all()
+    assert scores[3] > scores[np.arange(10) != 3].max()
+
+
+def test_resolve_shifts_multiple_outliers_not_masked(capfd):
+    """Regression test for masking/swamping: with a classic mean/std z-score, one
+    huge outlier inflates the standard deviation enough to also hide a second,
+    smaller-but-still-genuine outlier (verified: with this seed, a classic |z| > 3
+    check flags index 3 but not index 11, even at a magnitude of 8 -- almost 3x the
+    detection threshold's nominal "sigma"). The robust score must catch both, with
+    comfortable margin above `_OUTLIER_ZSCORE_THRESHOLD` for each."""
+    n = 20
+    rng = np.random.default_rng(6)
+    dx = rng.normal(0, 1, n)
+    dy = rng.normal(0, 1, n)
+    dx[3], dy[3] = 40.0, 35.0
+    dx[11], dy[11] = 15.0, -13.5
+
+    dx_out, dy_out = base._resolve_shifts(dx, dy, sanity=True)
+    out, _err = capfd.readouterr()
+
+    assert "3" in out
+    assert "11" in out
+    assert abs(dx_out[3]) < 5 and abs(dy_out[3]) < 5
+    assert abs(dx_out[11]) < 5 and abs(dy_out[11]) < 5
+
+
+def test_resolve_shifts_mad_zero_outlier_detected(capfd):
+    """When most shifts are exactly equal (MAD == 0, e.g. a very static stack with
+    integer-pixel-quantized ECC output), a single gross outlier must still be
+    detected via the mean-absolute-deviation fallback, not silently pass through."""
+    n = 12
+    dx = np.zeros(n)
+    dy = np.zeros(n)
+    dx[6] = 200.0
+    dy[6] = -200.0
+    dx_out, dy_out = base._resolve_shifts(dx, dy, sanity=True)
+    out, _err = capfd.readouterr()
+    assert "6" in out
+    assert abs(dx_out[6]) < 5
+    assert abs(dy_out[6]) < 5
 
 
 ### Normalize edge cases
