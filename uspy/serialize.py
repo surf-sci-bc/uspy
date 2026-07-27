@@ -18,10 +18,24 @@ class Loadable:
 
     _pickle_extension = ".pickle"
 
+    def _dump_pickle(self, fileobj) -> None:
+        """Pickle straight into an already-open file object, instead of building the
+        whole pickled bytestring in memory first (as `dumps()` does) and then writing
+        it -- avoids holding both the live object graph and its full byte serialization
+        in RAM at once, which matters for large stacks."""
+        try:
+            pickle.dump(self, fileobj, protocol=4)
+        except RecursionError:
+            print("Did not pickle due to recursion error.")
+            raise
+
     def dump(self, fname: str, use_pickle: bool = True) -> None:
         """Dumps the object into a JSON/pickle file."""
         with Path(fname).open("wb") as pfile:
-            pfile.write(self.dumps(use_pickle))
+            if use_pickle:
+                self._dump_pickle(pfile)
+            else:
+                pfile.write(self.dumps(use_pickle=False))
 
     def dumps(self, use_pickle: bool = True) -> bytes:
         """Dumps the object with pickle and returns it as a bytestring"""
@@ -49,11 +63,14 @@ class Loadable:
         if compress:
             print("Compressing data...")
             with bz2.BZ2File(fname, "w") as bzfile:
-                bzfile.write(self.dumps(use_pickle=pickl))
+                self._dump_pickle(bzfile)
             print("Done.")
+        elif pickl:
+            with Path(fname).open("wb") as pfile:
+                self._dump_pickle(pfile)
         else:
             with Path(fname).open("wb") as pfile:
-                pfile.write(self.dumps(use_pickle=pickl))
+                pfile.write(self.dumps(use_pickle=False))
 
         return self
 

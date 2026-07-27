@@ -23,6 +23,7 @@ import numpy as np
 import cv2 as cv
 
 from uspy.dataobject import Image, ImageStack
+from uspy.dataobject.lazy import LazyImageStack, da as _da
 from uspy.derived import StitchedLine
 from uspy.leem.utility import imgify
 from uspy.roi import ROI
@@ -201,8 +202,14 @@ class LEEMImg(Image):
         if not isinstance(dark_counts, (int, float, complex)):
             dark_counts = imgify(dark_counts)
 
-        result = (self - dark_counts) / (mcp - dark_counts)
-        result.image = np.nan_to_num(result.image, posinf=0, neginf=0)
+        # In-place `/=` and `nan_to_num(..., copy=False)` avoid two of the four
+        # transient full-image allocations the naive `(a) / (b)` + reassignment would
+        # produce here (`self - dark_counts` and `mcp - dark_counts` still each need
+        # one copy, to avoid mutating `self`/`mcp`) -- this loop runs once per image in
+        # `LEEMStack.normalize`.
+        result = self - dark_counts
+        result /= mcp - dark_counts
+        np.nan_to_num(result.image, copy=False, posinf=0, neginf=0)
 
         if inplace:
             self.image = result.image
@@ -342,30 +349,66 @@ class LEEMImg(Image):
 
 
 class LEEMStack(ImageStack):
+    """Stack of `LEEMImg`s, held fully in memory as a list of independent per-frame
+    objects (see `uspy.dataobject.base.DataObjectStack`). For a stack close to or
+    larger than available RAM, prefer building it lazily instead --
+    ``LEEMStack(path, lazy=True)`` (or ``.to_lazy()`` on an existing stack) returns a
+    `LazyLEEMStack` backed by a chunked, out-of-core `dask.array`: loading, slicing,
+    `+ - * /`, `.average()`, and `.normalize()` all stay streamed/chunked there instead
+    of materializing every frame at once. `.align()` and anything that touches
+    `stack.image` (which always rebuilds a full `(N, H, W)` array on access, see
+    `DataObjectStack.__getattr__`) still require the eager, fully in-memory `LEEMStack`
+    -- call `.materialize()` on a (small enough) slice of a lazy stack for those.
+    """
+
     _type = LEEMImg
+
+    def __new__(cls, *args, lazy: bool = False, **kwargs):
+        if lazy:
+            # Deferred to call time: LazyLEEMStack is defined later in this module, but that's
+            # fine since this body only runs when LEEMStack(..., lazy=True) is actually called.
+            kwargs.pop("virtual", None)
+            return LazyLEEMStack(*args, **kwargs)
+        return super().__new__(cls)
 
     def __init__(
         self,
         *args,
         reader: Union[str, LEEMReader, None] = None,
         time_origin: Optional[Union[TimeOrigin, Number]] = None,
+        lazy: bool = False,
         **kwargs,
     ) -> None:
+        if lazy:
+            # __new__ already built and returned a standalone LazyLEEMStack above; since it
+            # isn't a LEEMStack subclass, Python won't actually call this __init__ on it --
+            # this branch only guards against __init__ being invoked directly.
+            return
         source = args[0] if args else kwargs.get("source")
-        if reader is None:
-            # If constructed directly from a list of already-built LEEMImgs (rather than
-            # from a path/glob), inherit their reader instead of silently defaulting to
-            # Elmitec -- relevant if the stack is later virtualized/reconstructed.
-            try:
-                if not isinstance(source, str) and isinstance(source[0], LEEMImg):
+        # If constructed directly from a list of already-built LEEMImgs (rather than from a
+        # path/glob) -- as slicing, boolean-mask filtering, and .average() all do internally,
+        # by rebuilding a LEEMStack from the previous stack's own elements -- inherit their
+        # reader instead of silently defaulting to Elmitec (relevant if the stack is later
+        # virtualized/reconstructed), and skip post_process_stack below: it mutates each
+        # element's own metadata in place on the *original* construction (e.g. distributing a
+        # shared tracefile's per-image values), so already-built elements carried over into a
+        # slice/filter/average already have correct metadata -- there's nothing left to
+        # post-process, and re-running it would re-read the reader's source data (e.g. the
+        # full, now-mismatched-length tracefile) against a differently-sized stack.
+        built_from_objects = False
+        try:
+            if not isinstance(source, str) and isinstance(source[0], LEEMImg):
+                built_from_objects = True
+                if reader is None:
                     reader = source[0]._reader
-            except (TypeError, IndexError):
-                pass
+        except (TypeError, IndexError):
+            pass
         self._reader = resolve_reader(source, reader)
         # initialize with np.nan for the first calls to self._single_construct
         self._time_origin = TimeOrigin(time_origin)
         super().__init__(*args, **kwargs)
-        self._reader.post_process_stack(self)
+        if not built_from_objects:
+            self._reader.post_process_stack(self)
         # now we can access the 0th element and set the value
         if time_origin is None:
             self._time_origin.value = self[0].timestamp
@@ -433,6 +476,11 @@ class LEEMStack(ImageStack):
         inplace : bool, default False
             If 'True' the stack itself will be registered
             If 'False' a copy of the stack will be registered
+
+            .. note:: With 'False' (the default) the whole stack is deep-copied up
+                front, so peak memory is briefly ~2x the stack's size. For a stack
+                close to the memory limit, pass 'inplace=True' (registering the stack
+                in place) instead.
         mask : bool, np.ndarray or None, default True
             Mask that will be used during registration
 
@@ -602,6 +650,123 @@ class LEEMStack(ImageStack):
                 stack[index] = img.normalize(mcp=mcp, **kwargs)
 
         return stack
+
+    def to_lazy(self, chunks: int = 1) -> LazyLEEMStack:
+        """Rebuild this stack as an out-of-core `LazyLEEMStack` over the same per-element
+        sources. See `ImageStack.to_lazy`."""
+        sources = self.sources
+        if None in sources:
+            raise ValueError("Can't build a lazy stack without source information.")
+        return LazyLEEMStack(
+            sources, reader=self._reader, time_origin=self._time_origin, chunks=chunks
+        )
+
+
+class LazyLEEMStack(LazyImageStack):
+    """
+    Out-of-core counterpart to `LEEMStack`, backed by a lazy `dask.array` of pixel data
+    instead of a fully in-memory list of `LEEMImg`s. See `uspy.dataobject.lazy.LazyImageStack`
+    for the general design (metadata kept resident, pixels lazy/chunked).
+
+    Only a subset of `LEEMStack`'s API is supported: construction from a `.dat` folder/glob or
+    a 3D TIFF, indexing/slicing, per-frame metadata access, `average()`, elementwise arithmetic
+    (+ - * /), and `.normalize()`. `.align()` is intentionally NOT provided here -- ECC
+    registration needs pairwise access to full-resolution frames and doesn't parallelize onto
+    dask cleanly; call `.materialize()` (or build a `LEEMStack` over a smaller slice) and use
+    the regular `.align()` there.
+
+    Requires the optional 'dask'/'zarr' dependencies: ``pip install uspy[bigdata]``.
+    """
+
+    _type = LEEMImg
+    _materialized_type = LEEMStack
+
+    def __init__(
+        self,
+        source: Union[str, Iterable],
+        reader: Union[str, LEEMReader, None] = None,
+        time_origin: Optional[Union[TimeOrigin, Number]] = None,
+        chunks: int = 1,
+        lazy: bool = True,  # accepted and ignored, see LazyImageStack.__init__
+    ) -> None:
+        self._reader = resolve_reader(source, reader)
+        self._time_origin = TimeOrigin(time_origin)
+        super().__init__(source, chunks=chunks)
+        if time_origin is None:
+            self._time_origin.value = self._meta_list[0].get("timestamp", np.nan)
+
+    def _build(self, source: Union[str, Iterable], chunks: int) -> tuple:
+        if isinstance(source, str) and source.lower().endswith((".tif", ".tiff")):
+            return self._build_from_tiff_stack(source, chunks)
+        fnames = self._reader.list_files(source)
+        if not fnames:
+            if isinstance(source, list):
+                fnames = source
+            else:
+                raise ValueError(f"No files were found at path {source}")
+        return self._build_from_files(fnames, chunks)
+
+    def _read_pixels(self, fname: str) -> np.ndarray:
+        return np.asarray(self._reader.parse_image(fname)["image"], dtype=np.float32)
+
+    def _read_metadata(self, fname: str) -> dict:
+        return self._reader.parse_metadata(fname)
+
+    def _make_element(self, pixels: np.ndarray, meta: dict, index: int) -> LEEMImg:
+        element = LEEMImg(pixels, reader=self._reader, time_origin=self._time_origin)
+        self._apply_meta(element, meta)
+        if self._sources is not None:
+            element._source = self._sources[index]
+        return element
+
+    def _wrap(self, dask_array, meta_list: list, sources) -> "LazyLEEMStack":
+        new = super()._wrap(dask_array, meta_list, sources)
+        new._reader = self._reader
+        new._time_origin = self._time_origin
+        return new
+
+    @property
+    def time_origin(self) -> Number:
+        return self._time_origin.value
+
+    @time_origin.setter
+    def time_origin(self, value: Number) -> None:
+        self._time_origin.value = value
+
+    def normalize(
+        self, mcp: Union[Image, str, None] = None, dark_counts: Union[int, float, Image] = 0
+    ) -> LazyLEEMStack:
+        """Lazy counterpart to `LEEMStack.normalize`: computes ``(img - dark_counts) /
+        (mcp - dark_counts)`` as a dask expression, so it stays chunked/streamed instead of
+        materializing the whole stack. Unlike `LEEMStack.normalize`, `mcp` must be given
+        explicitly -- falling back to each frame's stored '.mcp' metadata would require
+        resolving it per frame, which isn't meaningfully cheaper than materializing."""
+        if mcp is None:
+            raise ValueError(
+                "LazyLEEMStack.normalize() requires an explicit 'mcp' image (unlike "
+                "LEEMStack.normalize, it can't fall back to each frame's stored '.mcp' "
+                "metadata)."
+            )
+        mcp_img = imgify(mcp)
+        mcp_arr = np.asarray(mcp_img.image, dtype=np.float32)
+        if isinstance(dark_counts, (int, float, complex)):
+            dark_value, dark_arr = dark_counts, dark_counts
+        else:
+            dark_img = imgify(dark_counts)
+            dark_value, dark_arr = dark_img, np.asarray(dark_img.image, dtype=np.float32)
+
+        result = (self._dask - dark_arr) / (mcp_arr - dark_arr)
+        # Match np.nan_to_num(result, posinf=0, neginf=0) (default nan=0 too) -- the installed
+        # dask version's nan_to_num doesn't accept posinf/neginf kwargs.
+        result = _da.where(_da.isfinite(result), result, 0).astype(np.float32)
+
+        meta_list = []
+        for meta in self._meta_list:
+            new_meta = dict(meta)
+            new_meta["mcp"] = mcp_img.source
+            new_meta["dark_counts"] = dark_value
+            meta_list.append(new_meta)
+        return self._wrap(result, meta_list, self._sources)
 
 
 class IVCurve(StitchedLine):

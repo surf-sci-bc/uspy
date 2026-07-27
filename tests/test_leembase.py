@@ -51,6 +51,29 @@ def test_img_copying(img):
     assert img2 is not img
 
 
+def test_img_filter_contrast_carries_over_state(img):
+    # LEEMImg carries extra per-instance state beyond base Image (_reader, _time_origin,
+    # default_mask) that DataObject._with_data (which filter()/contrast() are built on)
+    # intentionally shares by reference rather than deep-copying, unlike copy(). Lock that
+    # contract in, alongside the basic "still a correctly-transformed, correctly-typed
+    # LEEMImg" check -- this is what a first, buggy _with_data got silently wrong (it never
+    # actually substituted the new pixel array at all).
+    filtered = img.filter("gaussian")
+    contrasted = img.contrast("equal")
+
+    for result in (filtered, contrasted):
+        assert isinstance(result, LEEMImg)
+        assert result is not img
+        assert not np.array_equal(result.image, img.image)
+        assert result.data is not img.data
+        assert result.meta is not img.meta
+        assert same_or_nan(result.energy, img.energy)
+        assert same_or_nan(result.temperature, img.temperature)
+        # documented _with_data contract: shared, not deep-copied, by reference
+        assert result._reader is img._reader
+        assert result._time_origin is img._time_origin
+
+
 def test_imge_constructor_nonsense():
     with pytest.raises(FileNotFoundError):
         _ = base.LEEMImg("nonsense")

@@ -76,8 +76,14 @@ UNIT_CODES = {
 }
 
 
-def parse_dat(fname: str, debug: bool = False) -> dict[str, Any]:
-    """Parse a UKSOFT2001 file."""
+def parse_dat(fname: str, debug: bool = False, read_image: bool = True) -> dict[str, Any]:
+    """Parse a UKSOFT2001 file.
+
+    If `read_image` is False, the trailing pixel block is skipped and no "image" key is
+    returned. All metadata fields come from the header walk before the pixel block and are
+    unaffected either way, so this is a cheap way to read just a file's metadata (e.g. to
+    build a lazy stack's per-frame metadata without touching pixel data).
+    """
     data = {}
 
     def parse_block(block, field_dict):
@@ -140,12 +146,16 @@ def parse_dat(fname: str, debug: bool = False) -> dict[str, Any]:
                     print(f"\tunknown: {keyunit[:-1]} -> {data[keyunit[:-1]]}")
             bit = uk_file.read(1)[0]
 
-        size = data["width"] * data["height"]
-        uk_file.seek(-2 * size, 2)
-        image = np.fromfile(uk_file, dtype=np.uint16, sep="", count=size)
-        image = np.array(image, dtype=np.float32)
-        image = np.flipud(image.reshape((data["height"], data["width"])))
-        data["image"] = image.astype(np.float32)
+        if read_image:
+            size = data["width"] * data["height"]
+            uk_file.seek(-2 * size, 2)
+            image = np.fromfile(uk_file, dtype=np.uint16, sep="", count=size)
+            # reshape/flipud are views (no copy); doing the uint16->float32 conversion
+            # last means it's also the one copy that makes the result C-contiguous, so
+            # there's a single full-frame allocation here instead of two (previously:
+            # one copy to float32, then another to make the flipped view contiguous).
+            image = np.flipud(image.reshape((data["height"], data["width"])))
+            data["image"] = np.array(image, dtype=np.float32)
 
     for new, old in ATTR_NAMES.items():
         data[new] = data.pop(old, np.nan)
@@ -171,6 +181,9 @@ class ElmitecReader(LEEMReader):
 
     def parse_image(self, source: str) -> dict[str, Any]:
         return parse_dat(source)
+
+    def parse_metadata(self, source: str) -> dict[str, Any]:
+        return parse_dat(source, read_image=False)
 
     def list_files(self, source: Union[str, Iterable]) -> list:
         if not isinstance(source, str):

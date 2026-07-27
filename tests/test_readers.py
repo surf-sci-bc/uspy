@@ -518,6 +518,17 @@ def test_xpeem_stack_slice_preserves_reader(xpeem_dat_stack):
     assert len(sliced) == 5
     assert isinstance(sliced._reader, ElettraReader)
 
+    # Slicing must not re-run post_process_stack against the full (now mismatched-length)
+    # tracefile: that used to attach the *whole* un-sliced trace column to the slice as a
+    # plain instance attribute, silently shadowing the per-element gather (sliced.energy
+    # would return all 51 values instead of the correctly-sliced 5). Confirm the gather
+    # matches the corresponding subset of the full stack instead.
+    np.testing.assert_allclose(sliced.energy, xpeem_dat_stack.energy[:5])
+    np.testing.assert_allclose(sliced.temperature, xpeem_dat_stack.temperature[:5])
+    np.testing.assert_array_equal(sliced.ImageNum, xpeem_dat_stack.ImageNum[:5])
+    for i in range(5):
+        assert sliced[i].energy == xpeem_dat_stack[i].energy
+
 
 def test_xpeem_config_file_resolution(tmp_path):
     # copy a few real files (with their shared sidecars, but no tracefile) into a

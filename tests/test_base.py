@@ -3,6 +3,7 @@
 from __future__ import annotations
 import numbers
 
+import cv2 as cv
 import numpy as np
 import pandas as pd
 from numpy.testing import assert_almost_equal, assert_array_equal
@@ -228,6 +229,53 @@ def test_stack_setattr(list1darrays, virtual):
         assert stack.number == 1
 
 
+def test_stack_setattr_scalar_collision_raises(list1darrays):
+    """A non-iterable scalar assignment must not silently shadow a real per-element
+    attribute's gather: stack.some_meta = 5.0 previously became a plain instance attribute
+    with no signal at all, so afterwards stack.some_meta returned 5.0 instead of the
+    per-element array."""
+    sources = list1darrays
+    stack = MinimalObjectStack(sources, virtual=False)
+
+    assert len(stack.some_meta) == len(sources)  # baseline: per-element gather works
+
+    with pytest.raises(ValueError):
+        stack.some_meta = 5.0
+
+    # the rejected assignment must not have taken effect
+    assert len(stack.some_meta) == len(sources)
+
+
+def test_stack_setattr_mismatched_iterable_collision_raises(list1darrays):
+    """A mismatched-length *iterable* assignment must be refused the same way as a scalar
+    when it collides with a real per-element field -- this used to be allowed through (after
+    printing a notice), attaching the whole iterable as a plain instance attribute and
+    shadowing the per-element gather the same way a scalar would. (Originally added to
+    accommodate uspy/leem/readers/elettra.py's post_process_stack attaching a mismatched-
+    length tracefile column to a sliced stack -- that turned out to be a bug, not a real use
+    case, and is fixed at its source; see uspy/leem/base.py's LEEMStack.__init__.)"""
+    sources = list1darrays
+    stack = MinimalObjectStack(sources, virtual=False)
+
+    assert len(stack.some_meta) == len(sources)  # baseline: per-element gather works
+
+    mismatched = ["x"] * (len(sources) + 1)  # deliberately wrong length
+    with pytest.raises(ValueError):
+        stack.some_meta = mismatched
+
+    # the rejected assignment must not have taken effect
+    assert len(stack.some_meta) == len(sources)
+
+    # a genuinely non-colliding mismatched-length iterable is still allowed (existing
+    # behavior, e.g. test_stack_setattr's `stack.array = [1, 2]` above)
+    stack.totally_new_field = mismatched
+    assert stack.totally_new_field == mismatched
+
+    # a genuinely new, non-colliding scalar label is still allowed (existing behavior)
+    stack.totally_new_label = "fine"
+    assert stack.totally_new_label == "fine"
+
+
 @pytest.mark.parametrize("virtual", [False])
 @pytest.mark.parametrize(("source", "source_ext"), [(ARRAY_1D[0], ARRAY_1D[1])])
 def test_stack_extend(source, source_ext, virtual):
@@ -396,6 +444,126 @@ def test_image_div_image(testimgpng):
     # 0/0 gives NaN so we have to get rid of it before testing
     assert (np.nan_to_num(img2.image) == np.eye(10)).all()
     assert img2 is not testimgpng
+
+
+### Image Filter/Contrast Tests
+#
+# Regression coverage for `DataObject._with_data`, the helper `filter`/`contrast` build their
+# result with: a first version silently no-op'd `new._data = ...` because of the pre-existing
+# `__setattr__` guard against replacing `_data`/`_meta` once already set on an instance, so
+# filtered/contrasted images silently kept their *original* pixels. These tests assert on
+# exactly what that bug violated: the result differs from the input as expected, the input is
+# untouched, and the result's `_data`/`_meta` are independent dict objects (not the same ones
+# the original still holds) -- not just an independent wrapper pointing at shared containers.
+
+FILTER_METHODS = [
+    ("gaussian", {}),
+    ("blur", {}),
+    ("median", {}),
+    ("kernel", {"kernel": np.ones((3, 3), dtype=np.float32) / 9}),
+]
+
+
+@pytest.mark.parametrize(
+    "method, kwargs", FILTER_METHODS, ids=[case[0] for case in FILTER_METHODS]
+)
+def test_image_filter(method, kwargs, testimgpng):
+    orig = testimgpng.image.copy()
+
+    result = testimgpng.filter(method, **kwargs)
+
+    if method == "gaussian":
+        expected = cv.GaussianBlur(orig, (3, 3), -1)
+    elif method == "blur":
+        expected = cv.blur(orig, (3, 3))
+    elif method == "median":
+        expected = cv.medianBlur(orig, 3)
+    else:
+        expected = cv.filter2D(orig, ddepth=-1, kernel=kwargs["kernel"])
+
+    assert np.allclose(result.image, expected)
+    assert result is not testimgpng
+    assert result.image is not testimgpng.image
+    assert np.array_equal(testimgpng.image, orig)  # original untouched
+    assert result.data is not testimgpng.data
+    assert result.meta is not testimgpng.meta
+
+
+def test_image_filter_unknown_method_raises(testimgpng):
+    with pytest.raises(ValueError):
+        testimgpng.filter("nonsense")
+
+
+def test_image_contrast_equal(testimgpng):
+    orig = testimgpng.image.copy()
+
+    result = testimgpng.contrast("equal")
+    expected = cv.equalizeHist(orig.astype(np.uint8))
+
+    assert np.allclose(result.image, expected)
+    assert result is not testimgpng
+    assert result.image is not testimgpng.image
+    assert np.array_equal(testimgpng.image, orig)
+    assert result.data is not testimgpng.data
+    assert result.meta is not testimgpng.meta
+
+
+def test_image_contrast_clahe():
+    # CLAHE requires an 8-/16-bit single-channel source -- unlike the float32 `testimgpng`
+    # fixture, which .contrast("clahe") can't currently handle (a separate, pre-existing
+    # limitation of the "clahe" branch, not something this test is about); use a directly
+    # constructed uint8 image so this actually exercises the _with_data-based code path.
+    array = np.random.default_rng(0).integers(0, 256, size=(12, 12), dtype=np.uint8)
+    img = Image(array)
+    orig = img.image.copy()
+
+    result = img.contrast("clahe")
+    expected = cv.createCLAHE().apply(orig)
+
+    assert np.allclose(result.image, expected)
+    assert result is not img
+    assert result.image is not img.image
+    assert np.array_equal(img.image, orig)
+    assert result.data is not img.data
+    assert result.meta is not img.meta
+
+
+def test_image_contrast_fallback_returns_independent_copy(testimgpng):
+    # "auto" (and any other unrecognized method) hits contrast()'s fallback, which mirrors
+    # the pre-_with_data behavior of returning an unmodified but independent copy.
+    orig = testimgpng.image.copy()
+
+    result = testimgpng.contrast("auto")
+
+    assert result is not testimgpng
+    assert result.image is not testimgpng.image
+    assert np.array_equal(result.image, orig)
+    assert np.array_equal(testimgpng.image, orig)
+    assert result.data is not testimgpng.data
+    assert result.meta is not testimgpng.meta
+
+
+def test_dataobject_with_data_independent_of_original():
+    """Direct unit test for `DataObject._with_data`, independent of any specific caller: the
+    exact invariant a prior bug broke (a plain `new._data = ...` was silently swallowed by
+    `__setattr__`'s guard against replacing `_data`/`_meta` once already set, so the
+    substituted array never actually took effect)."""
+    original = Image(np.zeros((3, 3)))
+    new_array = np.ones((3, 3))
+
+    result = original._with_data(image=new_array)
+
+    assert result.image is new_array
+    assert result is not original
+    assert result.data is not original.data
+    assert result.meta is not original.meta
+    assert np.array_equal(original.image, np.zeros((3, 3)))  # original untouched
+
+    # mutating one's meta afterward must not affect the other
+    result.meta["probe"] = "result"
+    original.meta["probe"] = "original"
+    assert result.meta["probe"] == "result"
+    assert original.meta["probe"] == "original"
 
 
 ### Stack Arithmetic Tests

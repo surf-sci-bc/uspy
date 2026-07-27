@@ -142,6 +142,45 @@ class DataObject(Loadable):
         """Return a deep copy."""
         return copy.deepcopy(self)
 
+    def _with_data(self, **data: Any) -> DataObject:
+        """Return a new instance of the same type, with the given data array(s)
+        substituted for the current ones and `_data`/`_meta`/`_units` independently
+        copied -- without duplicating any data array in the process (unlike `copy()`,
+        which deep copies everything, including arrays that are about to be thrown
+        away).
+
+        Meant for methods that compute a brand-new data array from scratch (e.g. a
+        filtered or warped image) and just need somewhere to put it alongside the
+        original's metadata -- `self.copy()` followed by overwriting the array would
+        deep-copy the original array only to immediately discard it, doubling peak
+        memory for no benefit. Because of that, this is only worth reaching for where
+        it runs on every element of a potentially large stack (e.g. `Image.filter`/
+        `.contrast`, mapped by `ImageStack.filter`); for something applied to a
+        handful of images at a time, plain `self.copy()` is simpler and not worth
+        replacing.
+
+        Independence contract, weaker than `copy()`'s: `_data` (a new dict; the
+        substituted arrays plus the rest shared by reference with `self`), `_meta`,
+        and `_units` are independent of `self` afterwards (mutating one's contents
+        doesn't affect the other's). Everything else on the instance -- `_source`, and
+        any subclass-specific state such as `LEEMImg._reader`/`_time_origin`/
+        `default_mask` -- is shared by reference with `self`, not deep-copied. That's
+        intentional (this is lightweight, shared config rather than per-call data --
+        e.g. a `LEEMStack` already shares one `_reader` instance across all of its
+        elements), but it is a real difference from `copy()`, worth remembering if a
+        future caller assumes full independence.
+        """
+        new = copy.copy(self)  # shares _data/_meta/_units/other attrs by reference
+        # `__setattr__` below silently no-ops `self._data = ...`/`self._meta = ...`
+        # once those already exist on the instance (see `__setattr__`, intended to
+        # force in-place mutation of the dict rather than replacing it) -- `object.
+        # __setattr__` bypasses that guard, which we need here to give `new` its own
+        # independent dicts instead of the ones it started out sharing with `self`.
+        object.__setattr__(new, "_data", dict(self._data, **data))
+        object.__setattr__(new, "_meta", copy.deepcopy(self._meta))
+        object.__setattr__(new, "_units", copy.deepcopy(self._units))
+        return new
+
     @property
     def source(self) -> Optional[Any]:
         """The original object from which this instance was created (e.g., filename)."""
@@ -435,10 +474,34 @@ class DataObjectStack(Loadable):
             for obj, single_value in zip(self, value):
                 setattr(obj, attr, single_value)
         else:
-            if isinstance(value, Iterable) and len(value) != len(self):
-                print(
-                    f"Attribute {attr} with length {len(value)} cannot be assigned elementwise to "
-                    f"stack with length {len(self)}. It will be assigned to the stack itself."
+            # A scalar, or a mismatched-length iterable, would otherwise silently become a
+            # plain instance attribute here with no real signal (a mismatched-length iterable
+            # prints a notice, easy to miss) -- which, if `attr` happens to name a real
+            # per-element field, permanently shadows that field's __getattr__ gather (e.g.
+            # `stack.energy = 5.0` would make `stack.energy` return 5.0 instead of the
+            # per-element array). Refuse both when there's something to shadow -- unless
+            # `attr` is itself a real class-level property (e.g. LEEMStack.time_origin),
+            # which must still get a chance to run its own setter.
+            collides = (
+                len(self)
+                and hasattr(self[0], attr)
+                and not isinstance(getattr(type(self), attr, None), property)
+            )
+            if isinstance(value, Iterable):
+                if len(value) != len(self):
+                    if collides:
+                        raise ValueError(
+                            f"'{attr}' is a per-element attribute; can't overwrite it with a "
+                            "mismatched-length iterable."
+                        )
+                    print(
+                        f"Attribute {attr} with length {len(value)} cannot be assigned "
+                        f"elementwise to stack with length {len(self)}. It will be assigned "
+                        "to the stack itself."
+                    )
+            elif collides:
+                raise ValueError(
+                    f"'{attr}' is a per-element attribute; can't overwrite it with a scalar."
                 )
             return super().__setattr__(attr, value)
 

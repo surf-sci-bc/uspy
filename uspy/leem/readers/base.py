@@ -59,6 +59,18 @@ class LEEMReader:
         """
         raise NotImplementedError(f"{type(self).__name__} cannot parse single images")
 
+    def parse_metadata(self, source: str) -> dict[str, Any]:
+        """
+        Parse just the metadata of a single file source, without necessarily loading pixel
+        data -- used by the lazy/out-of-core stack backend (`uspy.dataobject.lazy`) to build
+        per-frame metadata cheaply. The default falls back to `parse_image` and discards the
+        "image" data key; readers that can skip the pixel block entirely (e.g. `ElmitecReader`)
+        should override this for a real speedup.
+        """
+        idict = dict(self.parse_image(source))
+        idict.pop("image", None)
+        return idict
+
     def list_files(self, source: Union[str, Iterable]) -> list:
         """
         Turn a directory/glob-pattern/... into a sorted list of per-image sources

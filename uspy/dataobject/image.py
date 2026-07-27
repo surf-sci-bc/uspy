@@ -102,42 +102,40 @@ class Image(_ArithmeticMixin, DataObject):
             If specified method is not valid.
         """
 
-        img = self.copy()
-
         if method == "gaussian":
             sigma = kwargs.pop("sigma", -1)
             size = kwargs.pop("size", (3, 3))
             if isinstance(size, int):
                 size = (size, size)
-            img.image = cv.GaussianBlur(self.image, size, sigma, **kwargs)
+            filtered = cv.GaussianBlur(self.image, size, sigma, **kwargs)
         elif method == "blur":
             size = kwargs.pop("size", (3, 3))
             if isinstance(size, int):
                 size = (size, size)
-            img.image = cv.blur(self.image, size, **kwargs)
+            filtered = cv.blur(self.image, size, **kwargs)
         elif method == "median":
             size = kwargs.pop("size", 3)
-            img.image = cv.medianBlur(self.image, size)
+            filtered = cv.medianBlur(self.image, size)
         elif method == "kernel":
             kernel = kwargs.pop("kernel", None)
-            img.image = cv.filter2D(self.image, ddepth=-1, kernel=kernel, **kwargs)
+            filtered = cv.filter2D(self.image, ddepth=-1, kernel=kernel, **kwargs)
         else:
             raise ValueError("Unkown Filter")
 
-        return img
+        return self._with_data(image=filtered)
 
     def contrast(self, method="equal"):
-        img = self.copy()
-        if method == "auto":
-            pass
-
         if method == "equal":
-            img.image = cv.equalizeHist(img.image.astype(np.uint8))
+            adjusted = cv.equalizeHist(self.image.astype(np.uint8))
         elif method == "clahe":
             clahe = cv.createCLAHE()
-            img.image = clahe.apply(img.image)
+            adjusted = clahe.apply(self.image)
+        else:
+            # "auto" (unimplemented) or any other value: mirror the original's
+            # copy-only fallback (an independent array, not shared with self.image).
+            return self.copy()
 
-        return img
+        return self._with_data(image=adjusted)
 
     def is_compatible(self, other: DataObject) -> bool:
         if not super().is_compatible(other):
@@ -153,6 +151,24 @@ class ImageStack(DataObjectStack):
     common image formats like png or tiff."""
 
     _type = Image
+
+    def __new__(cls, *args, lazy: bool = False, **kwargs):
+        if lazy:
+            # Deferred import: uspy.dataobject.lazy imports Image/ImageStack from this module,
+            # so importing it at module level here would be circular.
+            from uspy.dataobject.lazy import LazyImageStack
+
+            kwargs.pop("virtual", None)
+            return LazyImageStack(*args, **kwargs)
+        return super().__new__(cls)
+
+    def __init__(self, *args, lazy: bool = False, **kwargs) -> None:
+        if lazy:
+            # __new__ already built and returned a standalone LazyImageStack above; since it
+            # isn't an ImageStack subclass, Python won't actually call this __init__ on it --
+            # this branch only guards against __init__ being invoked directly.
+            return
+        super().__init__(*args, **kwargs)
 
     def _split_source(self, source: Union[str, Iterable]) -> list:
         if isinstance(source, list):
@@ -220,11 +236,50 @@ class ImageStack(DataObjectStack):
         return type(self)(imgs)
 
     def save(self, fname: str) -> None:
-        if fname.lower().endswith((".tiff", ".tif")):
-            array = np.stack([image.image for image in self])
-            tifffile.imwrite(fname, array)
-        else:
-            super().save(fname)
+        if not fname.lower().endswith((".tiff", ".tif")):
+            return super().save(fname)
+
+        # Streamed frame-by-frame instead of `np.stack([image.image for image in
+        # self])` (which builds a second full (N, H, W) copy of the whole stack,
+        # alongside the already-resident per-frame arrays) -- bounds memory to one
+        # frame at a time. Still matches `np.stack`'s dtype promotion across frames
+        # of differing dtype, so the written file is identical either way.
+        first = self[0]
+        dtype = first.image.dtype
+        for image in self[1:]:
+            dtype = np.promote_types(dtype, image.image.dtype)
+        shape = (len(self),) + first.image.shape
+
+        def frames():
+            for image in self:
+                yield image.image.astype(dtype, copy=False)
+
+        # Passing a generator + explicit shape/dtype (rather than building one big
+        # array) keeps this streamed. photometric="minisblack" avoids tifffile
+        # misreading a 3-frame single-channel stack as RGB (its shape-guessing
+        # heuristic is ambiguous for exactly 3 frames) -- see LazyImageStack.save.
+        tifffile.imwrite(
+            fname,
+            frames(),
+            shape=shape,
+            dtype=dtype,
+            bigtiff=True,
+            photometric="minisblack",
+        )
+        return None
 
     def filter(self, *args, **kwargs):
         return type(self)([img.filter(*args, **kwargs) for img in self])
+
+    def to_lazy(self, chunks: int = 1):
+        """Rebuild this stack as an out-of-core `LazyImageStack` (a lazy dask.array of pixel
+        data) over the same per-element sources, instead of the fully in-memory objects this
+        stack already holds. Requires every element to have a source (e.g. built from files,
+        not from raw in-memory arrays) -- this doesn't retroactively free the memory already
+        held by `self`, it's for handing sources off to the lazy backend."""
+        from uspy.dataobject.lazy import LazyImageStack
+
+        sources = self.sources
+        if None in sources:
+            raise ValueError("Can't build a lazy stack without source information.")
+        return LazyImageStack(sources, chunks=chunks)

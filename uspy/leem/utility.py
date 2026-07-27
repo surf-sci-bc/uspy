@@ -22,12 +22,16 @@ def imgify(img):
     return base.LEEMImg(img)
 
 
-def stackify(stack, virtual=False):
-    if isinstance(stack, base.LEEMStack):
+def stackify(stack, virtual=False, lazy=False):
+    if isinstance(stack, (base.LEEMStack, base.LazyLEEMStack)):
         return stack
     if isinstance(stack, base.LEEMImg):
+        if lazy:
+            raise ValueError("Can't build a lazy stack from a single in-memory LEEMImg")
         return base.LEEMStack([stack])
         # raise ValueError("LEEMStack expected, but got LEEMImg")
+    if lazy:
+        return base.LEEMStack(stack, lazy=True)
     return base.LEEMStack(stack, virtual=virtual)
 
 

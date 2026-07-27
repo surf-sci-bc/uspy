@@ -58,7 +58,10 @@ setup(
     # uses compressed/chunked storage. pip alone can't install pyhdf on macOS/Windows -- get
     # the native library via e.g. "conda install -c conda-forge pyhdf", or "brew install hdf4"
     # before "pip install uspy[smart]".
-    extras_require={"smart": ["pyhdf"]},
+    # dask+zarr back the out-of-core "lazy" stack backend (uspy.dataobject.lazy). They're an
+    # optional extra rather than a core dependency so the base install stays light; stacks
+    # that fit in memory never need them. Install with "pip install uspy[bigdata]".
+    extras_require={"smart": ["pyhdf"], "bigdata": ["dask[array]", "zarr"]},
 )
 
 ### Additional packages
