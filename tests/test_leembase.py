@@ -4,6 +4,8 @@
 # pylint: disable=redefined-outer-name
 # pylint: disable=protected-access
 
+import warnings
+
 import cv2 as cv
 import pytest
 import numpy as np
@@ -301,14 +303,7 @@ def test_stack_time_origin_shared_with_images():
     """A stack directly constructed from file sources shares one mutable TimeOrigin
     object with the LEEMImgs it builds (base.py:354-356, LEEMImg.__init__ reuses an
     existing TimeOrigin instance rather than rewrapping it), so mutating
-    stack.time_origin is visible on every element.
-
-    Note: this identity sharing is NOT preserved across LEEMStack.__getitem__ slicing --
-    a sliced stack gets its own fresh TimeOrigin (copied value only) while its
-    (reused, not reconstructed) elements keep pointing at the original stack's
-    TimeOrigin object, so mutating a *sliced* stack's time_origin does not propagate to
-    its elements. That slicing quirk is not covered here; this test only pins the
-    well-defined, directly-constructed case."""
+    stack.time_origin is visible on every element."""
     stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")
     assert stack[0]._time_origin is stack._time_origin
     stack.time_origin = 100.0
@@ -323,6 +318,108 @@ def test_stack_time_origin_shared_with_images():
 def test_stack_time_origin_defaults_to_first_timestamp():
     stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")
     assert same_or_nan(stack.time_origin, stack[0].timestamp)
+
+
+@pytest.mark.parametrize("virtual", [False, True])
+def test_stack_getitem_slice_shares_time_origin_identity(virtual):
+    """LEEMStack.__init__ reuses an already-built TimeOrigin passed in by __getitem__
+    instead of rewrapping it, so a sliced stack shares the *same* TimeOrigin object with
+    its parent (not just an equal copied value) -- mutating either afterwards is visible
+    on both, and on the (reused, not reconstructed) elements too."""
+    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu", virtual=virtual)
+    stack.time_origin = 123.0
+    sliced = stack[1:4]
+    assert sliced._time_origin is stack._time_origin
+    if not virtual:
+        assert sliced[0]._time_origin is sliced._time_origin
+
+    # mutating the *sliced* stack's time origin after the fact must propagate back to the
+    # parent and to the (shared-identity) elements -- proving real identity, not a value
+    # copied once at slice time.
+    sliced.time_origin = 456.0
+    assert stack.time_origin == 456.0
+    if not virtual:
+        assert stack[1].time_origin == 456.0
+        assert sliced[0].time_origin == 456.0
+
+
+def test_stack_to_lazy_shares_time_origin_identity():
+    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")
+    stack.time_origin = 789.0
+    lazy = stack.to_lazy()
+    assert lazy._time_origin is stack._time_origin
+    lazy.time_origin = 111.0
+    assert stack.time_origin == 111.0
+
+
+### Combining stacks (extend / + / +=) and TimeOrigin reconciliation
+
+
+def test_stack_extend_warns_on_time_origin_mismatch():
+    stack_a = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")
+    stack_b = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")
+    stack_b.time_origin = stack_a.time_origin + 1000.0
+
+    with pytest.warns(UserWarning, match="time origin"):
+        stack_a.extend(stack_b)
+
+
+def test_stack_extend_no_warning_when_origins_match():
+    stack_a = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")
+    stack_b = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")
+    assert stack_a.time_origin == stack_b.time_origin
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        stack_a.extend(stack_b)
+
+
+def test_stack_extend_rebinds_appended_elements_time_origin():
+    stack_a = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")
+    stack_b = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")
+    stack_b.time_origin = stack_a.time_origin + 1000.0
+    n_a = len(stack_a)
+
+    with pytest.warns(UserWarning):
+        stack_a.extend(stack_b)
+
+    appended = stack_a[n_a:]
+    for element in appended:
+        assert element._time_origin is stack_a._time_origin
+        assert element.rel_time == element.timestamp - stack_a.time_origin
+
+    # mutating the merged stack's time origin afterwards must propagate to every
+    # element, including the ones that came from stack_b.
+    stack_a.time_origin = 42.0
+    assert stack_a[n_a].time_origin == 42.0
+
+
+@pytest.mark.parametrize("op", ["add", "iadd"])
+def test_stack_add_and_iadd_operators_rebind_time_origin(op):
+    stack_a = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")
+    stack_b = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")
+    stack_b.time_origin = stack_a.time_origin + 1000.0
+    n_a = len(stack_a)
+
+    with pytest.warns(UserWarning):
+        combined = (stack_a + stack_b) if op == "add" else stack_a.__iadd__(stack_b)
+
+    assert len(combined) == 2 * n_a
+    for element in combined[n_a:]:
+        assert element._time_origin is combined._time_origin
+
+
+def test_stack_extend_virtual_self_nonvirtual_other_no_crash():
+    """Regression test: DataObjectStack.extend previously left `elements` unassigned (an
+    UnboundLocalError) when self was virtual and other was not; it should fall back to
+    other's element sources, same as _deconstruct() does."""
+    stack_a = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu", virtual=True)
+    stack_b = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu", virtual=False)
+    n_a = len(stack_a)
+
+    stack_a.extend(stack_b)
+
+    assert len(stack_a) == n_a + len(stack_b)
 
 
 def test_img_isotime_nan_for_missing_timestamp():
@@ -505,6 +602,7 @@ def test_stack_getitem_slice_propagates_state(virtual):
     assert sliced.virtual == stack.virtual
     assert sliced.time_origin == 123.0
     assert sliced._reader is stack._reader
+    assert sliced._time_origin is stack._time_origin
 
 
 def test_stack_inherits_reader_from_image_list():

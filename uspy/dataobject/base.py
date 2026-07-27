@@ -446,6 +446,8 @@ class DataObjectStack(Loadable):
                 elements = other[:]
             elif other.virtual:
                 elements = other.sources
+            else:
+                elements = [element.source for element in other]
 
         if self.virtual:
             if None in elements:

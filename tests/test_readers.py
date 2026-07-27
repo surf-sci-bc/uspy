@@ -605,6 +605,37 @@ def test_bessy_split_scan_virtual_stack_length_and_order():
     assert all(a <= b for a, b in zip(timestamps, timestamps[1:]))
 
 
+@pytestmark_bessy_split
+@pytest.mark.slow
+def test_bessy_split_scan_parts_appended_as_separate_stacks_reconcile_time_origin():
+    # Documented limitation (test_bessy_split_scan_exact_base_file_loads_only_that_file):
+    # the exact "<base>.hdf" path only loads that one part, so a user working around that
+    # limitation -- or otherwise re-attaching two separately-loaded halves of a split/resumed
+    # measurement -- would naturally load each part as its own LEEMStack and combine them with
+    # extend()/`+=`. Each part independently defaults its time_origin to its own first frame's
+    # timestamp, so the two parts' origins genuinely differ here. Uses extend() in place
+    # (rather than `+`, which forces virtual=False via .copy()) to avoid materializing ~2.3GB
+    # of pixel data just to check the merge -- virtual=True keeps elements as unloaded
+    # (path, frame_index) sources.
+    part1 = base.LEEMStack(BESSY_SPLIT_BASE + ".hdf", reader="smart", virtual=True)
+    part2 = base.LEEMStack(BESSY_SPLIT_BASE + "_1.hdf", reader="smart", virtual=True)
+    assert part1.time_origin != part2.time_origin
+    n1 = len(part1)
+
+    with pytest.warns(UserWarning, match="time origin"):
+        part1.extend(part2)
+
+    assert len(part1) == n1 + len(part2)
+    # a virtual stack's own elements aren't constructed yet, but every LEEMImg built from it
+    # (whether from part1's or part2's original sources) must share the merged stack's own
+    # TimeOrigin, and rel_time must be monotonic across the part1/part2 seam.
+    for i in (0, n1 - 1, n1, len(part1) - 1):
+        element = part1[i]
+        assert element._time_origin is part1._time_origin
+    rel_times = [part1[i].rel_time for i in (0, n1 - 1, n1, len(part1) - 1)]
+    assert all(a <= b for a, b in zip(rel_times, rel_times[1:]))
+
+
 ### parse_dat: the Elmitec UKSOFT2001 binary format parser (uspy.leem.readers.elmitec)
 
 DAT_FNAMES = [

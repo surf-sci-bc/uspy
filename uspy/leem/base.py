@@ -405,7 +405,13 @@ class LEEMStack(ImageStack):
             pass
         self._reader = resolve_reader(source, reader)
         # initialize with np.nan for the first calls to self._single_construct
-        self._time_origin = TimeOrigin(time_origin)
+        # An already-built TimeOrigin (e.g. passed in by __getitem__ when slicing, or by
+        # to_lazy()) is reused by reference rather than rewrapped, so the new stack keeps
+        # sharing the same mutable origin as its source stack -- mirrors LEEMImg.__init__.
+        if isinstance(time_origin, TimeOrigin):
+            self._time_origin = time_origin
+        else:
+            self._time_origin = TimeOrigin(time_origin)
         super().__init__(*args, **kwargs)
         if not built_from_objects:
             self._reader.post_process_stack(self)
@@ -453,6 +459,37 @@ class LEEMStack(ImageStack):
             time_origin=self._time_origin,
             reader=self._reader,
         )
+
+    def extend(self, other: Union[LEEMImg, LEEMStack]) -> None:
+        """Add new LEEMImg(s) to the end of the stack.
+
+        Unlike a plain `DataObjectStack.extend`, this reconciles `time_origin`: `other` may
+        come from an independently-constructed stack (e.g. the two halves of a measurement
+        that was split and resumed), which by default has its own time origin (its own first
+        frame's timestamp) rather than this stack's. Appending it as-is would silently leave
+        part of the merged stack's `rel_time` computed against a different, unrelated origin
+        -- so a mismatch is warned about, and (for non-virtual stacks) the newly appended
+        elements are rebound to this stack's `_time_origin`, restoring one shared origin
+        across the whole stack. `timestamp` itself is an absolute instrument-clock value and
+        is never touched -- only which origin `rel_time` is measured from.
+        """
+        if isinstance(other, (LEEMImg, LEEMStack)):
+            self_origin, other_origin = self.time_origin, other.time_origin
+            if not (np.isnan(self_origin) or np.isnan(other_origin)) and (
+                self_origin != other_origin
+            ):
+                warnings.warn(
+                    UserWarning(
+                        f"Appending elements with a time origin ({other_origin} s) that "
+                        f"differs from this stack's ({self_origin} s) -- their rel_time will "
+                        "now be computed relative to this stack's time origin."
+                    )
+                )
+        n_before = len(self._elements)
+        super().extend(other)
+        if not self.virtual:
+            for element in self._elements[n_before:]:
+                element._time_origin = self._time_origin
 
     def align(
         self,
@@ -690,7 +727,13 @@ class LazyLEEMStack(LazyImageStack):
         lazy: bool = True,  # accepted and ignored, see LazyImageStack.__init__
     ) -> None:
         self._reader = resolve_reader(source, reader)
-        self._time_origin = TimeOrigin(time_origin)
+        # Reuse an already-built TimeOrigin by reference (e.g. passed in by
+        # LEEMStack.to_lazy()) instead of rewrapping it, so the lazy stack keeps sharing
+        # the same mutable origin as its source stack -- mirrors LEEMImg.__init__.
+        if isinstance(time_origin, TimeOrigin):
+            self._time_origin = time_origin
+        else:
+            self._time_origin = TimeOrigin(time_origin)
         super().__init__(source, chunks=chunks)
         if time_origin is None:
             self._time_origin.value = self._meta_list[0].get("timestamp", np.nan)
