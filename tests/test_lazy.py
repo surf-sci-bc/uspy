@@ -26,10 +26,33 @@ from uspy.dataobject.image import Image, ImageStack
 from uspy.dataobject import lazy as lazy_mod
 from uspy.dataobject.lazy import LazyImageStack
 from uspy.leem.base import LEEMImg, LEEMStack, LazyLEEMStack
+from uspy.leem.readers.elettra import ElettraReader
 from uspy.leem.readers.elmitec import ElmitecReader
+from uspy.leem.readers.smart import SmartReader
 from uspy.leem.utility import imgify, stackify
 
-from .conftest import TESTDATA_DIR, STACK_FNAMES, MCP_IMG_FNAME, DC_IMG_FNAME
+from .conftest import (
+    TESTDATA_DIR,
+    STACK_FNAMES,
+    MCP_IMG_FNAME,
+    DC_IMG_FNAME,
+    ELETTRA_TIF_DIR,
+    BESSY_SCAN_FNAME,
+)
+
+
+def assert_field_parity(eager, lazy, fields):
+    """Assert `getattr(eager, field)` and `getattr(lazy, field)` agree element-wise for every
+    field in `fields` -- nan-aware (nan == nan here) and string-aware (exact match)."""
+    for field in fields:
+        eager_values = getattr(eager, field)
+        lazy_values = getattr(lazy, field)
+        assert len(eager_values) == len(lazy_values), field
+        for a, b in zip(eager_values, lazy_values):
+            if isinstance(a, str):
+                assert a == b, field
+            else:
+                assert a == b or (np.isnan(a) and np.isnan(b)), field
 
 
 ### Construction / pixel + metadata parity
@@ -49,15 +72,7 @@ def test_lazy_pixel_parity(stack_folder):
 def test_lazy_metadata_parity(stack_folder):
     eager = LEEMStack(stack_folder)
     lazy = LazyLEEMStack(stack_folder)
-    for field in ("energy", "temperature", "timestamp", "fov"):
-        eager_values = getattr(eager, field)
-        lazy_values = getattr(lazy, field)
-        assert len(eager_values) == len(lazy_values)
-        for a, b in zip(eager_values, lazy_values):
-            if isinstance(a, str):
-                assert a == b
-            else:
-                assert a == b or (np.isnan(a) and np.isnan(b))
+    assert_field_parity(eager, lazy, ("energy", "temperature", "timestamp", "fov"))
 
 
 def test_lazy_metadata_access_reads_no_pixels(stack_folder, monkeypatch):
@@ -76,6 +91,125 @@ def test_lazy_metadata_access_reads_no_pixels(stack_folder, monkeypatch):
     _ = lazy.timestamp
     # Metadata is fully resident from construction -- gathering it must not read any more pixels.
     assert len(calls) == 1
+
+
+### Metadata parity for readers where per-frame metadata isn't (all) in the per-image file:
+### ElettraReader distributes energy/temperature/timestamp/... from a shared tracefile via
+### post_process_stack, and computed LEEMImg properties (rel_time, binding_energy, ...) aren't
+### stored in _meta_list at all -- neither path is exercised by the plain-per-file Elmitec
+### ".dat" fixtures the tests above use, which is why the parity gap on these two readers went
+### unnoticed (see the module docstring's parity claim).
+
+
+def test_lazy_metadata_parity_elettra_tracefile(elettra_tif_fnames):
+    eager = LEEMStack(elettra_tif_fnames, reader="elettra")
+    lazy = LazyLEEMStack(elettra_tif_fnames, reader="elettra")
+    assert len(eager) == len(lazy)
+    # Plain per-frame meta keys, all sourced from the shared tracefile by post_process_stack.
+    assert_field_parity(
+        eager,
+        lazy,
+        ("energy", "temperature", "timestamp", "fov", "objective", "mesh", "emission"),
+    )
+    # Computed LEEMImg properties -- not stored in _meta_list, must be resolved separately.
+    assert_field_parity(
+        eager, lazy, ("rel_time", "binding_energy", "kinetic_energy", "pressure", "isotime")
+    )
+
+
+def test_lazy_metadata_elettra_not_constant_or_nan(elettra_tif_fnames):
+    # Direct (eager-independent) regression guard: catches the original bug even in the
+    # hypothetical case both backends were wrong the same way. Before the fix, lazy 'energy'
+    # was the constant sidecar value (the microscope's Start Voltage, not the beamline energy
+    # ramp) and 'temperature' was nan for every frame.
+    lazy = LazyLEEMStack(elettra_tif_fnames, reader="elettra")
+    assert not np.allclose(lazy.energy, lazy.energy[0])
+    assert not np.isnan(lazy.temperature).all()
+    assert not np.isnan(lazy.rel_time).any()
+
+
+def test_lazy_metadata_elettra_construction_reads_pixels_once(elettra_tif_fnames, monkeypatch):
+    # ElettraReader.parse_metadata (unlike the LEEMReader base's default, which falls back to
+    # parse_image and discards "image") never calls tifffile.imread/reads a ".dat" pixel
+    # block -- Elettra's metadata is entirely sidecar/header-based. And post_process_stack's
+    # tracefile distribution goes straight into _meta_list (LazyImageStack.set_unit), not
+    # through per-frame `stack[i]` access. So, like the plain Elmitec case, constructing a
+    # lazy Elettra stack must read pixels for exactly one frame (frame 0, to learn shape/dtype
+    # for the dask array) no matter how many frames or tracefile columns there are.
+    calls = []
+    original = ElettraReader.parse_image
+    monkeypatch.setattr(
+        ElettraReader,
+        "parse_image",
+        lambda self, source: (calls.append(source), original(self, source))[1],
+    )
+    LazyLEEMStack(elettra_tif_fnames, reader="elettra")
+    assert len(calls) == 1
+
+
+def test_lazy_metadata_parity_smart_scan():
+    eager = LEEMStack(BESSY_SCAN_FNAME, reader="smart")
+    lazy = LazyLEEMStack(BESSY_SCAN_FNAME, reader="smart")
+    assert len(eager) == len(lazy) > 1
+    assert_field_parity(eager, lazy, ("energy", "photon_energy", "timestamp", "width", "height"))
+    # 'rel_time' used to raise AttributeError outright on a lazy stack (the reported bug).
+    assert_field_parity(eager, lazy, ("rel_time", "binding_energy", "kinetic_energy"))
+    # SMART has no temperature/fov in its metadata -- both should still resolve to LEEMImg's
+    # own defaults (via the reader/meta_defaults gap-fill), not raise.
+    assert np.isnan(lazy.temperature).all()
+    assert (lazy.fov == "Unknown FoV").all()
+
+
+def test_lazy_metadata_smart_construction_reads_one_frame_of_pixels(monkeypatch):
+    # SmartReader has no cheap header-only parse_image, so building _meta_list must go
+    # through the dedicated parse_metadata (sourcing width/height from _read_smart_dims)
+    # instead of falling back to parse_image + discarding "image" -- the fallback would read
+    # every frame's pixels just to build metadata, defeating out-of-core loading for exactly
+    # the multi-frame scan files SMART is built around.
+    calls = []
+    import uspy.leem.readers.smart as smart_mod
+
+    original = smart_mod._read_smart_frame
+    monkeypatch.setattr(
+        smart_mod, "_read_smart_frame", lambda path, index: (calls.append(index), original(path, index))[1]
+    )
+    lazy = LazyLEEMStack(BESSY_SCAN_FNAME, reader="smart")
+    # Only frame 0's pixels are read, to learn shape/dtype for the dask array.
+    assert calls == [0]
+    assert len(lazy) > 1
+
+
+def test_lazy_tif_glob_string_loads_per_frame_not_as_3d_stack():
+    # A "*.tif" glob string used to be unconditionally routed to _build_from_tiff_stack
+    # (single 3D TIFF), which would either crash (tifffile can't open a glob pattern) or,
+    # for a real match, silently discard per-frame metadata. It must load one LEEMImg per
+    # matched file, same as the reader's own list_files()-based discovery.
+    lazy = LazyLEEMStack(ELETTRA_TIF_DIR + "*.tif", reader="elettra")
+    assert len(lazy) > 1
+    assert lazy.sources is not None
+    assert not np.allclose(lazy.energy, lazy.energy[0])
+
+
+def test_lazy_single_3d_tiff_still_routes_to_tiff_stack(stack_fname):
+    # Guards the fallback branch of the _build reordering: a source the reader doesn't
+    # recognize (default ElmitecReader.list_files returns [] for a ".tif") that IS an actual
+    # single 3D TIFF file must still load as one multi-frame TIFF stack, not raise.
+    if not stack_fname.lower().endswith((".tif", ".tiff")):
+        pytest.skip("only meaningful for the 3D TIFF fixture")
+    lazy = LazyLEEMStack(stack_fname)
+    assert lazy.sources is None
+    assert len(lazy) > 1
+
+
+def test_to_lazy_preserves_explicit_time_origin(elettra_tif_fnames):
+    # ElettraReader.post_process_stack used to unconditionally reset time_origin to frame 0's
+    # timestamp, which silently clobbered a caller-supplied time_origin when going through
+    # to_lazy() (which reuses the source stack's TimeOrigin by reference). Only an *unset*
+    # time_origin should be seeded from frame 0.
+    eager = LEEMStack(elettra_tif_fnames, reader="elettra")
+    eager.time_origin = 12345.0
+    lazy = eager.to_lazy()
+    assert lazy.time_origin == 12345.0
 
 
 def test_lazy_from_3d_tiff(stack_fname):

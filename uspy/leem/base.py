@@ -14,6 +14,7 @@ from typing import Any, Union, Optional
 from collections.abc import Iterable
 from numbers import Number
 from datetime import datetime
+import os
 import warnings
 from tqdm.auto import tqdm
 import pandas as pd
@@ -764,25 +765,68 @@ class LazyLEEMStack(LazyImageStack):
         else:
             self._time_origin = TimeOrigin(time_origin)
         super().__init__(source, chunks=chunks)
+        # Mirrors LEEMStack.__init__: readers that need a whole-stack pass to fill in
+        # metadata only known once every frame exists (e.g. ElettraReader distributing a
+        # shared tracefile's per-frame columns) get that chance before time_origin is seeded.
+        self._reader.post_process_stack(self)
         if time_origin is None:
             self._time_origin.value = self._meta_list[0].get("timestamp", np.nan)
 
     def _build(self, source: Union[str, Iterable], chunks: int) -> tuple:
-        if isinstance(source, str) and source.lower().endswith((".tif", ".tiff")):
-            return self._build_from_tiff_stack(source, chunks)
+        # Mirrors LEEMStack._split_source: try the reader's own file discovery first (a
+        # folder, glob, or explicit list of per-frame files -- including ".tif"/".tiff",
+        # e.g. Elettra's per-frame TIFFs with a shared tracefile). Only a source the reader
+        # doesn't recognize *and* that is itself an actual single 3D TIFF file falls back to
+        # being read as one multi-frame TIFF stack -- previously any ".tif"/".tiff"-suffixed
+        # string (a bare glob pattern, or a folder holding both .dat and .tif per frame) was
+        # unconditionally routed here, which either crashed or silently loaded the wrong
+        # (whole-file, single-frame-metadata) data instead of raising or reading per-frame.
         fnames = self._reader.list_files(source)
-        if not fnames:
-            if isinstance(source, list):
-                fnames = source
-            else:
-                raise ValueError(f"No files were found at path {source}")
-        return self._build_from_files(fnames, chunks)
+        if fnames:
+            return self._build_from_files(fnames, chunks)
+        if isinstance(source, list) and source:
+            return self._build_from_files(source, chunks)
+        if (
+            isinstance(source, str)
+            and source.lower().endswith((".tif", ".tiff"))
+            and os.path.isfile(source)
+        ):
+            return self._build_from_tiff_stack(source, chunks)
+        raise ValueError(f"No files were found at path {source}")
 
     def _read_pixels(self, fname: str) -> np.ndarray:
         return np.asarray(self._reader.parse_image(fname)["image"], dtype=np.float32)
 
     def _read_metadata(self, fname: str) -> dict:
-        return self._reader.parse_metadata(fname)
+        """Per-frame metadata dict, built the same way a real `LEEMImg(fname, reader=...)`
+        would populate its `_meta`/`_units` (see `LEEMImg.__init__`/`DataObject.__init__`):
+        class-level `_meta_defaults`/`_unit_defaults`, gap-filled by the reader's own
+        `meta_defaults`/`unit_defaults`, then overwritten by the reader's actually-parsed
+        values, with the same `temperature > 3000 -> nan` sentinel rule `LEEMImg.parse`
+        applies. Without this, defaulted keys (e.g. 'mcp', 'photon_energy') would raise
+        AttributeError on a lazy stack instead of returning their eager default."""
+        meta = dict(self._type._meta_defaults)  # pylint: disable=protected-access
+        units = dict(self._type._unit_defaults)  # pylint: disable=protected-access
+        for key, value in self._reader.meta_defaults.items():
+            meta.setdefault(key, value)
+        for key, value in self._reader.unit_defaults.items():
+            units.setdefault(key, value)
+
+        parsed = dict(self._reader.parse_metadata(fname))
+        if parsed.get("temperature", 0) > 3000:
+            parsed["temperature"] = np.nan
+        for key, value in parsed.items():
+            if key.startswith("_"):
+                continue
+            if "_unit" in key:
+                units[key.replace("_unit", "")] = value
+            else:
+                meta[key] = value
+
+        result = meta
+        for key, value in units.items():
+            result[f"{key}_unit"] = value
+        return result
 
     def _make_element(self, pixels: np.ndarray, meta: dict, index: int) -> LEEMImg:
         element = LEEMImg(pixels, reader=self._reader, time_origin=self._time_origin)

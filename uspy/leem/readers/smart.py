@@ -31,6 +31,13 @@ HDF4 reader (`uspy.leem.readers._hdf4`) is used as a fallback. The fallback cove
 uncompressed contiguous/linked-block storage that SMART actually writes; a (hypothetical)
 compressed or chunked file would still need `pyhdf` (`conda install -c conda-forge pyhdf`, then
 `pip install uspy[smart]`).
+
+SMART records only one wall-clock time per file ("DATE"/"TIME", the acquisition start) --
+there is no true per-frame clock, even for a multi-frame scan file. `_metadata_dict` estimates
+a per-frame `timestamp` as `start + frame_index * exposure` (see there) so that per-frame
+timing (`LEEMImg.rel_time` etc.) is a monotonic ramp instead of a constant; this is an
+estimate, not a measurement, and drifts by whatever per-frame readout overhead SMART doesn't
+report.
 """
 # pylint: disable=missing-docstring
 
@@ -126,6 +133,29 @@ def _read_smart_metadata(path: str) -> dict:
     return meta
 
 
+@lru_cache(maxsize=128)
+def _read_smart_dims(path: str, _mtime: float) -> tuple:
+    """``(height, width)`` of the "Range0" dataset's frames, read from the file header only --
+    no pixel data touched. Used by `SmartReader.parse_metadata` so building a lazy stack's
+    per-frame metadata (`uspy.dataobject.lazy`) doesn't read every frame's pixels just to know
+    its shape. Cached on `(path, mtime)` like `_read_smart_annotations`, since a multi-frame
+    scan file calls this once per frame."""
+    pyhdf = _pyhdf()
+    if pyhdf is None:  # pure-Python fallback -- already parses dims, not pixels, in __init__
+        return _hdf4_fallback(path, _mtime).shape[1:]
+    _hdf_cls, sd_cls, _an_file_label, _an_file_desc = pyhdf
+    sd_file = sd_cls(path)
+    try:
+        sds = sd_file.select(SDS_NAME)
+        try:
+            _name, _rank, dims, _type, _nattrs = sds.info()  # no data read
+        finally:
+            sds.endaccess()
+    finally:
+        sd_file.end()
+    return tuple(dims[1:])  # dims is (n_frames, height, width)
+
+
 def _n_frames(fd: dict) -> int:
     """Number of frames stored in a file: 1 for a single image, or the scan's point count
     (e.g. 161 for an I(V) energy scan) -- both come from the same "POINTS_1" field."""
@@ -166,6 +196,53 @@ def _smart_timestamp(date_str: str, time_str: str) -> float:
         return datetime(int(year_str), month, int(day_str), hour, minute, second).timestamp()
     except (ValueError, KeyError):
         return np.nan
+
+
+def _metadata_dict(fd: dict, index: int, height: int, width: int) -> dict[str, Any]:
+    """Fields shared by `SmartReader.parse_image`/`parse_metadata` -- everything except the
+    "image" data key itself. `height`/`width` come from the real pixel array in the former,
+    and from a pixel-free header read (`_read_smart_dims`) in the latter, so the two can't
+    drift apart."""
+    n_frames = _n_frames(fd)
+    energy = _energy_axis(fd, "MICRO", n_frames)
+    photon_energy = _energy_axis(fd, "MONO", n_frames, negative_means_unused=True)
+
+    try:
+        # SMART records exposure ("INTERATION_TIME") in ms; uspy stores it in seconds.
+        exposure = float(fd["INTERATION_TIME"]) / 1000.0
+    except (KeyError, ValueError):
+        exposure = np.nan
+
+    idict = {
+        "height": height,
+        "width": width,
+        "energy": energy[index] if index < len(energy) else np.nan,
+        "energy_unit": "eV",
+        "photon_energy": photon_energy[index] if index < len(photon_energy) else np.nan,
+        # SMART writes only one DATE/TIME pair per file -- the scan's acquisition *start*,
+        # not a per-frame clock. For a multi-frame file (e.g. a 161-point EDC scan) every
+        # frame would otherwise get that identical start time, which collapses
+        # LEEMImg.rel_time (timestamp - time_origin) to all zeros within the file. Estimate
+        # a per-frame timestamp instead as start + index * exposure -- exact if frames are
+        # acquired back-to-back at the recorded exposure, drifting by the (unrecorded)
+        # per-frame readout overhead otherwise; falls back to the plain file-start time if
+        # exposure is unknown.
+        "timestamp": _smart_timestamp(fd.get("DATE", ""), fd.get("TIME", ""))
+        + (index * exposure if index and np.isfinite(exposure) else 0.0),
+        "scan_mode": fd.get("SCAN_MODE", ""),
+        "comment": fd.get("COMMENT", ""),
+        "ident": fd.get("IDENT", ""),
+    }
+    if np.isfinite(exposure):
+        idict["exposure"] = exposure
+        idict["exposure_unit"] = "s"
+    try:
+        idict["averaging"] = float(fd["AVERAGES"])
+    except (KeyError, ValueError):
+        pass
+    # Not present in SMART metadata: temperature, pressure, fov, objective, emission --
+    # left at LEEMImg's own defaults (nan / "Unknown FoV").
+    return idict
 
 
 def _read_smart_frame(path: str, index: int) -> np.ndarray:
@@ -215,36 +292,23 @@ class SmartReader(LEEMReader):
         path, index = (source, 0) if isinstance(source, str) else source
         fd = _read_smart_metadata(path)
         image = _read_smart_frame(path, index)
-        n_frames = _n_frames(fd)
-
-        energy = _energy_axis(fd, "MICRO", n_frames)
-        photon_energy = _energy_axis(fd, "MONO", n_frames, negative_means_unused=True)
-
-        idict = {
-            "image": image,
-            "height": image.shape[0],
-            "width": image.shape[1],
-            "energy": energy[index] if index < len(energy) else np.nan,
-            "energy_unit": "eV",
-            "photon_energy": photon_energy[index] if index < len(photon_energy) else np.nan,
-            "timestamp": _smart_timestamp(fd.get("DATE", ""), fd.get("TIME", "")),
-            "scan_mode": fd.get("SCAN_MODE", ""),
-            "comment": fd.get("COMMENT", ""),
-            "ident": fd.get("IDENT", ""),
-        }
-        try:
-            # SMART records exposure ("INTERATION_TIME") in ms; uspy stores it in seconds.
-            idict["exposure"] = float(fd["INTERATION_TIME"]) / 1000.0
-            idict["exposure_unit"] = "s"
-        except (KeyError, ValueError):
-            pass
-        try:
-            idict["averaging"] = float(fd["AVERAGES"])
-        except (KeyError, ValueError):
-            pass
-        # Not present in SMART metadata: temperature, pressure, fov, objective, emission --
-        # left at LEEMImg's own defaults (nan / "Unknown FoV").
+        idict = _metadata_dict(fd, index, image.shape[0], image.shape[1])
+        idict["image"] = image
         return idict
+
+    def parse_metadata(self, source: Union[str, tuple]) -> dict[str, Any]:
+        """Metadata-only counterpart to `parse_image`, for the lazy/out-of-core stack backend
+        (`uspy.dataobject.lazy`). Sources frame dimensions from the file header
+        (`_read_smart_dims`) instead of the real pixel array, so building a lazy stack's
+        per-frame metadata never reads pixel data -- matching
+        `ElmitecReader.parse_metadata`. Without this override, the base `LEEMReader.
+        parse_metadata` falls back to `parse_image` and discards the image, which for SMART's
+        single-multi-frame-file-per-scan layout means reading every frame's pixels just to
+        build metadata, defeating out-of-core loading."""
+        path, index = (source, 0) if isinstance(source, str) else source
+        fd = _read_smart_metadata(path)
+        height, width = _read_smart_dims(path, os.path.getmtime(path))
+        return _metadata_dict(fd, index, height, width)
 
     def list_files(self, source: Union[str, Iterable]) -> list:
         if not isinstance(source, str):

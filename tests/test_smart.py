@@ -21,7 +21,13 @@ import pytest
 from uspy.leem import base
 from uspy.leem.readers import ElmitecReader, SmartReader
 from uspy.leem.readers import smart
-from uspy.leem.readers.smart import _parse_fd_text, _n_frames, _energy_axis, _smart_timestamp
+from uspy.leem.readers.smart import (
+    _parse_fd_text,
+    _n_frames,
+    _energy_axis,
+    _smart_timestamp,
+    _metadata_dict,
+)
 from uspy.leem.readers._hdf4 import Hdf4File, Hdf4Error
 
 from .conftest import TESTDATA_DIR
@@ -30,6 +36,9 @@ BESSY_DIR = TESTDATA_DIR + "bessy/"
 SMART_IMG = BESSY_DIR + "0409a001.hdf"  # 1 frame, "Einzelbild", MICRO 2.0V
 SMART_IMG2 = BESSY_DIR + "0409a002.hdf"  # 1 frame
 SMART_STACK = BESSY_DIR + "0409aa.hdf"  # 161 frames, "EDC" energy scan, 10..40V
+# A "TIME" scan split across 3 files (300 frames each) -- see the module docstring on
+# "<base>.hdf"/"<base>_1.hdf"/"<base>_2.hdf" splitting.
+SMART_SPLIT_GLOB = BESSY_DIR + "0409ac*.hdf"
 
 
 ### Registration works even without pyhdf installed
@@ -114,6 +123,28 @@ def test_smart_timestamp_parses_date_and_time():
 
 def test_smart_timestamp_invalid_input_is_nan():
     assert np.isnan(_smart_timestamp("not a date", "not a time"))
+
+
+def test_metadata_dict_timestamp_ramps_per_frame_within_a_file():
+    # SMART writes only one DATE/TIME per file (the acquisition start), not a per-frame
+    # clock -- _metadata_dict must estimate per-frame timestamps as start + index * exposure
+    # so a multi-frame scan's rel_time (timestamp - time_origin) isn't degenerate (all the
+    # same value). See the module docstring and _metadata_dict's "timestamp" comment.
+    fd = {"DATE": "9.Apr 2025", "TIME": "16:26:49", "INTERATION_TIME": "1000", "POINTS_1": "5"}
+    base_ts = _smart_timestamp(fd["DATE"], fd["TIME"])
+    timestamps = [_metadata_dict(fd, i, 10, 10)["timestamp"] for i in range(5)]
+    assert timestamps[0] == pytest.approx(base_ts)  # frame 0 is exactly the file's start time
+    np.testing.assert_allclose(np.diff(timestamps), 1.0)  # one 1.0 s exposure apart
+    assert timestamps == sorted(timestamps)
+
+
+def test_metadata_dict_timestamp_falls_back_without_exposure():
+    # Without a usable INTERATION_TIME there is nothing to estimate per-frame spacing from --
+    # every frame in the file keeps the same (file-start) timestamp, same as before this fix.
+    fd = {"DATE": "9.Apr 2025", "TIME": "16:26:49", "POINTS_1": "5"}
+    base_ts = _smart_timestamp(fd["DATE"], fd["TIME"])
+    timestamps = [_metadata_dict(fd, i, 10, 10)["timestamp"] for i in range(5)]
+    assert all(ts == pytest.approx(base_ts) for ts in timestamps)
 
 
 ### The pure-Python HDF4 fallback reader (uspy.leem.readers._hdf4), tested directly. This runs
@@ -239,6 +270,34 @@ def test_smart_parse_image_dict_directly():
     assert idict["ident"] == "SMART"
 
 
+def test_smart_parse_metadata_matches_parse_image():
+    # parse_metadata is the lazy/out-of-core stack backend's (uspy.dataobject.lazy) per-frame
+    # metadata source -- it must return exactly what parse_image does, minus "image" itself,
+    # for both a single-frame file and one frame of a multi-frame scan. nan-aware since e.g.
+    # 'photon_energy' is nan for these fixtures (no monochromator energy).
+    for source in (SMART_IMG, (SMART_STACK, 0), (SMART_STACK, 42)):
+        image_dict = dict(SmartReader().parse_image(source))
+        image_dict.pop("image")
+        metadata_dict = SmartReader().parse_metadata(source)
+        assert metadata_dict.keys() == image_dict.keys()
+        for key, value in image_dict.items():
+            other = metadata_dict[key]
+            if isinstance(value, float) and np.isnan(value):
+                assert np.isnan(other), key
+            else:
+                assert other == value, key
+
+
+def test_smart_parse_metadata_reads_no_pixels(monkeypatch):
+    calls = []
+    original = smart._read_smart_frame
+    monkeypatch.setattr(
+        smart, "_read_smart_frame", lambda path, index: (calls.append(index), original(path, index))[1]
+    )
+    SmartReader().parse_metadata((SMART_STACK, 42))
+    assert calls == []
+
+
 def test_smart_binding_energy():
     img = base.LEEMImg(SMART_IMG, reader="smart")
     assert np.isnan(img.photon_energy)
@@ -283,6 +342,48 @@ def test_smart_list_files_expands_single_file_into_frames():
     # exercised without touching the large 161-frame stack fixture.
     files = SmartReader().list_files(SMART_IMG)
     assert files == [(SMART_IMG, 0)]
+
+
+def test_smart_rel_time_ramps_within_a_multiframe_file():
+    # Regression test for the reported bug: loading a SMART multi-frame scan file
+    # (LEEMStack(..., reader="smart")) gave an all-zero rel_time, since every frame shared
+    # one per-file DATE/TIME. Uses parse_metadata (no pixel reads) to stay fast on the
+    # 161-frame fixture -- mirrors test_smart_parse_metadata_matches_parse_image's use of
+    # SMART_STACK without @pytest.mark.slow.
+    indices = [0, 1, 80, 160]
+    metas = [SmartReader().parse_metadata((SMART_STACK, i)) for i in indices]
+    timestamps = [m["timestamp"] for m in metas]
+    assert timestamps == sorted(timestamps)
+    assert len(set(timestamps)) == len(timestamps)  # not degenerate/constant anymore
+    exposure = metas[0]["exposure"]
+    assert timestamps[2] - timestamps[0] == pytest.approx(80 * exposure)  # index 80 vs 0
+
+
+def test_smart_list_files_expands_split_scan_glob():
+    # natsort places the un-suffixed base file before its numbered continuations (see module
+    # docstring): "0409ac.hdf" < "0409ac_1.hdf" < "0409ac_2.hdf".
+    sources = SmartReader().list_files(SMART_SPLIT_GLOB)
+    assert len(sources) == 900  # 3 files x 300 frames
+    assert sources[0] == (BESSY_DIR + "0409ac.hdf", 0)
+    assert sources[300] == (BESSY_DIR + "0409ac_1.hdf", 0)
+    assert sources[600] == (BESSY_DIR + "0409ac_2.hdf", 0)
+
+
+def test_smart_rel_time_monotonic_across_split_scan_files():
+    # Regression test for the reported bug: loading the whole split-scan glob gave rel_time
+    # only 3 distinct values (one per file), since every frame within a file shared that
+    # file's single DATE/TIME. Uses parse_metadata (no pixel reads) so this stays fast even
+    # across all three 300-frame files.
+    sources = SmartReader().list_files(SMART_SPLIT_GLOB)
+    timestamps = [SmartReader().parse_metadata(s)["timestamp"] for s in sources]
+    assert timestamps == sorted(timestamps)
+    assert len(set(timestamps)) > 3  # more than just the 3 per-file start times
+
+    # Each file's own frame 0 still lands exactly on that file's recorded start time --
+    # the per-frame estimate re-anchors to the real clock at each file boundary.
+    assert timestamps[0] == pytest.approx(_smart_timestamp("9.Apr 2025", "17:45:51"))
+    assert timestamps[300] == pytest.approx(_smart_timestamp("9.Apr 2025", "17:50:54"))
+    assert timestamps[600] == pytest.approx(_smart_timestamp("9.Apr 2025", "17:55:56"))
 
 
 def test_smart_default_reader_is_still_elmitec(img_fname):

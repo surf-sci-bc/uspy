@@ -438,6 +438,27 @@ def test_xpeem_single_tif_image_without_tracefile():
     assert img.timestamp == pytest.approx(1727332959.58)
 
 
+def test_xpeem_parse_metadata_matches_parse_image():
+    # parse_metadata is the lazy/out-of-core stack backend's (uspy.dataobject.lazy) per-frame
+    # metadata source -- it must return exactly what parse_image does, minus "image" itself,
+    # for both the ".dat" and ".tif" source formats, without ever reading pixel data (all of
+    # Elettra's metadata, including width/height, comes from sidecars/the ".dat" header).
+    for source in (XPEEM_DAT_000, XPEEM_TIF_000):
+        image_dict = dict(ElettraReader().parse_image(source))
+        image_dict.pop("image")
+        assert ElettraReader().parse_metadata(source) == image_dict
+
+
+def test_xpeem_parse_metadata_reads_no_pixels(monkeypatch):
+    import tifffile
+
+    calls = []
+    original = tifffile.imread
+    monkeypatch.setattr(tifffile, "imread", lambda *a, **kw: (calls.append(a), original(*a, **kw))[1])
+    ElettraReader().parse_metadata(XPEEM_TIF_000)
+    assert calls == []
+
+
 def test_xpeem_dat_stack_length_and_reader(xpeem_dat_stack):
     assert isinstance(xpeem_dat_stack._reader, ElettraReader)
     assert len(xpeem_dat_stack) == 51

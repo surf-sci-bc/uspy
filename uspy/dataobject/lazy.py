@@ -228,6 +228,23 @@ class LazyImageStack(ImageStack):
     def __getattr__(self, attr: str):
         if attr.startswith("_") or attr in self.__dict__:
             raise AttributeError(attr)
+        if isinstance(getattr(self._type, attr, None), property):
+            # A computed per-element property (e.g. LEEMImg.rel_time = timestamp -
+            # time_origin, or binding_energy/kinetic_energy/pressure) isn't a plain
+            # _meta_list key, so it can't be read out of the dict gather below -- mirror
+            # DataObjectStack.__getattr__ (which calls getattr() on each real element) by
+            # resolving the property on a lightweight, metadata-only element per frame
+            # instead. Checked *before* the dict gather since some names (e.g. 'pressure')
+            # are both a stored meta default AND a property -- the property must win to
+            # match eager. All of these properties are metadata-derived, not pixel-derived,
+            # so placeholder pixels keep this pixel-I/O-free.
+            placeholder = np.zeros(self._dask.shape[1:], dtype=np.float32)
+            return np.array(
+                [
+                    getattr(self._make_element(placeholder, meta, i), attr)
+                    for i, meta in enumerate(self._meta_list)
+                ]
+            )
         # Per-frame metadata is fully resident -- gathering it never touches pixel data.
         try:
             return np.array([m[attr] for m in self._meta_list])
@@ -263,6 +280,13 @@ class LazyImageStack(ImageStack):
                 f"'{attr}' is a per-element attribute; can't overwrite it with a scalar."
             )
         self._stack_meta[attr] = value
+
+    def set_unit(self, attr: str, unit: str) -> None:
+        """Lazy counterpart to `DataObjectStack.set_unit`: writes directly into the resident
+        `_meta_list` dicts instead of iterating constructed elements (which, for a lazy stack,
+        would mean decompressing every frame's pixel data just to set a unit string)."""
+        for meta in self._meta_list:
+            meta[f"{attr}_unit"] = unit
 
     @property
     def sources(self) -> Optional[list]:

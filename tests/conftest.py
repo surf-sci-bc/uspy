@@ -59,6 +59,17 @@ STACK_FNAMES = [
 ]
 STACK_INCOMPATIBLE_IMG_FNAME = TESTDATA_DIR + "elettra.dat"
 
+# An Elettra beamline stack whose per-frame energy/temperature/timestamp are NOT in the
+# per-image ".tif" sidecars but distributed from a single shared "*trace.txt" tracefile by
+# ElettraReader.post_process_stack -- exercises a metadata path the plain per-file Elmitec
+# ".dat" fixtures above (STACK_FNAMES) never touch. See tests/test_lazy.py.
+ELETTRA_TIF_DIR = TESTDATA_DIR + "elettra/2024_09_26_004_XPS/"
+
+# A SMART/BESSY multi-frame HDF4 scan file (an I(V) energy series, 161 points in one file --
+# see uspy.leem.readers.smart) -- exercises the "(path, frame_index)" tuple-source path and
+# properties (e.g. rel_time) that have no per-frame '_meta_list' entry.
+BESSY_SCAN_FNAME = TESTDATA_DIR + "bessy/0409aa.hdf"
+
 IMG_FNAMES = [
     TESTDATA_DIR + "bremen.dat",
     TESTDATA_DIR + "channelplate.dat",
@@ -134,6 +145,20 @@ def stack_fname(request):
 @pytest.fixture(scope="module", params=STACK_FNAMES[0:2])
 def stack_folder(request):
     return request.param
+
+
+@pytest.fixture(scope="module")
+def elettra_tif_fnames():
+    """Explicit, sorted list of per-frame ".tif" paths for the Elettra tracefile fixture --
+    not the bare folder (which also holds ".dat" siblings that ElettraReader.list_files
+    prefers, so the folder alone wouldn't exercise the tracefile-only metadata) and not a
+    "*.tif" glob string (kept as a separate, deliberately-glob test case instead)."""
+    import glob
+
+    fnames = sorted(glob.glob(ELETTRA_TIF_DIR + "*.tif"))
+    if not fnames:
+        pytest.skip(f"no Elettra .tif fixture files found at {ELETTRA_TIF_DIR}")
+    return fnames
 
 
 @pytest.fixture(scope="module")

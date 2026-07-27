@@ -45,12 +45,19 @@ class ElettraReader(LEEMReader):
     meta_defaults = {"photon_energy": np.nan, "energy_offset": 0}
     unit_defaults = {"photon_energy": "eV"}
 
-    def parse_image(self, source: str) -> dict[str, Any]:
+    def _parse(self, source: str, read_image: bool) -> dict[str, Any]:
+        """Shared implementation of `parse_image`/`parse_metadata`: all of Elettra's per-image
+        metadata (camera/microscope/beamline sidecars, or the ".dat" header, including width/
+        height) is stored independently of the pixel block, so `read_image=False` skips every
+        actual pixel read (`tifffile.imread` / the ".dat" pixel block) while returning the
+        exact same metadata `parse_image` would."""
         folder = Path(source).parent
 
         if source.endswith(".tif"):
-            image = tifffile.imread(source)
-            idict = {"image": image.astype(np.float32)}
+            if read_image:
+                idict = {"image": tifffile.imread(source).astype(np.float32)}
+            else:
+                idict = {}
 
             fname = glob.glob(f"{folder}/*camera.txt")
             idict.update(read_camera_metadata(fname[0]))
@@ -62,7 +69,8 @@ class ElettraReader(LEEMReader):
             # is the one place ATTR_NAMES still needs to be applied.
             needs_rename = True
         elif source.endswith(".dat"):
-            idict = parse_dat(source)  # already renamed via ATTR_NAMES internally
+            # already renamed via ATTR_NAMES internally
+            idict = parse_dat(source, read_image=read_image)
             needs_rename = False
         else:
             raise ValueError(f"{type(self).__name__} cannot parse {source}")
@@ -86,11 +94,22 @@ class ElettraReader(LEEMReader):
             # per-image value is overwritten in post_process_stack().
             dat_source = str(Path(source).with_suffix(".dat"))
             if os.path.exists(dat_source):
-                idict["timestamp"] = parse_dat(dat_source)["timestamp"]
+                idict["timestamp"] = parse_dat(dat_source, read_image=False)["timestamp"]
             else:
                 idict["timestamp"] = os.path.getmtime(source)
 
         return idict
+
+    def parse_image(self, source: str) -> dict[str, Any]:
+        return self._parse(source, read_image=True)
+
+    def parse_metadata(self, source: str) -> dict[str, Any]:
+        """Metadata-only counterpart to `parse_image`, for the lazy/out-of-core stack backend
+        (`uspy.dataobject.lazy`) -- without this override, the base `LEEMReader.parse_metadata`
+        falls back to `parse_image` and discards the "image" key, which would read every
+        frame's full pixel array just to build a lazy stack's metadata, defeating out-of-core
+        loading."""
+        return self._parse(source, read_image=False)
 
     def list_files(self, source: Union[str, Iterable]) -> list:
         if not isinstance(source, str):
@@ -135,8 +154,7 @@ class ElettraReader(LEEMReader):
             attr = header.split("_")[0]
             name, unit = TRACE_ATTRS.get(attr, (attr, "a.u."))
             setattr(stack, name, vals)
-            for img in stack:
-                img._units[name] = unit  # pylint: disable=protected-access
+            stack.set_unit(name, unit)
             if attr == "time":
                 has_time_column = True
 
@@ -144,7 +162,11 @@ class ElettraReader(LEEMReader):
             # the tracefile's own timestamps are logged in ms; per-image timestamps
             # from parse_image() (real epoch seconds) are left untouched otherwise.
             stack.timestamp = [x / 1000.0 for x in stack.timestamp]
-        stack._time_origin.value = stack[0].timestamp  # pylint: disable=protected-access
+        # time_origin is seeded by the caller (LEEMStack.__init__ / LazyLEEMStack.__init__)
+        # from stack[0].timestamp *after* post_process_stack runs, but only if no explicit
+        # time_origin was passed in -- so nothing needs to be (re-)set here. Doing it
+        # unconditionally used to clobber a caller-supplied time_origin (e.g. via
+        # LEEMStack.to_lazy(), which reuses the source stack's TimeOrigin by reference).
 
 
 def read_camera_metadata(fname: str) -> dict:

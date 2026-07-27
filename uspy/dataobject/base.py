@@ -369,6 +369,14 @@ class DataObjectStack(Loadable):
             return self._elements
         return [element.source for element in self._elements]
 
+    def set_unit(self, attr: str, unit: str) -> None:
+        """Set the unit string for a per-element metadata field on every element, without
+        touching the values themselves. Used e.g. by `LEEMReader.post_process_stack`
+        implementations that distribute a shared per-frame value (and its unit) across a
+        stack -- overridden by `LazyImageStack` to stay pixel-I/O-free."""
+        for element in self:
+            element._units[attr] = unit  # pylint: disable=protected-access
+
     @property
     def virtual(self) -> bool:
         """If a data stack is virtual, it does only load the data on demand."""
