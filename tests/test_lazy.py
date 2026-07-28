@@ -201,6 +201,54 @@ def test_lazy_single_3d_tiff_still_routes_to_tiff_stack(stack_fname):
     assert len(lazy) > 1
 
 
+### Loading a lazy stack from per-frame ".tiff" files (glob / folder / explicit list), with
+### the *default* Elmitec reader -- as opposed to test_lazy_tif_glob_string_loads_per_frame_
+### not_as_3d_stack above, which only exercises this via the Elettra reader's own list_files.
+### Must match the eager LEEMStack/ImageStack pixel-for-pixel (see tests/test_leembase.py and
+### tests/test_base.py for the eager-side regression tests of the same bug).
+
+
+def test_lazy_imagestack_glob_matches_eager(tiff_frame_stack):
+    eager = ImageStack(tiff_frame_stack["glob"])
+    lazy = LazyImageStack(tiff_frame_stack["glob"])
+    assert len(lazy) == len(eager)
+    assert lazy.sources == eager.sources
+    for i in range(len(lazy)):
+        np.testing.assert_array_equal(lazy[i].image, eager[i].image)
+
+
+def test_lazy_leemstack_glob_matches_eager_with_default_reader(tiff_frame_stack):
+    # Regression: LazyLEEMStack._read_pixels/_read_metadata used to call the reader's
+    # parse_image/parse_metadata unconditionally, bypassing the reader.handles() check that
+    # LEEMImg.parse does -- with the default (Elmitec) reader, a ".tiff" frame was misparsed
+    # as an Elmitec ".dat" file, producing garbage pixel data with no error.
+    eager = LEEMStack(tiff_frame_stack["glob"])
+    lazy = LEEMStack(tiff_frame_stack["glob"], lazy=True)
+    assert isinstance(lazy, LazyLEEMStack)
+    assert len(lazy) == len(eager)
+    assert lazy.sources == eager.sources
+    for i in range(len(lazy)):
+        np.testing.assert_array_equal(lazy[i].image, eager[i].image)
+        assert lazy[i].image.shape == tiff_frame_stack["arrays"][i].shape
+
+
+def test_lazy_leemstack_glob_bare_folder(tiff_frame_stack):
+    lazy_dir = LazyLEEMStack(tiff_frame_stack["dir"])
+    lazy_glob = LazyLEEMStack(tiff_frame_stack["glob"])
+    assert lazy_dir.sources == lazy_glob.sources
+    for i in range(len(lazy_dir)):
+        np.testing.assert_array_equal(lazy_dir[i].image, lazy_glob[i].image)
+
+
+def test_lazy_leemstack_mixed_shape_tiff_glob_raises(tiff_stack_glob):
+    # Eager/lazy parity for the reported bug: a set of frames that can't form one stack must
+    # fail the same way on both backends, not silently build an internally-inconsistent dask
+    # array (LazyImageStack._build_from_files previously trusted frame 0's shape for the
+    # entire array).
+    with pytest.raises(ValueError, match=r"(?i)shape|compatible"):
+        LazyLEEMStack(tiff_stack_glob)
+
+
 def test_to_lazy_preserves_explicit_time_origin(elettra_tif_fnames):
     # ElettraReader.post_process_stack used to unconditionally reset time_origin to frame 0's
     # timestamp, which silently clobbered a caller-supplied time_origin when going through
@@ -507,35 +555,86 @@ def test_lazy_bulk_metadata_assignment(stack_folder):
     new_energy = np.linspace(0, 1, len(lazy))
     lazy.energy = new_energy
     np.testing.assert_allclose(lazy.energy, new_energy)
+
+    # A lazy stack has no per-frame metadata of its own besides `_stack_meta`: a scalar
+    # assigned to the stack means "this value, for every frame" -- mirrors the eager
+    # DataObjectStack, where the same scalar is set as metadata on every element.
+    lazy.energy = 5.0
+    np.testing.assert_allclose(lazy.energy, 5.0)
+
+
+def test_lazy_mismatched_iterable_collision_raises(stack_folder):
+    """A mismatched-length iterable can't be distributed one-per-frame, and can't attach as
+    stack-level metadata either without shadowing 'energy's per-frame gather."""
+    lazy = LazyLEEMStack(stack_folder)
+    mismatched = [1.0] * (len(lazy) + 1)
     with pytest.raises(ValueError):
-        lazy.energy = 5.0  # a scalar can't overwrite a real per-frame field
+        lazy.energy = mismatched
+    # the rejected assignment must not have taken effect
+    assert len(lazy.energy) == len(lazy)
 
 
 ### Stack-level scalar metadata (a label, not a per-frame value)
 
 
-def test_lazy_stack_level_metadata(stack_folder):
+def test_lazy_scalar_broadcasts_to_every_frame(stack_folder):
+    """A scalar set on the stack -- even for a genuinely new name -- becomes metadata on
+    every frame, not a plain stack-level attribute; a string is not split character-wise."""
     lazy = LazyLEEMStack(stack_folder)
     lazy.label = "my experiment"
-    assert lazy.label == "my experiment"
+    assert (lazy.label == "my experiment").all()
+    assert len(lazy.label) == len(lazy)
 
 
-def test_lazy_stack_level_metadata_collision_raises(stack_folder):
+def test_lazy_scalar_setattr_gets_default_unit(stack_folder):
+    """A scalar assigned to a new field must get a default unit too -- units live inline as
+    '<attr>_unit' entries in _meta_list on the lazy backend, mirroring
+    DataObject.__setattr__ on the eager one. Parity: the same assignment on the eager stack
+    must give the same `unit` dict entry."""
     lazy = LazyLEEMStack(stack_folder)
-    with pytest.raises(ValueError):
-        lazy.energy = 5.0  # 'energy' is a real per-frame field
-    # the per-frame gather must be unaffected by the rejected assignment
-    assert len(lazy.energy) == len(lazy)
+    eager = LEEMStack(stack_folder)
+
+    lazy.brand_new_field = 5.0
+    eager.brand_new_field = 5.0
+
+    assert lazy[0].unit["brand_new_field"] == ""
+    assert lazy[0].unit["brand_new_field"] == eager[0].unit["brand_new_field"]
+
+
+def test_lazy_mismatched_iterable_stack_level_metadata(stack_folder):
+    """A mismatched-length iterable for a genuinely new name (no per-frame field to shadow)
+    still attaches to the stack itself, via `_stack_meta`."""
+    lazy = LazyLEEMStack(stack_folder)
+    mismatched = ["x"] * (len(lazy) + 1)
+    lazy.label = mismatched
+    assert lazy.label == mismatched
+
+
+def test_lazy_energy_offset_scalar_parity_with_eager(stack_folder):
+    """Eager/lazy parity for the reported case: `stack.energy_offset = <scalar>` must
+    broadcast onto every frame the same way on both backends, and shift `binding_energy`
+    identically."""
+    eager = LEEMStack(stack_folder)
+    lazy = LazyLEEMStack(stack_folder)
+    for s in (eager, lazy):
+        s.photon_energy = 100.0  # binding_energy needs a real photon_energy to be meaningful
+
+    eager.energy_offset = 3.4934
+    lazy.energy_offset = 3.4934
+
+    np.testing.assert_allclose(lazy.energy_offset, eager.energy_offset)
+    np.testing.assert_allclose(lazy.binding_energy, eager.binding_energy)
 
 
 def test_lazy_stack_level_metadata_survives_derivation(stack_folder):
     lazy = LazyLEEMStack(stack_folder)
-    lazy.label = "my experiment"
+    mismatched = ["x"] * (len(lazy) + 1)
+    lazy.label = mismatched  # stored in _stack_meta (see test above)
 
-    assert lazy[1:4].label == "my experiment"
-    assert (lazy + 1).label == "my experiment"
-    assert lazy.copy().label == "my experiment"
-    assert lazy.average(2).label == "my experiment"
+    assert lazy[1:4].label == mismatched
+    assert (lazy + 1).label == mismatched
+    assert lazy.copy().label == mismatched
+    assert lazy.average(2).label == mismatched
 
 
 def test_lazy_unknown_attribute_raises_attributeerror(stack_folder):

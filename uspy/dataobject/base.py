@@ -131,8 +131,13 @@ class DataObject(Loadable):
             else:
                 self._meta[k] = value
         for k in self._meta:
-            if k not in self._unit_defaults:
-                self._unit_defaults[k] = ""
+            # Gap-fill this *instance's* _units, not the class-level _unit_defaults: _units
+            # was already copied from _unit_defaults back in __new__ (before parse() ran), so
+            # writing to _unit_defaults here would never reach this instance -- only ones
+            # constructed afterwards -- and would permanently pollute a dict shared by every
+            # sibling subclass that doesn't declare its own _unit_defaults (e.g. Image and
+            # Waterfall both inherit DataObject._unit_defaults).
+            self._units.setdefault(k, "")
 
     def parse(self, source: str) -> dict[str, Any]:
         """Read in data. Should set the _source attribute."""
@@ -227,10 +232,21 @@ class DataObject(Loadable):
             return
         if attr.startswith("_") or attr in self.__dict__:
             super().__setattr__(attr, value)
+        elif isinstance(getattr(type(self), attr, None), property):
+            # A class-level property (e.g. LEEMImg.time_origin, .pressure, .binding_energy)
+            # must run its own setter (or raise, if read-only) instead of being swallowed
+            # into _meta below -- the getter is a data descriptor and always wins on read,
+            # so a bare _meta write here would be silently invisible.
+            super().__setattr__(attr, value)
         elif attr in self._data:
             self._data[attr] = value
         else:
             self._meta[attr] = value
+            # Arbitrary metadata must always have a unit entry -- plotting/derivation code
+            # (e.g. IntensityLine.parse, waterfall()) indexes `_units` directly by field name
+            # and would otherwise KeyError the first time this field is used as an axis.
+            # setdefault: never clobber a real unit set earlier via set_unit() or a reader.
+            self._units.setdefault(attr, "")
 
     def __eq__(self, other: DataObject):
         try:
@@ -269,6 +285,16 @@ class DataObject(Loadable):
         """
         # """Check if another DataObject has data of the same dimensions."""
         return isinstance(other, type(self))
+
+    def incompatibility_reason(self, other: DataObject) -> str:
+        """Human-readable reason `other` failed `is_compatible(other)`, for error messages
+        raised when a stack can't be built from mismatched elements (see
+        `DataObjectStack._construct`). Subclasses whose `is_compatible` checks something more
+        specific than just the type (e.g. `Image` checking pixel shape) should override this
+        to explain *what* differs, not just restate that it does."""
+        if not isinstance(other, type(self)):
+            return f"{type(other).__name__} is not a {type(self).__name__}"
+        return "not compatible"
 
     def __json_encode__(self) -> dict:
         """Returns dict with all information to reconstruct object from a .json file"""
@@ -339,11 +365,13 @@ class DataObjectStack(Loadable):
         self._elements = [self._single_construct(sources[0])]
         for source in tqdm(sources[1:]):
             element = self._single_construct(source)
-            try:
-                assert self._elements[0].is_compatible(element)
-                self._elements.append(element)
-            except AssertionError:
-                Warning("A non compatible element was skipped during construction!")
+            if not self._elements[0].is_compatible(element):
+                reason = self._elements[0].incompatibility_reason(element)
+                raise ValueError(
+                    f"Cannot build {type(self).__name__}: {element.source!r} is not "
+                    f"compatible with {self._elements[0].source!r} ({reason})."
+                )
+            self._elements.append(element)
 
     def _deconstruct(self) -> None:
         """Retain the source objects instead of the direct elements."""
@@ -374,6 +402,15 @@ class DataObjectStack(Loadable):
         touching the values themselves. Used e.g. by `LEEMReader.post_process_stack`
         implementations that distribute a shared per-frame value (and its unit) across a
         stack -- overridden by `LazyImageStack` to stay pixel-I/O-free."""
+        if self.virtual:
+            # Iterating a virtual stack yields freshly-constructed, throwaway elements (see
+            # __getitem__) -- writing to their _units would silently vanish instead of
+            # persisting anywhere, same failure mode __setattr__ already guards against.
+            raise ValueError(
+                f"Can't set unit for '{attr}' for virtual stack: elements are re-parsed "
+                "from their source on every access, so a per-element write would be lost "
+                "immediately. Set `stack.virtual = False` first."
+            )
         for element in self:
             element._units[attr] = unit  # pylint: disable=protected-access
 
@@ -478,42 +515,59 @@ class DataObjectStack(Loadable):
             return
         if attr.startswith("_") or attr in self.__dict__:
             return super().__setattr__(attr, value)
-        if isinstance(value, Iterable) and len(value) == len(self):
+        if isinstance(getattr(type(self), attr, None), property):
+            # A stack-level property (e.g. `virtual`, `LEEMStack.time_origin`) must run its
+            # own setter (or raise, if read-only like `elements`/`sources`) rather than being
+            # distributed into the elements below.
+            return super().__setattr__(attr, value)
+        # A stack has no metadata of its own -- setting a per-element field on the stack
+        # means setting it on every element. A scalar (including a plain string -- not split
+        # character-wise) is set on every element as metadata. A sequence whose length
+        # matches the stack is distributed elementwise, one value per element (unchanged
+        # long-standing behavior). A sequence of any other length can't be either of those,
+        # so it attaches to the stack object itself -- unless `attr` names a real per-element
+        # field, in which case that would silently shadow this class's own __getattr__
+        # gather (e.g. `stack.energy = [1, 2]` on a 5-long stack would make `stack.energy`
+        # return `[1, 2]` instead of the per-element array), so it's refused instead.
+        if isinstance(value, Iterable) and not isinstance(value, (str, bytes)):
+            value = list(value)
+            is_sequence = True
+        else:
+            is_sequence = False
+
+        if is_sequence and len(value) == len(self):
             if self.virtual:
                 raise ValueError(f"Can't set attribute '{attr}' for virtual stack")
             for obj, single_value in zip(self, value):
                 setattr(obj, attr, single_value)
-        else:
-            # A scalar, or a mismatched-length iterable, would otherwise silently become a
-            # plain instance attribute here with no real signal (a mismatched-length iterable
-            # prints a notice, easy to miss) -- which, if `attr` happens to name a real
-            # per-element field, permanently shadows that field's __getattr__ gather (e.g.
-            # `stack.energy = 5.0` would make `stack.energy` return 5.0 instead of the
-            # per-element array). Refuse both when there's something to shadow -- unless
-            # `attr` is itself a real class-level property (e.g. LEEMStack.time_origin),
-            # which must still get a chance to run its own setter.
-            collides = (
-                len(self)
-                and hasattr(self[0], attr)
-                and not isinstance(getattr(type(self), attr, None), property)
-            )
-            if isinstance(value, Iterable):
-                if len(value) != len(self):
-                    if collides:
-                        raise ValueError(
-                            f"'{attr}' is a per-element attribute; can't overwrite it with a "
-                            "mismatched-length iterable."
-                        )
-                    print(
-                        f"Attribute {attr} with length {len(value)} cannot be assigned "
-                        f"elementwise to stack with length {len(self)}. It will be assigned "
-                        "to the stack itself."
-                    )
-            elif collides:
+        elif is_sequence:
+            collides = len(self) and hasattr(self[0], attr)
+            if collides:
                 raise ValueError(
-                    f"'{attr}' is a per-element attribute; can't overwrite it with a scalar."
+                    f"'{attr}' is a per-element attribute; can't overwrite it with a "
+                    "mismatched-length iterable."
                 )
+            print(
+                f"Attribute {attr} with length {len(value)} cannot be assigned "
+                f"elementwise to stack with length {len(self)}. It will be assigned "
+                "to the stack itself."
+            )
             return super().__setattr__(attr, value)
+        else:
+            # Scalar: always metadata on every element.
+            if self.virtual:
+                raise ValueError(
+                    f"Can't set attribute '{attr}' for virtual stack: elements are "
+                    "re-parsed from their source on every access, so a per-element write "
+                    "would be lost immediately. Set `stack.virtual = False` first."
+                )
+            if not len(self):
+                raise ValueError(
+                    f"Can't set attribute '{attr}' on an empty stack: there are no "
+                    "elements to set it on."
+                )
+            for obj in self:
+                setattr(obj, attr, value)
 
     def __delitem__(self, index: Union[int, slice]) -> None:
         self._elements.__delitem__(index)

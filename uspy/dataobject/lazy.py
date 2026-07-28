@@ -35,9 +35,10 @@ import warnings
 
 import numpy as np
 import tifffile
+from tifffile.tifffile import TiffFileError
 
 from uspy.dataobject.base import DataObject
-from uspy.dataobject.image import Image, ImageStack
+from uspy.dataobject.image import Image, ImageStack, list_image_files
 
 try:
     import dask
@@ -115,10 +116,38 @@ class LazyImageStack(ImageStack):
     # -- construction ------------------------------------------------------------------
 
     def _build(self, source: Union[str, list], chunks: int) -> tuple:
-        if isinstance(source, str) and source.lower().endswith((".tif", ".tiff")):
-            return self._build_from_tiff_stack(source, chunks)
         if isinstance(source, list) and source and isinstance(source[0], str):
             return self._build_from_files(source, chunks)
+
+        # A glob pattern or an existing directory expands to one or more per-frame image
+        # files -- tried before treating a ".tif"/".tiff"-suffixed string as a single 3D TIFF
+        # stack path below, mirroring the eager ImageStack._split_source's own precedence
+        # (see there for why: tifffile's FileSequence machinery would otherwise silently
+        # force-reshape mismatched frames into frame 0's shape instead of raising, and lose
+        # each frame's own source path). A single matched/contained file still needs the
+        # probe below, since it might itself be one 3D multi-frame TIFF.
+        fnames = list_image_files(source)
+        if len(fnames) > 1:
+            return self._build_from_files(fnames, chunks)
+        if len(fnames) == 1:
+            single = fnames[0]
+            if single.lower().endswith((".tif", ".tiff")):
+                try:
+                    probe = tifffile.imread(single)
+                except (
+                    FileNotFoundError,
+                    TypeError,
+                    TiffFileError,
+                    ValueError,
+                    IsADirectoryError,
+                ):
+                    return self._build_from_files(fnames, chunks)
+                if probe.ndim == 3:
+                    return self._build_from_tiff_stack(single, chunks)
+            return self._build_from_files(fnames, chunks)
+
+        if isinstance(source, str) and source.lower().endswith((".tif", ".tiff")):
+            return self._build_from_tiff_stack(source, chunks)
         raise ValueError(
             f"Cannot build a {type(self).__name__} from {source!r}; expected a 3D TIFF path "
             "or a list of per-frame image file paths."
@@ -143,17 +172,37 @@ class LazyImageStack(ImageStack):
         meta_list = [self._read_metadata(fnames[0])]
         frames = [da.from_array(first_pixels, chunks=shape)]
         for fname in fnames[1:]:
-            meta_list.append(self._read_metadata(fname))
+            meta = self._read_metadata(fname)
+            # `_read_metadata` is already called for every frame here (pixel-I/O-free, see
+            # its docstring), so a shape mismatch can be caught for free at construction time
+            # instead of only surfacing once that frame's chunk is actually computed -- or,
+            # worse, silently declaring every frame the same shape as frame 0 for the whole
+            # dask graph (mirrors the eager backend's DataObjectStack._construct check).
+            frame_shape = self._shape_from_meta(meta)
+            if frame_shape is not None and frame_shape != shape:
+                raise ValueError(
+                    f"Cannot build {type(self).__name__}: {fname!r} is not compatible "
+                    f"with {fnames[0]!r} (image shape {frame_shape} != {shape})."
+                )
+            meta_list.append(meta)
             frames.append(
                 da.from_delayed(
                     dask.delayed(self._read_pixels)(fname), shape=shape, dtype=dtype
                 )
             )
-        # Frame shape is only checked eagerly for fnames[0]; a mismatched later frame surfaces
-        # as an error when that chunk is actually computed, not at construction time -- the
-        # tradeoff for not opening every file up front.
         arr = da.stack(frames).rechunk((chunks, *shape))
         return list(fnames), arr, meta_list
+
+    @staticmethod
+    def _shape_from_meta(meta: dict) -> Optional[tuple]:
+        """Pixel shape implied by a `_read_metadata` dict's "height"/"width" keys (as
+        `Image.parse` always populates them), or `None` if either is missing -- e.g. a
+        reader's metadata that doesn't carry them, in which case the mismatch check in
+        `_build_from_files` is simply skipped for that frame rather than raising."""
+        height, width = meta.get("height"), meta.get("width")
+        if height is None or width is None:
+            return None
+        return (height, width)
 
     def _read_pixels(self, fname: str) -> np.ndarray:
         """Read just the pixel array of one frame. Base implementation has no cheap
@@ -260,26 +309,48 @@ class LazyImageStack(ImageStack):
     def __setattr__(self, attr: str, value: Any) -> None:
         if attr.startswith("_") or attr in self.__dict__:
             return super().__setattr__(attr, value)
+        # Real class-level properties (e.g. `virtual`, which explicitly rejects being
+        # toggled) need their own setter to run rather than being masked by this override.
+        if isinstance(getattr(type(self), attr, None), property):
+            return super().__setattr__(attr, value)
+        # A read-only property on the *element* class (e.g. LEEMImg.binding_energy, derived
+        # from energy_offset) can't be broadcast into per-frame metadata -- mirror
+        # DataObject.__setattr__ (fixed to honor property setters) by refusing it the same
+        # way instead of silently writing a dict entry the property getter would ignore.
+        element_prop = getattr(self._type, attr, None)
+        if isinstance(element_prop, property) and element_prop.fset is None:
+            raise AttributeError(f"can't set attribute '{attr}'")
         if isinstance(value, Iterable) and not isinstance(value, (str, bytes)):
             value = list(value)
             if len(value) == len(self):
                 for meta, single_value in zip(self._meta_list, value):
                     meta[attr] = single_value
+                    # Arbitrary metadata must always have a unit entry (see
+                    # DataObject.__setattr__) -- units live inline as "<attr>_unit" keys here.
+                    meta.setdefault(f"{attr}_unit", "")
                 return None
-        # Not a per-frame metadata assignment. Real class-level properties (e.g. `virtual`,
-        # which explicitly rejects being toggled) still need their setter to run rather than
-        # being masked by this override.
-        if isinstance(getattr(type(self), attr, None), property):
-            return super().__setattr__(attr, value)
-        # A scalar stack-level attribute (e.g. a label) is fine, but refuse it if `attr` names
-        # a real per-frame field -- storing it here would silently shadow that field's gather
-        # in __getattr__, with no warning (mirrors the same fix in DataObjectStack.__setattr__
-        # for eager stacks).
-        if self._meta_list and attr in self._meta_list[0]:
+            # Mismatched-length sequence: can't be per-frame metadata, so it would have to
+            # attach to the stack itself -- unless `attr` names a real per-frame field, in
+            # which case that would silently shadow that field's gather in __getattr__.
+            if self._meta_list and attr in self._meta_list[0]:
+                raise ValueError(
+                    f"'{attr}' is a per-element attribute; can't overwrite it with a "
+                    "mismatched-length iterable."
+                )
+            self._stack_meta[attr] = value
+            return None
+        # Scalar (including a plain string -- not split character-wise): a lazy stack has no
+        # metadata of its own besides `_stack_meta`, and a per-frame field set on the stack
+        # means setting it on every frame -- mirrors DataObjectStack.__setattr__ for eager
+        # stacks, where the same scalar is set as metadata on every element.
+        if not self._meta_list:
             raise ValueError(
-                f"'{attr}' is a per-element attribute; can't overwrite it with a scalar."
+                f"Can't set attribute '{attr}' on an empty stack: there are no elements to "
+                "set it on."
             )
-        self._stack_meta[attr] = value
+        for meta in self._meta_list:
+            meta[attr] = value
+            meta.setdefault(f"{attr}_unit", "")
 
     def set_unit(self, attr: str, unit: str) -> None:
         """Lazy counterpart to `DataObjectStack.set_unit`: writes directly into the resident

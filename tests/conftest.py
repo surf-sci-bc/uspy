@@ -8,6 +8,7 @@ import os
 
 import pytest
 import numpy as np
+import tifffile
 
 from uspy.leem.base import LEEMImg, LEEMStack
 from uspy.dataobject import Line
@@ -64,6 +65,14 @@ STACK_INCOMPATIBLE_IMG_FNAME = TESTDATA_DIR + "elettra.dat"
 # ElettraReader.post_process_stack -- exercises a metadata path the plain per-file Elmitec
 # ".dat" fixtures above (STACK_FNAMES) never touch. See tests/test_lazy.py.
 ELETTRA_TIF_DIR = TESTDATA_DIR + "elettra/2024_09_26_004_XPS/"
+
+# Per-frame ".tiff" fixtures (one 2D image per file, as opposed to a single 3D-TIFF stack)
+# reproducing a reported bug: frames here deliberately have TWO DIFFERENT pixel shapes
+# ((600, 624) and (624, 600)), so a correct loader must reject the whole glob/folder rather
+# than silently reshaping frames into a single, wrong shape (see tests/test_leembase.py,
+# tests/test_lazy.py).
+TIFF_STACK_DIR = TESTDATA_DIR + "tiff_stack/"
+TIFF_STACK_GLOB = TIFF_STACK_DIR + "*.tiff"
 
 # A SMART/BESSY multi-frame HDF4 scan file (an I(V) energy series, 161 points in one file --
 # see uspy.leem.readers.smart) -- exercises the "(path, frame_index)" tuple-source path and
@@ -145,6 +154,47 @@ def stack_fname(request):
 @pytest.fixture(scope="module", params=STACK_FNAMES[0:2])
 def stack_folder(request):
     return request.param
+
+
+@pytest.fixture()
+def tiff_stack_glob():
+    """Glob pattern for the mixed-shape per-frame ".tiff" fixture at `testdata/tiff_stack/`
+    (see TIFF_STACK_DIR above). Skips if the testdata submodule/fixture isn't present, like
+    `elettra_tif_fnames` does."""
+    import glob
+
+    if not glob.glob(TIFF_STACK_GLOB):
+        pytest.skip(f"no tiff_stack fixture files found at {TIFF_STACK_DIR}")
+    return TIFF_STACK_GLOB
+
+
+@pytest.fixture()
+def tiff_frame_stack(tmp_path):
+    """A small set of same-shape, single-frame ".tiff" files on disk, standing in for a real
+    per-frame TIFF export. Filenames (`frame_1`, `frame_2`, `frame_10`) deliberately diverge
+    between natural-sort and lexicographic-sort order, so tests can tell natsort-based file
+    discovery apart from a plain `sorted()`. Each frame holds a distinct constant pixel value
+    so mis-ordering or a wrong frame being read is directly observable, without depending on
+    the (large, binary) testdata submodule.
+
+    Returns a dict with the containing directory, a "*.tiff" glob pattern into it, the file
+    paths in natural-sort order, and the pixel array written to each (same order).
+    """
+    names = ["frame_1.tiff", "frame_2.tiff", "frame_10.tiff"]
+    shape = (5, 4)
+    paths, arrays = [], []
+    for i, name in enumerate(names):
+        arr = np.full(shape, float(i + 1), dtype=np.float32)
+        path = tmp_path / name
+        tifffile.imwrite(str(path), arr)
+        paths.append(str(path))
+        arrays.append(arr)
+    return {
+        "dir": str(tmp_path),
+        "glob": str(tmp_path / "*.tiff"),
+        "paths": paths,
+        "arrays": arrays,
+    }
 
 
 @pytest.fixture(scope="module")

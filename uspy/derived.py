@@ -80,7 +80,7 @@ class IntensityLine(Line):
             "roi": roi_,
             "xdim": xaxis,
             "ydim": "intensity",
-            "x_unit": stack[0].unit[xaxis],
+            "x_unit": stack[0].unit.get(xaxis, ""),
             "label": roi_.label,
         }
 
@@ -182,7 +182,7 @@ class StitchedLine(Line):
             "lines": lines,
             "xdim": xaxis,
             "ydim": "intensity",
-            "x_unit": stacks[0][0].unit[xaxis],
+            "x_unit": stacks[0][0].unit.get(xaxis, ""),
         }
 
     def _stitch_curves(

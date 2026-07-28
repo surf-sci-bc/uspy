@@ -83,8 +83,9 @@ def find_reflections(img, n, min_distance=10, threshold_rel=0.1, **kwds):
             `skimage.feature.peak_local_max`.
 
     Returns:
-        (n, 2) array of (row, col) pixel coordinates, ordered from brightest to
-        dimmest.
+        (n, 2) float array of (x, y) = (column, row) pixel coordinates,
+        ordered from brightest to dimmest. Directly usable as the `pks`
+        argument of `correct_img_distortion`.
     """
     pixels = img.image if hasattr(img, "image") else np.asarray(img)
     coords = peak_local_max(
@@ -99,7 +100,11 @@ def find_reflections(img, n, min_distance=10, threshold_rel=0.1, **kwds):
             f"Only found {len(coords)} reflection(s) matching the given "
             f"criteria, expected {n}. Try lowering min_distance/threshold_rel."
         )
-    return coords
+    # peak_local_max returns (row, col); uspy uses (x, y) throughout (cf. uspy.roi.ROI).
+    # Cast to float: correct_img_distortion feeds these through symmetrize's
+    # cv2.getRotationMatrix2D, which rejects the integer pixel indices
+    # peak_local_max returns (numpy int64 elements aren't accepted there).
+    return np.ascontiguousarray(coords[:, ::-1], dtype=float)
 
 
 def correct_img_distortion(stack, pks: list, symmetry="hexagonal", rot=None):
@@ -117,7 +122,7 @@ def correct_img_distortion(stack, pks: list, symmetry="hexagonal", rot=None):
 
     Args:
         stack: LEEMImg or LEEMStack to correct.
-        pks: pixel coordinates (row, col) of the reflections, including the
+        pks: pixel coordinates (x, y) of the reflections, including the
             center spot (e.g. from `find_reflections`).
         symmetry: target symmetry of the reflection pattern around the center
             spot. One of:
@@ -127,10 +132,17 @@ def correct_img_distortion(stack, pks: list, symmetry="hexagonal", rot=None):
                     two independent, alternating center-vertex distances.
                 anything else -- `rot` must give the inter-vertex rotation
                     angles explicitly, as accepted by
-                    `symmetrize.sym.rotVertexGenerator`.
+                    `symmetrize.sym.rotVertexGenerator`. Angles are applied in
+                    symmetrize's internal (row, col) frame (see below), so
+                    their rotation sense is mirrored relative to the displayed
+                    (x, y) image.
         rot: inter-vertex rotation angles, only used when `symmetry` is not one
             of the built-in options above.
     """
+    # symmetrize (pointops/sym/tps, imported above as po/sym/tps) works
+    # natively in (row, col); uspy's public convention is (x, y). Swap once at
+    # this boundary and leave the whole symmetrize call chain below untouched.
+    pks = np.asarray(pks)[:, ::-1]
 
     pcent, psur = po.pointset_center(pks, method="centroidnn")
     psur_ord = po.pointset_order(psur, direction="ccw")
@@ -189,9 +201,9 @@ def correct_img_distortion(stack, pks: list, symmetry="hexagonal", rot=None):
         # square image. For a non-square image this evaluates the warp over
         # the wrong coordinate range and corrupts the result (not just the
         # output shape). Passing the matching (row, col)-ordered
-        # output_region keeps the landmarks (native (row, col), see above)
-        # and the image in one consistent convention for any aspect ratio, so
-        # no transposing of either is needed.
+        # output_region keeps the landmarks (swapped to (row, col) at the top
+        # of this function) and the image in one consistent convention for
+        # any aspect ratio, so no transposing of either is needed.
         nr, nc = img.image.shape
         img_warped, spline_warp = tps.tpsWarping(
             psur_ord,

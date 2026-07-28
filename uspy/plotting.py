@@ -29,6 +29,12 @@ from uspy.leem.driftnorm import normalize_image
 from scipy.interpolate import RegularGridInterpolator
 
 
+def _axis_label(name: str, unit: str) -> str:
+    """Axis label for a metadata field: "energy in eV", or just "energy" when the field has
+    no unit -- the default for arbitrary user-added metadata (see DataObject.__setattr__)."""
+    return f"{name} in {unit}" if unit else name
+
+
 def plot_img(
     img: Union[do.Image, str],
     fields: Optional[Union[str, Iterable[str]]] = None,
@@ -457,7 +463,7 @@ def plot_meta(stack, fields=None, axes=None):
             axes[i].plot(time, val)
         if field in ("pressure", "pressure1", "pressure2"):
             axes[i].set_yscale("log")
-        axes[i].set_ylabel(f"{field} in {stack[0]._units.get(field, '')}")
+        axes[i].set_ylabel(_axis_label(field, stack[0]._units.get(field, "")))
         axes[i].set_xlabel("Time in s")
 
     return axes
@@ -729,7 +735,7 @@ def waterfall(
         cmap=cmap,
         aspect=aspect,
     )
-    ax.set_ylabel(f"{yaxis} in {wf.stack[0]._units[yaxis]}")
+    ax.set_ylabel(_axis_label(yaxis, wf.stack[0]._units.get(yaxis, "")))
     ax.set_xlabel("Pixel")
 
     return ax

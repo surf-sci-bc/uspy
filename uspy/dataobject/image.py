@@ -6,14 +6,49 @@
 from __future__ import annotations
 from typing import Any, Union
 from collections.abc import Iterable
+import glob
+import os
 
 import numpy as np
 import imageio
+import natsort
 import tifffile
 from tifffile.tifffile import TiffFileError
 import cv2 as cv
 
 from uspy.dataobject.base import DataObject, DataObjectStack, _ArithmeticMixin
+
+
+# Recognized per-frame image file suffixes for glob/folder expansion (list_image_files below)
+# -- deliberately mirrors what uspy.leem.readers.elmitec/elettra recognize for their own
+# formats, just for the generic image types tifffile/imageio can read.
+IMAGE_EXTENSIONS = (".tif", ".tiff", ".png", ".jpg", ".jpeg", ".bmp")
+
+
+def _has_glob_magic(pattern: str) -> bool:
+    return any(char in pattern for char in "*?[")
+
+
+def list_image_files(source: Any) -> list:
+    """Expand a glob pattern or an existing directory into a natural-sorted list of per-frame
+    image file paths (".tif"/".tiff"/".png"/".jpg"/".jpeg"/".bmp"). Mirrors
+    `LEEMReader.list_files` (see `uspy.leem.readers`) so glob/folder discovery behaves the
+    same way everywhere in the codebase -- including natural sort order, so e.g.
+    "frame_2.tiff" sorts before "frame_10.tiff".
+
+    Returns `[]` for anything that isn't a glob pattern or an existing directory (a plain
+    file path, a list, an ndarray, ...); callers fall back to their own handling in that case.
+    """
+    if not isinstance(source, str):
+        return []
+    if _has_glob_magic(source):
+        return natsort.natsorted(path for path in glob.glob(source) if os.path.isfile(path))
+    if os.path.isdir(source):
+        return natsort.natsorted(
+            entry.path for entry in os.scandir(source)
+            if entry.is_file() and entry.name.lower().endswith(IMAGE_EXTENSIONS)
+        )
+    return []
 
 
 class Image(_ArithmeticMixin, DataObject):
@@ -145,6 +180,15 @@ class Image(_ArithmeticMixin, DataObject):
         except AttributeError:
             return False
 
+    def incompatibility_reason(self, other: DataObject) -> str:
+        if not isinstance(other, Image):
+            return super().incompatibility_reason(other)
+        try:
+            other_shape = other.image.shape
+        except AttributeError:
+            return "the other element has no image data"
+        return f"image shape {other_shape} != {self.image.shape}"
+
 
 class ImageStack(DataObjectStack):
     """DataObjectStack for Images which provides a default parsing mechanism for
@@ -177,17 +221,39 @@ class ImageStack(DataObjectStack):
         if isinstance(source, np.ndarray):
             # if the object given already is a numpy array:
             images = source
-        else:
-            try:
-                images = tifffile.imread(source)
-            except (
-                FileNotFoundError,
-                TypeError,
-                TiffFileError,
-            ):  # if not check if list of images
-                return super()._split_source(source)
+            if len(images.shape) != 3:
+                raise ValueError(f"{source} is not a stack")
+            return [images[i, :, :] for i in range(images.shape[0])]
+
+        # A glob pattern or an existing directory expands to one or more per-frame image
+        # files -- returned directly (as file paths, not pixel arrays) when it matches more
+        # than one file, so per-frame construction keeps each element's own shape and
+        # `source`. Previously any such string was handed straight to `tifffile.imread`,
+        # whose FileSequence machinery silently force-reshapes every matched file into frame
+        # 0's shape (corrupting mismatched frames instead of raising) and discards each
+        # frame's path. A single matched/contained file still needs the probe below, since it
+        # might itself be one 3D multi-frame TIFF rather than a lone 2D image.
+        fnames = list_image_files(source)
+        if len(fnames) > 1:
+            return fnames
+        probe_source = fnames[0] if fnames else source
+
+        try:
+            images = tifffile.imread(probe_source)
+        except (
+            FileNotFoundError,
+            TypeError,
+            TiffFileError,
+            ValueError,
+            IsADirectoryError,
+        ):  # if not check if list of images
+            if fnames:
+                return fnames
+            return super()._split_source(source)
 
         if len(images.shape) != 3:
+            if fnames:  # a single 2D image matched by a glob/folder -- keep its source
+                return fnames
             raise ValueError(f"{source} is not a stack")
 
         return [images[i, :, :] for i in range(images.shape[0])]

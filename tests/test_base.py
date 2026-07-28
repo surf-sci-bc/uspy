@@ -76,6 +76,30 @@ class MinimalObjectStack(DataObjectStack):
     _type = MinimalObject
 
 
+class ObjectWithProperties(MinimalObject):
+    """Adds a read-only and a writable class-level property, to test that
+    DataObject.__setattr__ (and DataObjectStack.__setattr__, via broadcast) actually run a
+    property's setter instead of silently writing _meta underneath it."""
+
+    @property
+    def readonly_prop(self) -> str:
+        return "derived"
+
+    @property
+    def writable_prop(self):
+        return self._meta.get("writable_prop")
+
+    @writable_prop.setter
+    def writable_prop(self, value) -> None:
+        # Doubles the value, so a test can tell whether this setter actually ran (10) or
+        # whether the assignment instead silently landed as a raw _meta write (5).
+        self._meta["writable_prop"] = value * 2
+
+
+class ObjectWithPropertiesStack(DataObjectStack):
+    _type = ObjectWithProperties
+
+
 @pytest.mark.parametrize("source", ARRAY_2D + ARRAY_1D)
 def test_dataobject_generation(source):
     ### DataObjects cannot be created itself
@@ -112,6 +136,45 @@ def test_dataobj_setattr(source, val):
     assert obj.attr == 1
 
 
+@pytest.mark.parametrize("source", ARRAY_2D)
+def test_dataobj_setattr_gets_default_unit(source):
+    """Arbitrary metadata must always have a `_units` entry -- plotting/derivation code
+    (IntensityLine.parse, waterfall(), ...) indexes `_units` directly by field name and would
+    otherwise KeyError the first time a freshly-added field is used as an axis."""
+    obj = MinimalObject(source)
+    assert "attr" not in obj.unit
+
+    obj.attr = 5
+    assert obj.unit["attr"] == ""
+
+    # setting a unit, then re-assigning the value, must not clobber the unit
+    obj._units["attr"] = "eV"
+    obj.attr = 6
+    assert obj.unit["attr"] == "eV"
+
+
+@pytest.mark.parametrize("source", ARRAY_2D)
+def test_dataobject_every_meta_key_has_a_unit(source):
+    """The guarantee the whole change is about: right after construction, every key in
+    `.meta` has a matching entry in `.unit` (default "" if none was ever set)."""
+    obj = MinimalObject(source)
+    assert set(obj.meta) <= set(obj.unit)
+
+
+def test_dataobject_construction_does_not_mutate_unit_defaults():
+    """Regression test: DataObject.__init__ used to gap-fill the *class-level*
+    `_unit_defaults` dict instead of the instance's `_units`, permanently polluting a dict
+    shared by every sibling subclass that doesn't declare its own `_unit_defaults` (e.g.
+    Image and Waterfall both inherit DataObject._unit_defaults directly)."""
+    before = dict(Image._unit_defaults)
+    Image(np.zeros((4, 5)))
+    assert Image._unit_defaults == before
+
+    before_do = dict(DataObject._unit_defaults)
+    MinimalObject(np.eye(2))  # MinimalObject doesn't declare its own _unit_defaults either
+    assert DataObject._unit_defaults == before_do
+
+
 @pytest.mark.parametrize(("source", "other_source"), [(ARRAY_2D[0], ARRAY_2D[1])])
 def test_datobject_comparision(source, other_source):
     obj = MinimalObject(source)
@@ -126,10 +189,16 @@ def test_datobject_comparision(source, other_source):
 
 @pytest.mark.parametrize("source", ARRAY_2D)
 def test_dataobject_datadir_not_overridable(source):
+    """`data`/`meta` are read-only properties (backed by `_data`/`_meta`): assigning to
+    them now runs the property's setter, i.e. there isn't one, so it raises -- it no longer
+    silently no-ops. `_data`/`_meta` themselves (the underlying storage) still can't be
+    rebound once set, by design (see `DataObject.__setattr__`)."""
     obj = MinimalObject(source)
 
-    obj.data = None
-    obj.meta = None
+    with pytest.raises(AttributeError):
+        obj.data = None
+    with pytest.raises(AttributeError):
+        obj.meta = None
     assert obj.data is not None
     assert obj.meta is not None
 
@@ -202,58 +271,74 @@ def test_stack_setattr(list1darrays, virtual):
     sources = list1darrays
     stack = MinimalObjectStack(sources, virtual=virtual)
 
-    # setting of per element attributes
+    # A stack has no metadata of its own: a scalar set on the stack means "this value, for
+    # every element" (whether or not the name already exists as a per-element field); only a
+    # length-matched sequence distributes one value per element; anything else (a mismatched-
+    # length sequence for a genuinely new name) attaches to the stack object itself.
 
     energy = np.linspace(0, 20, len(sources))
     if virtual:
+        # Elements are re-parsed from source on every access, so no per-element write can
+        # survive -- both the length-matched sequence and the scalar are refused.
         with pytest.raises(ValueError):
             stack.energy = energy
+        with pytest.raises(ValueError):
             stack.bogus = "Bogus"
-            stack.array = [1, 2]
+        with pytest.raises(ValueError):
             stack.number = 1
+        # A mismatched-length sequence for a name that isn't a per-element field doesn't
+        # touch the elements at all, so it's unaffected by virtual mode.
+        stack.array = [1, 2]
+        assert stack.array == [1, 2]
     else:
         stack.energy = energy
         assert (stack.energy == energy).all()
+
+        # A string scalar is never split character-wise (regardless of whether len(string)
+        # happens to equal len(stack)) -- it broadcasts like any other scalar.
         stack.bogus = "Bogus"
-        stack.array = [1, 2]
+        assert (stack.bogus == "Bogus").all()
+        assert len(stack.bogus) == len(sources)
+
         stack.number = 1
-        """
-        TODO:
-        When a string is assigned to a stack and len(string) == len(stack)
-        the chars are assigned to the elements not the stack. I am not sure if
-        this is useful behaivor. It should be considered how Attributes are assigned
-        to stacks and are passed to elements.
-        """
-        assert stack.bogus is "Bogus"
+        assert (stack.number == 1).all()
+        assert len(stack.number) == len(sources)
+
+        # A mismatched-length sequence for a name that collides with nothing on the elements
+        # attaches to the stack itself.
+        stack.array = [1, 2]
         assert stack.array == [1, 2]
-        assert stack.number == 1
 
 
-def test_stack_setattr_scalar_collision_raises(list1darrays):
-    """A non-iterable scalar assignment must not silently shadow a real per-element
-    attribute's gather: stack.some_meta = 5.0 previously became a plain instance attribute
-    with no signal at all, so afterwards stack.some_meta returned 5.0 instead of the
-    per-element array."""
+def test_stack_setattr_scalar_broadcasts_to_elements(list1darrays):
+    """A stack has no metadata of its own: a scalar assignment -- whether or not `attr`
+    already names a real per-element field -- is set as metadata on every element, not
+    attached to the stack object. `stack.some_meta = 5.0` used to raise (or, before that,
+    silently become a plain instance attribute that permanently shadowed the per-element
+    gather in __getattr__); now it's simply equivalent to writing that meta key on every
+    element."""
     sources = list1darrays
     stack = MinimalObjectStack(sources, virtual=False)
 
     assert len(stack.some_meta) == len(sources)  # baseline: per-element gather works
 
-    with pytest.raises(ValueError):
-        stack.some_meta = 5.0
+    stack.some_meta = 5.0
 
-    # the rejected assignment must not have taken effect
+    assert (stack.some_meta == 5.0).all()
     assert len(stack.some_meta) == len(sources)
+    assert all(element._meta["some_meta"] == 5.0 for element in stack)
+    # not shadowed by a plain instance attribute
+    assert "some_meta" not in stack.__dict__
 
 
 def test_stack_setattr_mismatched_iterable_collision_raises(list1darrays):
-    """A mismatched-length *iterable* assignment must be refused the same way as a scalar
-    when it collides with a real per-element field -- this used to be allowed through (after
-    printing a notice), attaching the whole iterable as a plain instance attribute and
-    shadowing the per-element gather the same way a scalar would. (Originally added to
-    accommodate uspy/leem/readers/elettra.py's post_process_stack attaching a mismatched-
-    length tracefile column to a sliced stack -- that turned out to be a bug, not a real use
-    case, and is fixed at its source; see uspy/leem/base.py's LEEMStack.__init__.)"""
+    """A mismatched-length *iterable* assignment must be refused when it collides with a
+    real per-element field -- it can't be distributed (wrong length) and can't attach to the
+    stack either without shadowing that field's per-element gather in __getattr__.
+    (Originally added to accommodate uspy/leem/readers/elettra.py's post_process_stack
+    attaching a mismatched-length tracefile column to a sliced stack -- that turned out to be
+    a bug, not a real use case, and is fixed at its source; see uspy/leem/base.py's
+    LEEMStack.__init__.)"""
     sources = list1darrays
     stack = MinimalObjectStack(sources, virtual=False)
 
@@ -271,9 +356,81 @@ def test_stack_setattr_mismatched_iterable_collision_raises(list1darrays):
     stack.totally_new_field = mismatched
     assert stack.totally_new_field == mismatched
 
-    # a genuinely new, non-colliding scalar label is still allowed (existing behavior)
+    # a genuinely new, non-colliding scalar broadcasts to every element just like a
+    # colliding one does -- there's nothing special about "new" vs. "existing" names for a
+    # scalar assignment.
     stack.totally_new_label = "fine"
-    assert stack.totally_new_label == "fine"
+    assert (stack.totally_new_label == "fine").all()
+    assert len(stack.totally_new_label) == len(sources)
+
+
+def test_stack_setattr_scalar_broadcast_survives_indexing(list1darrays):
+    """A scalar assigned to the stack must really be written onto every element, not just
+    kept somewhere that only the stack's own __getattr__ gather can see -- so it also has to
+    survive going through a fresh single-element access."""
+    sources = list1darrays
+    stack = MinimalObjectStack(sources, virtual=False)
+
+    stack.some_meta = "shared"
+
+    for i in range(len(sources)):
+        assert stack[i].some_meta == "shared"
+
+
+def test_dataobject_setattr_runs_property_setter():
+    """Assigning to a name that is a class-level property must run its setter, not silently
+    write _meta underneath it (which the getter, a data descriptor, would then never see)."""
+    obj = ObjectWithProperties(np.eye(2))
+
+    obj.writable_prop = 5
+    assert obj.writable_prop == 10  # setter doubled it -- proves the setter really ran
+
+    with pytest.raises(AttributeError):
+        obj.readonly_prop = "x"
+
+
+def test_stack_setattr_scalar_runs_element_property_setter():
+    """A scalar broadcast onto a stack must run each element's property setter, same as
+    setting it directly on one element -- and a read-only element property can't be
+    broadcast at all."""
+    stack = ObjectWithPropertiesStack([np.eye(2), np.eye(2)])
+
+    stack.writable_prop = 5
+    assert (stack.writable_prop == 10).all()
+    assert all(element.writable_prop == 10 for element in stack)
+
+    with pytest.raises(AttributeError):
+        stack.readonly_prop = "x"
+
+
+def test_stack_setattr_scalar_gets_default_unit(list1darrays):
+    """A scalar broadcast onto a stack (see test_stack_setattr_scalar_broadcasts_to_elements)
+    must give every element a default unit too, same as setting it directly."""
+    sources = list1darrays
+    stack = MinimalObjectStack(sources, virtual=False)
+
+    stack.brand_new_field = 5.0
+
+    assert all(element.unit["brand_new_field"] == "" for element in stack)
+
+
+def test_stack_set_unit(list1darrays):
+    sources = list1darrays
+    stack = MinimalObjectStack(sources, virtual=False)
+    stack.some_meta = "shared"
+
+    stack.set_unit("some_meta", "eV")
+
+    assert all(element.unit["some_meta"] == "eV" for element in stack)
+
+
+def test_stack_set_unit_virtual_raises(list1darrays):
+    """Iterating a virtual stack yields freshly-constructed, throwaway elements (see
+    __getitem__) -- writing to their _units used to silently vanish instead of persisting
+    anywhere. Must raise instead, mirroring the __setattr__ virtual guard."""
+    stack = MinimalObjectStack(list1darrays, virtual=True)
+    with pytest.raises(ValueError):
+        stack.set_unit("some_meta", "eV")
 
 
 @pytest.mark.parametrize("virtual", [False])
@@ -706,6 +863,47 @@ def test_stack_save():
     load_stack = ImageStack(TESTDATA_DIR + "test_image.tiff")
     os.remove(TESTDATA_DIR + "test_image.tiff")
     assert all([(img1.image == img2).all() for img1, img2 in zip(load_stack, array)])
+
+
+### Loading a stack from per-frame ".tiff" files (glob / folder), as opposed to a single 3D
+### TIFF -- see uspy.dataobject.image.list_image_files. Reproduces a reported bug where
+### globbing per-frame TIFFs silently misread frames (wrong pixels ended up at several
+### indices) via tifffile's FileSequence machinery, and lost each element's `source`.
+
+
+def test_imagestack_glob_loads_one_frame_per_file_in_natural_order(tiff_frame_stack):
+    stack = ImageStack(tiff_frame_stack["glob"])
+    assert len(stack) == len(tiff_frame_stack["paths"])
+    assert stack.sources == tiff_frame_stack["paths"]
+    for element, expected in zip(stack, tiff_frame_stack["arrays"]):
+        assert element.image.shape == expected.shape
+        np.testing.assert_array_equal(element.image, expected)
+
+
+def test_imagestack_glob_folder_and_explicit_list_agree(tiff_frame_stack):
+    from_glob = ImageStack(tiff_frame_stack["glob"])
+    from_dir = ImageStack(tiff_frame_stack["dir"])
+    from_dir_trailing_slash = ImageStack(tiff_frame_stack["dir"] + "/")
+    from_list = ImageStack(tiff_frame_stack["paths"])
+
+    assert from_glob.sources == from_dir.sources == from_dir_trailing_slash.sources
+    assert from_glob.sources == from_list.sources
+    for a, b in zip(from_glob, from_list):
+        np.testing.assert_array_equal(a.image, b.image)
+
+
+def test_imagestack_glob_can_virtualize_and_go_lazy(tiff_frame_stack):
+    # Before the fix, a glob-built stack lost every element's `source` (parsed straight out
+    # of a 3D array returned by tifffile), so virtualizing/relazifying raised "Can't
+    # virtualize stack without source information."
+    stack = ImageStack(tiff_frame_stack["glob"])
+    stack.virtual = True
+    assert stack.virtual
+    stack.virtual = False
+    assert not stack.virtual
+
+    lazy = stack.to_lazy()
+    assert len(lazy) == len(tiff_frame_stack["paths"])
 
 
 @pytest.mark.parametrize("source", ARRAY_2D)

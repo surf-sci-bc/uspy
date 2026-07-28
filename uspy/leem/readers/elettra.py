@@ -41,7 +41,7 @@ class ElettraReader(LEEMReader):
     """Reads data from the Nanospectroscopy beamline at Elettra."""
 
     name = "elettra"
-    extensions = (".dat", ".tif")
+    extensions = (".dat", ".tif", ".tiff")
     meta_defaults = {"photon_energy": np.nan, "energy_offset": 0}
     unit_defaults = {"photon_energy": "eV"}
 
@@ -127,12 +127,16 @@ class ElettraReader(LEEMReader):
         if not fnames:  # .../path
             fnames = natsort.natsorted(glob.glob(f"{source}/*.dat"))
 
-        if source.endswith(".tif"):  # .../path/*.tif
+        if source.endswith((".tif", ".tiff")):  # .../path/*.tif(f)
             fnames = natsort.natsorted(glob.glob(f"{source}"))
         if not fnames:  # .../path/
-            fnames = natsort.natsorted(glob.glob(f"{source}*.tif"))
+            fnames = natsort.natsorted(
+                glob.glob(f"{source}*.tif") + glob.glob(f"{source}*.tiff")
+            )
         if not fnames:  # .../path
-            fnames = natsort.natsorted(glob.glob(f"{source}/*.tif"))
+            fnames = natsort.natsorted(
+                glob.glob(f"{source}/*.tif") + glob.glob(f"{source}/*.tiff")
+            )
 
         return fnames
 

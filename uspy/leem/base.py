@@ -22,7 +22,11 @@ import pandas as pd
 import numpy as np
 import cv2 as cv
 
+import tifffile
+from tifffile.tifffile import TiffFileError
+
 from uspy.dataobject import Image, ImageStack
+from uspy.dataobject.image import list_image_files
 from uspy.dataobject.lazy import LazyImageStack, da as _da
 from uspy.derived import StitchedLine
 from uspy.leem.utility import imgify
@@ -786,6 +790,26 @@ class LazyLEEMStack(LazyImageStack):
             return self._build_from_files(fnames, chunks)
         if isinstance(source, list) and source:
             return self._build_from_files(source, chunks)
+
+        # No reader recognized `source` as a stack -- also try the generic glob-pattern/
+        # directory expansion (uspy.dataobject.image.list_image_files) that the eager
+        # ImageStack._split_source falls back to, e.g. a "*.tiff" glob of per-frame images
+        # with the default Elmitec reader (which only recognizes ".dat"). Mirrors that
+        # eager path's own ambiguity rule: a single matched/contained file that is itself a
+        # 3D multi-frame TIFF still loads as one 3D stack, not a one-element per-frame stack.
+        glob_fnames = list_image_files(source)
+        if len(glob_fnames) > 1:
+            return self._build_from_files(glob_fnames, chunks)
+        if len(glob_fnames) == 1:
+            single = glob_fnames[0]
+            try:
+                probe = tifffile.imread(single)
+            except (FileNotFoundError, TypeError, TiffFileError, ValueError, IsADirectoryError):
+                return self._build_from_files(glob_fnames, chunks)
+            if probe.ndim == 3:
+                return self._build_from_tiff_stack(single, chunks)
+            return self._build_from_files(glob_fnames, chunks)
+
         if (
             isinstance(source, str)
             and source.lower().endswith((".tif", ".tiff"))
@@ -795,7 +819,15 @@ class LazyLEEMStack(LazyImageStack):
         raise ValueError(f"No files were found at path {source}")
 
     def _read_pixels(self, fname: str) -> np.ndarray:
-        return np.asarray(self._reader.parse_image(fname)["image"], dtype=np.float32)
+        if self._reader.handles(fname):
+            return np.asarray(self._reader.parse_image(fname)["image"], dtype=np.float32)
+        # The reader doesn't recognize this file -- e.g. a per-frame ".tiff"/".png" loaded via
+        # a glob/folder with a reader that only handles its own binary format (the default
+        # Elmitec reader only handles ".dat"). Mirror LEEMImg.parse's own fallback to the
+        # generic Image reader instead of misparsing it through this reader's format-specific
+        # parser (previously this call was unconditional, so e.g. a ".tiff" frame got parsed
+        # as an Elmitec ".dat" file and produced garbage pixel data with no error).
+        return np.asarray(LEEMImg(fname, reader=self._reader).image, dtype=np.float32)
 
     def _read_metadata(self, fname: str) -> dict:
         """Per-frame metadata dict, built the same way a real `LEEMImg(fname, reader=...)`
@@ -807,12 +839,25 @@ class LazyLEEMStack(LazyImageStack):
         AttributeError on a lazy stack instead of returning their eager default."""
         meta = dict(self._type._meta_defaults)  # pylint: disable=protected-access
         units = dict(self._type._unit_defaults)  # pylint: disable=protected-access
-        for key, value in self._reader.meta_defaults.items():
-            meta.setdefault(key, value)
-        for key, value in self._reader.unit_defaults.items():
-            units.setdefault(key, value)
 
-        parsed = dict(self._reader.parse_metadata(fname))
+        if self._reader.handles(fname):
+            for key, value in self._reader.meta_defaults.items():
+                meta.setdefault(key, value)
+            for key, value in self._reader.unit_defaults.items():
+                units.setdefault(key, value)
+            parsed = dict(self._reader.parse_metadata(fname))
+        elif fname.lower().endswith((".tif", ".tiff")):
+            # Same "reader doesn't recognize this file" case as _read_pixels above, but stays
+            # pixel-free: only the TIFF header is needed for width/height (the mismatched-
+            # shape check in LazyImageStack._build_from_files relies on this being cheap).
+            with tifffile.TiffFile(fname) as tif:
+                height, width = tif.pages[0].shape
+            parsed = {"width": width, "height": height}
+        else:
+            # No cheap metadata-only path for other generic formats -- falls back to a full
+            # parse, same as LazyImageStack._read_metadata's own generic fallback.
+            parsed = super()._read_metadata(fname)
+
         if parsed.get("temperature", 0) > 3000:
             parsed["temperature"] = np.nan
         for key, value in parsed.items():
@@ -822,6 +867,12 @@ class LazyLEEMStack(LazyImageStack):
                 units[key.replace("_unit", "")] = value
             else:
                 meta[key] = value
+
+        # Every metadata key must have a unit entry (default "") -- mirrors
+        # DataObject.__init__'s own gap-fill, which this function reimplements by hand since
+        # a lazy stack never actually constructs a LEEMImg to run it on.
+        for key in meta:
+            units.setdefault(key, "")
 
         result = meta
         for key, value in units.items():

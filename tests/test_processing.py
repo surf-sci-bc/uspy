@@ -25,7 +25,7 @@ import pytest
 
 pytest.importorskip("symmetrize")
 
-from symmetrize import pointops as po, sym
+from symmetrize import pointops as po, sym, tps
 
 from uspy.leem import base
 from uspy.leem import processing
@@ -139,6 +139,13 @@ def _max_position_error(detected, expected):
     return max(np.linalg.norm(detected - e, axis=1).min() for e in expected)
 
 
+def _swap(coords):
+    """(row, col) <-> (x, y). All the geometry helpers above build points in
+    (row, col) to match symmetrize's internal frame directly; uspy's public
+    API (find_reflections/correct_img_distortion) is (x, y)."""
+    return np.asarray(coords)[:, ::-1]
+
+
 ### find_reflections #################################################
 
 
@@ -150,7 +157,9 @@ def test_find_reflections_recovers_spots():
     arr = _render_spots(shape, all_pts, sigma=4)
     img = base.LEEMImg(arr)
 
-    detected = processing.find_reflections(img, len(all_pts), min_distance=8, threshold_rel=0.1)
+    detected = _swap(
+        processing.find_reflections(img, len(all_pts), min_distance=8, threshold_rel=0.1)
+    )
     assert len(detected) == len(all_pts)
 
     # every ground-truth spot should have a close detected match
@@ -170,6 +179,21 @@ def test_find_reflections_raises_when_not_enough_peaks():
         processing.find_reflections(arr, len(all_pts) + 5, min_distance=8, threshold_rel=0.1)
 
 
+def test_find_reflections_returns_xy():
+    """find_reflections must return (x, y), not skimage's native (row, col):
+    uspy's public coordinate convention throughout (see uspy.roi.ROI, whose
+    constructors and properties are all (x0, y0)) is (x, y). Row and column
+    are chosen deliberately unequal, and the column even exceeds the number of
+    rows, so a YX/XY mix-up produces both a wrong and an out-of-bounds-looking
+    result rather than an accidental pass."""
+    shape = (200, 150)
+    row, col = 30, 120
+    arr = _render_spots(shape, [(row, col)], sigma=4)
+
+    detected = processing.find_reflections(arr, 1, min_distance=8, threshold_rel=0.1)
+    assert detected[0] == pytest.approx([col, row], abs=2)
+
+
 ### correct_img_distortion -- rotational symmetry, incl. non-square shapes ##
 
 
@@ -183,14 +207,14 @@ def test_correct_hexagonal_restores_symmetry(shape):
 
     distorted_arr = _render_spots(shape, pks, sigma=5)
     _, _, distorted_radii, distorted_angles = _symmetry_metrics(
-        processing.find_reflections(distorted_arr, 7, min_distance=8, threshold_rel=0.1)
+        _swap(processing.find_reflections(distorted_arr, 7, min_distance=8, threshold_rel=0.1))
     )
 
     img = base.LEEMImg(distorted_arr)
-    corrected = processing.correct_img_distortion(img, pks, symmetry="hexagonal")
+    corrected = processing.correct_img_distortion(img, _swap(pks), symmetry="hexagonal")
     assert corrected.image.shape == shape
 
-    detected = processing.find_reflections(corrected, 7, min_distance=8, threshold_rel=0.1)
+    detected = _swap(processing.find_reflections(corrected, 7, min_distance=8, threshold_rel=0.1))
     pcent, psur_ord, radii, angles = _symmetry_metrics(detected)
 
     # corrected pattern is (close to) a regular hexagon...
@@ -215,14 +239,14 @@ def test_correct_square_restores_symmetry(shape):
 
     distorted_arr = _render_spots(shape, pks, sigma=5)
     _, _, distorted_radii, distorted_angles = _symmetry_metrics(
-        processing.find_reflections(distorted_arr, 5, min_distance=8, threshold_rel=0.1)
+        _swap(processing.find_reflections(distorted_arr, 5, min_distance=8, threshold_rel=0.1))
     )
 
     img = base.LEEMImg(distorted_arr)
-    corrected = processing.correct_img_distortion(img, pks, symmetry="square")
+    corrected = processing.correct_img_distortion(img, _swap(pks), symmetry="square")
     assert corrected.image.shape == shape
 
-    detected = processing.find_reflections(corrected, 5, min_distance=8, threshold_rel=0.1)
+    detected = _swap(processing.find_reflections(corrected, 5, min_distance=8, threshold_rel=0.1))
     pcent, psur_ord, radii, angles = _symmetry_metrics(detected)
 
     assert _radius_spread(radii) < 0.05
@@ -247,12 +271,12 @@ def test_correct_rectangular_restores_symmetry(shape):
 
     distorted_arr = _render_spots(shape, pks, sigma=5)
     img = base.LEEMImg(distorted_arr)
-    corrected = processing.correct_img_distortion(img, pks, symmetry="rectangular")
+    corrected = processing.correct_img_distortion(img, _swap(pks), symmetry="rectangular")
     assert corrected.image.shape == shape
 
-    detected = processing.find_reflections(corrected, 5, min_distance=8, threshold_rel=0.1).astype(
-        float
-    )
+    detected = _swap(
+        processing.find_reflections(corrected, 5, min_distance=8, threshold_rel=0.1)
+    ).astype(float)
     pcent, psur_ord, radii, angles = _symmetry_metrics(detected)
     vecs = psur_ord - pcent
 
@@ -278,7 +302,7 @@ def test_correct_rectangular_requires_four_reflections():
 
     with pytest.raises(ValueError):
         processing.correct_img_distortion(
-            base.LEEMImg(_render_spots(shape, pks)), pks, symmetry="rectangular"
+            base.LEEMImg(_render_spots(shape, pks)), _swap(pks), symmetry="rectangular"
         )
 
 
@@ -294,14 +318,14 @@ def test_correct_img_distortion_accepts_stack():
     arr = _render_spots(shape, pks, sigma=4)
 
     stack = base.LEEMStack([base.LEEMImg(arr), base.LEEMImg(arr)])
-    corrected_stack = processing.correct_img_distortion(stack, pks, symmetry="hexagonal")
+    corrected_stack = processing.correct_img_distortion(stack, _swap(pks), symmetry="hexagonal")
     assert isinstance(corrected_stack, base.LEEMStack)
     assert len(corrected_stack) == 2
     for corrected_img in corrected_stack:
         assert corrected_img.image.shape == shape
 
     corrected_single = processing.correct_img_distortion(
-        base.LEEMImg(arr), pks, symmetry="hexagonal"
+        base.LEEMImg(arr), _swap(pks), symmetry="hexagonal"
     )
     assert isinstance(corrected_single, base.LEEMImg)
     assert corrected_single.image.shape == shape
@@ -314,4 +338,78 @@ def test_correct_img_distortion_requires_rot_for_custom_symmetry():
     img = base.LEEMImg(_render_spots(shape, pks))
 
     with pytest.raises(ValueError):
-        processing.correct_img_distortion(img, pks, symmetry="custom")
+        processing.correct_img_distortion(img, _swap(pks), symmetry="custom")
+
+
+### find_reflections + correct_img_distortion -- convention compatibility ###
+
+
+def test_find_reflections_correct_img_distortion_roundtrip():
+    """find_reflections' output must plug directly into correct_img_distortion
+    with no manual coordinate swapping in between -- both are documented as
+    (x, y), so they must be directly composable, which is the point of
+    find_reflections's docstring example usage."""
+    shape = (220, 160)
+    center = _center(shape)
+    radius = min(shape) * 0.28
+    ideal = _hexagon(center, radius)
+    distorted = _distort(ideal, center)
+    pks_rc = np.vstack([center, distorted])
+    arr = _render_spots(shape, pks_rc, sigma=5)
+
+    detected_xy = processing.find_reflections(arr, 7, min_distance=8, threshold_rel=0.1)
+    _, _, distorted_radii, distorted_angles = _symmetry_metrics(_swap(detected_xy))
+
+    img = base.LEEMImg(arr)
+    corrected = processing.correct_img_distortion(img, detected_xy, symmetry="hexagonal")
+    assert corrected.image.shape == shape
+
+    result_xy = processing.find_reflections(corrected, 7, min_distance=8, threshold_rel=0.1)
+    _, _, radii, angles = _symmetry_metrics(_swap(result_xy))
+
+    # corrected pattern is much closer to a regular hexagon than the input
+    # was (pks here come from find_reflections' pixel-quantized detections
+    # rather than exact analytic points, so use a relative rather than a tight
+    # absolute tolerance).
+    assert np.max(np.abs(angles - 60.0)) < 5.0
+    assert _radius_spread(radii) < _radius_spread(distorted_radii) / 3
+    assert np.max(np.abs(angles - 60.0)) < np.max(np.abs(distorted_angles - 60.0)) / 3
+
+
+def test_correct_img_distortion_xy_matches_legacy_rowcol():
+    """The (x, y) convention is purely a relabelling at the public boundary of
+    correct_img_distortion: swapping pks to (x, y) and un-swapping it right
+    back inside the function must reproduce exactly what calling the
+    underlying symmetrize chain directly with the original (row, col) points
+    produces (non-square shape, so a residual axis mix-up can't hide)."""
+    shape = (220, 160)
+    center = _center(shape)
+    radius = min(shape) * 0.28
+    ideal = _hexagon(center, radius)
+    distorted = _distort(ideal, center)
+    pks_rc = np.vstack([center, distorted])
+    arr = _render_spots(shape, pks_rc, sigma=5)
+    img = base.LEEMImg(arr)
+
+    corrected_xy_api = processing.correct_img_distortion(img, _swap(pks_rc), symmetry="hexagonal")
+
+    # Reference: replicate correct_img_distortion's body directly with the
+    # original (row, col) points, bypassing the (x, y) -> (row, col) swap.
+    pcent, psur = po.pointset_center(pks_rc, method="centroidnn")
+    psur_ord = po.pointset_order(psur, direction="ccw")
+    cvd = po.cvdist(psur_ord, pcent)
+    ptargs = sym.rotVertexGenerator(
+        pcent,
+        fixedvertex=psur_ord[0, :],
+        cvd=cvd.mean(),
+        arot=np.full(5, 60.0),
+        direction=-1,
+        scale=1,
+        ret="all",
+    )
+    nr, nc = arr.shape
+    reference, _ = tps.tpsWarping(
+        psur_ord, ptargs, arr, None, 3, ret="all", output_region=(0, 0, nr, nc)
+    )
+
+    assert np.allclose(corrected_xy_api.image, reference)

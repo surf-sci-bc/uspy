@@ -14,6 +14,7 @@ from numpy.testing import assert_array_equal
 from uspy.leem import base
 from uspy.leem.base import LEEMImg, LEEMStack, IVCurve, TimeOrigin
 from uspy.leem.readers.elmitec import ElmitecReader
+from uspy.derived import IntensityLine
 from uspy.roi import ROI
 
 from .conftest import (
@@ -111,6 +112,89 @@ def test_stack_constructor_nonsense():
         _ = base.LEEMStack("nonsense")
     with pytest.raises(FileNotFoundError):
         _ = base.LEEMStack(["nonsense.dat"])
+
+
+### Loading a stack from per-frame ".tiff" files (glob / folder), as opposed to a single 3D
+### TIFF. Reproduces a reported bug where globbing per-frame TIFFs silently misread frames
+### (via tifffile's FileSequence machinery force-fitting every file into frame 0's shape) and
+### lost each element's `source`, plus a lazy/eager asymmetry (glob raised on the lazy path).
+
+
+def test_leemstack_glob_loads_one_frame_per_file_in_natural_order(tiff_frame_stack):
+    stack = LEEMStack(tiff_frame_stack["glob"])
+    assert len(stack) == len(tiff_frame_stack["paths"])
+    assert stack.sources == tiff_frame_stack["paths"]
+    for element, expected in zip(stack, tiff_frame_stack["arrays"]):
+        assert element.image.shape == expected.shape
+        assert_array_equal(element.image, expected)
+
+
+def test_leemstack_glob_folder_and_explicit_list_agree(tiff_frame_stack):
+    from_glob = LEEMStack(tiff_frame_stack["glob"])
+    from_dir = LEEMStack(tiff_frame_stack["dir"])
+    from_dir_trailing_slash = LEEMStack(tiff_frame_stack["dir"] + "/")
+    from_list = LEEMStack(tiff_frame_stack["paths"])
+
+    assert from_glob.sources == from_dir.sources == from_dir_trailing_slash.sources
+    assert from_glob.sources == from_list.sources
+    for a, b in zip(from_glob, from_list):
+        assert_array_equal(a.image, b.image)
+
+
+def test_leemstack_glob_can_virtualize_and_go_lazy(tiff_frame_stack):
+    # Before the fix, a glob-built stack lost every element's `source`, so virtualizing or
+    # calling .to_lazy() raised "Can't virtualize/build a lazy stack without source
+    # information."
+    stack = LEEMStack(tiff_frame_stack["glob"])
+    stack.virtual = True
+    assert stack.virtual
+    stack.virtual = False
+    assert not stack.virtual
+
+    lazy = stack.to_lazy()
+    assert len(lazy) == len(tiff_frame_stack["paths"])
+
+
+def test_leemstack_mixed_shape_tiff_glob_raises(tiff_stack_glob):
+    # testdata/tiff_stack/ deliberately contains frames of two different shapes -- the
+    # original bug report. Before the fix, this silently loaded 7 frames with several of
+    # them holding another file's pixels reshaped into the wrong dimensions.
+    with pytest.raises(ValueError, match=r"(?i)shape|compatible"):
+        base.LEEMStack(tiff_stack_glob)
+
+
+def test_leemstack_mixed_shape_tiff_frames_load_correctly_when_selected(tiff_stack_glob):
+    import glob as glob_mod
+    import tifffile
+
+    fnames = sorted(glob_mod.glob(tiff_stack_glob))
+    shapes = {f: tifffile.imread(f).shape for f in fnames}
+    reference_shape = shapes[fnames[0]]
+    same_shape = [f for f in fnames if shapes[f] == reference_shape]
+    assert len(same_shape) >= 2, "fixture must contain multiple same-shape frames"
+
+    stack = LEEMStack(same_shape)
+    for fname, element in zip(same_shape, stack):
+        expected = tifffile.imread(fname)
+        assert element.image.shape == expected.shape
+        assert_array_equal(element.image, expected)
+
+    # Guard the corruption mechanism itself: no loaded frame should equal a *different*
+    # shape's data reshaped into the reference shape.
+    other_shape_files = [f for f in fnames if shapes[f] != reference_shape]
+    for element in stack:
+        for other in other_shape_files:
+            reshaped = tifffile.imread(other).reshape(reference_shape)
+            assert not np.array_equal(element.image, reshaped)
+
+
+def test_leemstack_incompatible_elements_raise_instead_of_silently_dropping():
+    # DataObjectStack._construct used to build an unraised Warning(...) instance instead of
+    # calling warnings.warn(...), so an incompatible frame was silently skipped -- the
+    # resulting stack was shorter than the input list with no indication why.
+    sources = IMG_FNAMES_COMPATIBLE + [STACK_INCOMPATIBLE_IMG_FNAME]
+    with pytest.raises(ValueError, match=STACK_INCOMPATIBLE_IMG_FNAME.split("/")[-1]):
+        base.LEEMStack(sources)
 
 
 def test_img_attr_types(img):
@@ -889,6 +973,46 @@ def test_img_pressure_setter():
     assert img.pressure == 42.0
 
 
+def test_img_time_origin_setter_runs_not_silently_swallowed():
+    """Before DataObject.__setattr__ was fixed to honor property setters,
+    `img.time_origin = x` silently wrote `_meta["time_origin"]` (never read back, since the
+    property getter always wins) instead of running `time_origin`'s setter."""
+    img = base.LEEMImg(TESTDATA_DIR + "bremen.dat")
+    img.time_origin = 555.0
+    assert img.time_origin == 555.0
+    assert "time_origin" not in img._meta
+
+
+def test_img_binding_energy_setattr_raises():
+    """binding_energy is a read-only property (derived from photon_energy, energy, and
+    energy_offset) -- assigning to it must raise, not silently write a dead _meta entry."""
+    img = base.LEEMImg(TESTDATA_DIR + "bremen.dat")
+    with pytest.raises(AttributeError):
+        img.binding_energy = 5.0
+
+
+def test_stack_energy_offset_scalar_broadcasts_and_shifts_binding_energy():
+    """The reported case: a scalar energy_offset set on a stack must apply to every element,
+    since a stack has no metadata of its own -- and it must actually affect the derived
+    binding_energy on every element by exactly that amount."""
+    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")
+    stack.photon_energy = 100.0  # binding_energy needs a real photon_energy to be meaningful
+    before = stack.binding_energy.copy()
+
+    stack.energy_offset = 3.4934
+
+    assert (stack.energy_offset == 3.4934).all()
+    assert "energy_offset" not in stack.__dict__  # not shadowing the per-element gather
+    assert all(img.energy_offset == 3.4934 for img in stack)
+    np.testing.assert_allclose(stack.binding_energy, before - 3.4934)
+
+
+def test_stack_binding_energy_setattr_raises():
+    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")
+    with pytest.raises(AttributeError):
+        stack.binding_energy = 5.0
+
+
 ### warp / unwarped
 
 
@@ -1081,3 +1205,30 @@ def test_ivcurve_stitches_overlapping_stacks():
     stack2 = stack[half - 5 :]
     curve = base.IVCurve([stack1, stack2], [roi, roi])
     assert len(curve.x) == len(stack)
+
+
+def test_intensity_line_new_field_axis_does_not_crash():
+    """The reported failure mode: after adding brand-new metadata to a stack (via the
+    scalar-broadcast __setattr__), using it as the x-axis of an IntensityLine must not
+    KeyError just because there's no unit recorded for it yet -- it gets the default ""."""
+    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")
+    roi = ROI.circle(x0=stack[0].width // 2, y0=stack[0].height // 2, radius=10)
+    stack.some_new_field = 5.0
+
+    line = IntensityLine(stack, roi, "some_new_field")
+    assert line.unit["x"] == ""
+    assert len(line.x) == len(stack)
+
+
+def test_intensity_line_computed_axis_without_unit_entry_does_not_crash():
+    """A computed (property-backed) axis that never enters _meta/_units at all -- e.g.
+    kinetic_energy, a pure alias for energy with no _unit_defaults entry -- must not KeyError
+    either. This covers the `.get(xaxis, "")` fallback in IntensityLine.parse, which the
+    metadata-write fix alone can't reach since nothing ever calls __setattr__ for a
+    property."""
+    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")
+    roi = ROI.circle(x0=stack[0].width // 2, y0=stack[0].height // 2, radius=10)
+    assert "kinetic_energy" not in stack[0].unit
+
+    line = IntensityLine(stack, roi, "kinetic_energy")
+    assert line.unit["x"] == ""
