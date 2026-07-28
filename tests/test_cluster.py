@@ -79,7 +79,7 @@ def pendry_stack():
     # the only available equivalent is ...80-140.tif (61 frames, vs. the >160 frames the
     # original "cut out a few bad frames" indices assumed). Cache to .pickle -- the
     # only extension uspy.dataobject.Loadable.save()/load() actually recognizes; the
-    # original ".lstk" extension is a leftover from the legacy uspy.leem.base_old API
+    # original ".lstk" extension is a leftover from the legacy uspy.legacy.base_old API
     # and is not supported by the current Loadable. Loading a cache also requires the
     # LEEMStack.load() classmethod, not the constructor (which treats its argument as
     # an image source/glob, not a pickle file, and raises ValueError for an unknown one).

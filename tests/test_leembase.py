@@ -772,7 +772,7 @@ def test_img_normalize_no_nan_or_inf():
     result = img.normalize(mcp=mcp, dark_counts=100)
     assert not np.isnan(result.image).any()
     assert not np.isinf(result.image).any()
-    # unlike the legacy uspy.leem.driftnorm.normalize_image, LEEMImg.normalize does not
+    # unlike the legacy uspy.legacy.driftnorm.normalize_image, LEEMImg.normalize does not
     # clip negative values -- pin that behavior explicitly.
     assert result.image.min() < 0
 

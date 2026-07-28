@@ -28,18 +28,22 @@ def pure_ds(x, amplitude=1.0, center=0.0, fwhm=1.0, asym=0.5):
     arg = center - x
     am1 = 1 - asym
     y = (
-        amplitude / np.pi * ss.gamma(am1)
+        amplitude
+        / np.pi
+        * ss.gamma(am1)
         / (arg**2 + sigma**2) ** (am1 / 2)
         * np.cos(np.pi * asym / 2 + am1 * np.arctan(arg / sigma))
     )
     return y
 
+
 def gaussian(x, amplitude=1.0, center=0.0, fwhm=1.0):
     """Standard gaussian with amplitude = area."""
     sigma = max(tiny, fwhm / (2 * s2ln2))
     arg = center - x
-    y = amplitude / (s2pi * sigma) * np.exp(-arg**2 / (2 * sigma**2))
+    y = amplitude / (s2pi * sigma) * np.exp(-(arg**2) / (2 * sigma**2))
     return y
+
 
 def lorentzian(x, amplitude=1.0, center=0.0, fwhm=1.0):
     """Standard lorentzian with amplitude = area."""
@@ -47,6 +51,7 @@ def lorentzian(x, amplitude=1.0, center=0.0, fwhm=1.0):
     arg = center - x
     y = amplitude / (gamma * np.pi) * gamma**2 / (arg**2 + gamma**2)
     return y
+
 
 def voigt(x, amplitude=1.0, center=0.0, fwhm=1.0, fwhm_l=None):
     """Voigt function using Faddeeva function wofz.
@@ -63,6 +68,7 @@ def voigt(x, amplitude=1.0, center=0.0, fwhm=1.0, fwhm_l=None):
     # pylint: disable=no-member
     y = amplitude * ss.wofz(z).real / (sigma * s2pi)
     return y
+
 
 def voigt_defined_fwhm(x, amplitude=1.0, center=0.0, fwhm=1.0, fwhm_g=None):
     """Voigt function using Faddeeva function wofz.
@@ -82,11 +88,13 @@ def voigt_defined_fwhm(x, amplitude=1.0, center=0.0, fwhm=1.0, fwhm_g=None):
     y = amplitude * ss.wofz(z).real / (sigma * s2pi)
     return y
 
+
 def gl_sum(x, amplitude=1.0, center=0.0, fwhm=1.0, fraction=0.5):
     """Sum of a gaussian and a lorentzian component."""
     G = gaussian(x, amplitude=amplitude, center=center, fwhm=fwhm)
     L = lorentzian(x, amplitude=amplitude, center=center, fwhm=fwhm)
     return (1 - fraction) * G + fraction * L
+
 
 def gl_prod(x, amplitude=1.0, center=0.0, fwhm=1.0, fraction=0.5):
     """Product form of a gaussian and a lorentzian component."""
@@ -98,19 +106,23 @@ def gl_prod(x, amplitude=1.0, center=0.0, fwhm=1.0, fraction=0.5):
     arg = center - x
     # pylint: disable=no-member
     norm_area = (
-        gamma * np.exp(gamma**2 / (4 * sigma**2))
+        gamma
+        * np.exp(gamma**2 / (4 * sigma**2))
         * ss.erfc(gamma / (2 * sigma))
         / (s2pi * sigma * gamma)
     )
     amplitude /= norm_area
     GL = (
-        amplitude #/ (s2pi * sigma * gamma * np.pi)
-        * np.exp(-arg**2 / (2 * sigma**2) * 4 * ln2 * (1 - fraction))
-        * gamma**2 / (4 * fraction) / (arg**2 + gamma**2 / (4 * fraction))
+        amplitude  # / (s2pi * sigma * gamma * np.pi)
+        * np.exp(-(arg**2) / (2 * sigma**2) * 4 * ln2 * (1 - fraction))
+        * gamma**2
+        / (4 * fraction)
+        / (arg**2 + gamma**2 / (4 * fraction))
     )
     # G = gaussian(x, amplitude=amplitude, center=center, fwhm=fwhm_g)
     # L = lorentzian(x, amplitude=amplitude, center=center, fwhm=fwhm_l)
     return GL
+
 
 def gelius(x, amplitude=1.0, center=0.0, fwhm=1.0, a=0.5, b=0.5, fwhm_l=0.5):
     """See http://www.casaxps.com/help_manual/line_shapes.htm
@@ -119,12 +131,13 @@ def gelius(x, amplitude=1.0, center=0.0, fwhm=1.0, a=0.5, b=0.5, fwhm_l=0.5):
         fwhm_l = fwhm
     arg = center - x
     below_c = (x <= center).astype(int)
-    AW = np.exp(-(2 * sln2 * arg / (fwhm - a * 2 * sln2 * arg))**2)
+    AW = np.exp(-((2 * sln2 * arg / (fwhm - a * 2 * sln2 * arg)) ** 2))
     w = b * (0.7 + 0.3 / (a + 0.01))
     V = voigt(x, amplitude=amplitude, center=center, fwhm=fwhm, fwhm_l=fwhm_l)
     G = gaussian(x, amplitude=amplitude, center=center, fwhm=fwhm)
     y = V + below_c * (w * (AW - G))
     return y
+
 
 def asymm_tail(x, center=0, fwhm=1.0, tail=1.0):
     """Tail for dampening asymmetric lines below x = center."""
@@ -136,12 +149,14 @@ def asymm_tail(x, center=0, fwhm=1.0, tail=1.0):
     y = np.exp(-np.maximum(arg, zeros) * tail)
     return y
 
+
 def centered_ds(x, amplitude=1.0, center=0.0, fwhm=1.0, asym=0.5):
     """DS lineshape with maximum at center."""
     emax = fwhm / (2 * np.tan(np.pi / (2 - asym)))
     center += emax
     y = pure_ds(x, amplitude=amplitude, center=center, fwhm=fwhm, asym=asym)
     return y
+
 
 def tailed_ds(x, amplitude=1.0, center=0.0, fwhm=1.0, asym=0.5, tail=1.0):
     """Centered DS with exponential tail at lower x."""
@@ -154,6 +169,7 @@ def tailed_ds(x, amplitude=1.0, center=0.0, fwhm=1.0, asym=0.5, tail=1.0):
 
 class PeakModel(Model):
     """Generic model for peaks."""
+
     def __init__(self, func, **kwargs):
         kwargs["independent_vars"] = kwargs.get("independent_vars", ["x"])
         kwargs["prefix"] = kwargs.get("prefix", "")
@@ -220,25 +236,31 @@ class PeakModel(Model):
 
 class VoigtModel(PeakModel):
     """Voigt model with a defined fwhm."""
+
     def __init__(self, **kwargs):
         super().__init__(voigt_defined_fwhm, **kwargs)
 
+
 class PseudoVoigtModel(PeakModel):
     """Standard Gaussian-Lorentzian product."""
+
     def __init__(self, **kwargs):
         super().__init__(gl_sum, **kwargs)
 
+
 class DoniachSunjicModel(PeakModel):
     """x-axis reversed Doniach model (general formula taken from lmfit)."""
+
     def __init__(self, **kwargs):
         super().__init__(centered_ds, **kwargs)
+
 
 class TailedDoniachSunjicModel(PeakModel):
     """DS line shape with an exponentially decaying tail on the asymmetric
     side."""
+
     def __init__(self, **kwargs):
         super().__init__(tailed_ds, **kwargs)
-
 
 
 def pah2fwhm(_position, angle, height, shape):
@@ -251,12 +273,12 @@ def pah2fwhm(_position, angle, height, shape):
         return np.tan(angle) * height
     raise NotImplementedError
 
+
 def pah2area(_position, angle, height, shape):
     """Calculates area from position, angle, height depending on shape."""
     if shape == "PseudoVoigt":
         fwhm = np.tan(angle) * height
-        area = (height * (fwhm * np.sqrt(np.pi / ln2))
-                / (1 + np.sqrt(1 / (np.pi * ln2))))
+        area = height * (fwhm * np.sqrt(np.pi / ln2)) / (1 + np.sqrt(1 / (np.pi * ln2)))
         return area
     elif shape == "DoniachSunjic":
         fwhm = np.tan(angle) * height

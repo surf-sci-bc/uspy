@@ -12,7 +12,7 @@ from lmfit import Parameters, report_fit
 from lmfit.models import ConstantModel  # , PseudoVoigtModel
 import lmfit.models as lmmodels
 
-from uspy.xps import processing, models
+from uspy.legacy.xps import processing, models
 from uspy.dataobject import Line
 
 
@@ -283,7 +283,8 @@ class ModeledSpectrum(XPSSpectrum):
     @property
     def residual(self):
         """Returns the fit residual."""
-        return self.intensity - self.background - self.fit_intensity
+        # return self.intensity - self.background - self.fit_intensity
+        return self.residual / np.sqrt(self.fit_intensity)
 
     @property
     def model(self):
@@ -303,6 +304,14 @@ class ModeledSpectrum(XPSSpectrum):
     def report(self):
         """Returns the report of the fit"""
         report_fit(self.params)
+
+    @property
+    def abbe(self):
+        return (
+            0.5
+            * np.sum((self.result.residual[1:] - self.result.residual[:-1]) ** 2)
+            / np.sum(self.result.residual**2)
+        )
 
     def do_fit(self):
         """Returns the fitted cps values."""
@@ -573,13 +582,18 @@ class Peak:
         elif self._shape == "SkewedVoigt":
             self._model = lmmodels.SkewedVoigtModel(prefix=f"{self.name}_")
             self._model.set_param_hint("gamma", value=0.5, expr=None)
+        elif self._shape == "TailedDS":
+            self._model = models.TailedDoniachSunjicModel(prefix=f"{self.name}_")
+            # self._model.set_param_hint("gamma", value=0.5, expr=None)
 
         else:
             raise NotImplementedError(f"Unkown shape '{self._shape}'")
 
         self.params = self._model.make_params()
         if guess:
-            self.params = self._model.guess(min=0, **kwargs)
+            self.params = self._model.guess(**kwargs)
+            for k, v in self.params.items():
+                self.get_param(k).set(min=0)
         else:
             for k, v in kwargs.items():
                 self.get_param(k).set(value=v, min=0, vary=True)
@@ -588,35 +602,6 @@ class Peak:
         # self.get_param("fwhm").set(value=fwhm, min=0, vary=True)
         # self.get_param("amplitude").set(value=area, min=0, vary=True)
         # self.get_param("center").set(value=position, min=-np.inf, vary=True)
-
-        """
-        self.param_aliases = {"area": "amplitude", "fwhm": "fwhm", "position": "center"}
-        if self._shape == "PseudoVoigt":
-            self.param_aliases["alpha"] = "fraction"
-            if alpha is None:
-                alpha = 0.5
-            self._model = models.PseudoVoigtModel(prefix=f"{self.name}_")
-            self._model.set_param_hint("fraction", min=0, value=alpha)
-        elif self._shape == "DoniachSunjic":
-            self.param_aliases["alpha"] = "asym"
-            if alpha is None:
-                alpha = 0.1
-            self._model = models.DoniachSunjicModel(prefix=f"{self.name}_")
-            self._model.set_param_hint("asym", min=0, value=alpha)
-        elif self._shape == "Voigt":
-            self.param_aliases["alpha"] = "fwhm_l"
-            if alpha is None:
-                alpha = 0.5
-            self._model = models.VoigtModel(prefix=f"{self.name}_")
-            self._model.set_param_hint("fwhm_l", min=0, value=alpha)
-        else:
-            raise NotImplementedError(f"Unkown shape '{self._shape}'")
-
-        self.params += self._model.make_params()
-        self.get_param("fwhm").set(value=fwhm, min=0, vary=True)
-        self.get_param("amplitude").set(value=area, min=0, vary=True)
-        self.get_param("center").set(value=position, min=-np.inf, vary=True)
-        """
 
     @property
     def shape(self):

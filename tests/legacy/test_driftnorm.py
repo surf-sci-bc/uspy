@@ -7,7 +7,7 @@
 import numpy as np
 import pytest
 
-from uspy.leem import driftnorm
+from uspy.legacy import driftnorm
 
 
 ### Normalization

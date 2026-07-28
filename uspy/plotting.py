@@ -25,7 +25,7 @@ import uspy.dataobject as do
 import uspy.derived as derived
 import uspy.roi as rois
 from uspy.leem.utility import stackify, imgify
-from uspy.leem.driftnorm import normalize_image
+from uspy.leem.processing import RSM
 from scipy.interpolate import RegularGridInterpolator
 
 
@@ -213,11 +213,10 @@ def make_video(
     - field_color: (see also plot_img())
       Color of field labels (defaults to yellow normally, defaults to black if
       invert or cutout_diameter is set)
-    - mcp:
-      Filename of a channelplate background file (will be divided by)
-    - dark_counts:
-      Works only together with mcp -- subtracts dark_counts from
-      the image and from the background file before dividing them (default 100)
+    - mcp, dark_counts:
+      Not implemented here -- normalization was removed when the legacy
+      uspy.leem.driftnorm module was quarantined. Passing either raises ValueError;
+      call LEEMStack.normalize() on the stack before make_video() instead.
     - contrast:
       "auto": Use the maximum dynamic range for EACH image (default).
       "inner": Same as "auto", but it will only use the inner 60 % of each image.
@@ -239,6 +238,11 @@ def make_video(
 
     Returns an iPython.display Video object
     """
+    if mcp is not None or dark_counts != 100:
+        raise ValueError(
+            "make_video() no longer normalizes images itself (mcp/dark_counts are not "
+            "applied). Call LEEMStack.normalize() on the stack before make_video() instead."
+        )
     if not overwrite and os.path.isfile(ofile):
         return Video(ofile)
     # make input sane
@@ -327,8 +331,6 @@ def make_video(
     ## Create Mask if neccesary
 
     for img in stack:
-        # if mcp is not None:
-        #    img = normalize_image(img, mcp=mcp, dark_counts=dark_counts)
         data = np.nan_to_num(img.image)
 
         # try:

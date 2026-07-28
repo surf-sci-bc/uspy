@@ -29,8 +29,6 @@ from numba import jit
 import numba
 
 
-# import uspy.leem.driftnorm as driftnorm
-
 # from uspy.leem.base import LEEMStack#, Loadable
 from uspy.leem.utility import stackify
 from uspy.utility import progress_bar
@@ -900,20 +898,8 @@ class RSM:
 
 #     def reconstruct(self):
 #         stacks = [LEEMStack(fnames) for fnames in self._fnames]
-#         for ii, _ in enumerate(stacks):
-#             try:
-#                 stacks[ii] = driftnorm.normalize(
-#                     stacks[ii], mcp=self._mcp[ii], dark_counts=self._dark_counts[ii]
-#                 )
-#             except AttributeError:
-#                 pass
-#             try:
-#                 stacks[ii] = driftnorm.apply_alignment_matrices(
-#                     stacks[ii], self._alignment[ii]
-#                 )
-#             except AttributeError:
-#                 pass
-
+#         # normalization/alignment previously applied here via uspy.leem.driftnorm
+#         # (now uspy.legacy.driftnorm); moved onto LEEMStack.normalize()/.align() directly.
 #         return stacks
 
 #     def simplify(self, value):

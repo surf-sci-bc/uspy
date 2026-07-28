@@ -48,7 +48,7 @@ setup(
         "setuptools_scm",  # see uspy/version.py
         'tomli; python_version < "3.11"',  # tomllib is stdlib from 3.11 on
     ],
-    package_data={"uspy.xps": ["rsf.db"]},
+    package_data={"uspy.legacy.xps": ["rsf.db"]},
     python_requires="~=3.6",
     tests_require=["pytest", "pytest-cov"],
     # pyhdf wraps the HDF4 C library and is used only by the SMART/BESSY reader

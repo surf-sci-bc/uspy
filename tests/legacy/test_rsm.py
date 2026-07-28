@@ -7,7 +7,7 @@ from matplotlib.widgets import Slider
 import numpy as np
 
 from uspy.leem import base
-from uspy.leem import rsm
+from uspy.legacy import rsm
 
 
 def main():

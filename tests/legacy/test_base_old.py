@@ -9,7 +9,7 @@ import numpy as np
 
 from uspy.leem import base
 
-from .conftest import (
+from ..conftest import (
     same_or_nan,
     IMG_FNAMES_COMPATIBLE, STACK_FNAMES,
     STACK_INCOMPATIBLE_IMG_FNAME,

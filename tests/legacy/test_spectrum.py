@@ -9,9 +9,9 @@ import os
 import pytest
 import numpy as np
 
-from uspy.xps import spectrum
+from uspy.legacy.xps import spectrum
 
-TESTDATA_DIR = os.path.dirname(__file__) + "/../testdata/xps/"
+TESTDATA_DIR = os.path.dirname(__file__) + "/../../testdata/xps/"
 
 EIS_FNAMES = [
     TESTDATA_DIR + "2020-02-20_Ga2O3_new_check-oxidation.txt"

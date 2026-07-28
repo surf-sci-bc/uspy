@@ -364,7 +364,7 @@ def test_lazy_normalize_parity(stack_folder, dark_counts_kind):
     # with another parametrized fixture (stack_folder) in the same test, it triggers an
     # unrelated pytest fixture-caching quirk (that fixture embeds real LEEMImg objects
     # directly as `params`) that's never actually hit by the existing suite, since the one
-    # test that combines them (test_driftnorm.py) is in conftest.py's collect_ignore.
+    # test that combines them (tests/legacy/test_driftnorm.py) is in conftest.py's collect_ignore.
     mcp = imgify(MCP_IMG_FNAME)
     dark_counts = {
         "path": DC_IMG_FNAME,
