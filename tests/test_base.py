@@ -364,6 +364,75 @@ def test_stack_setattr_mismatched_iterable_collision_raises(list1darrays):
     assert len(stack.totally_new_label) == len(sources)
 
 
+### Empty-stack construction ######################################################################
+
+# A stack is a container for one or more objects -- an empty stack is deliberately not a
+# supported thing to *construct* (DataObjectStack.__init__(source=[]) must raise a clear
+# ValueError, not the opaque `IndexError: list index out of range` it used to raise via
+# `isinstance(source[0], self._type)` with an unchecked source[0]). An empty stack can still
+# *arise* from manipulating an existing one (e.g. `del stack[:]`), and that route must keep
+# working -- the safeguards elsewhere in this module (e.g. the scalar-setattr guard below) exist
+# specifically to handle that already-reachable case sanely.
+
+
+@pytest.mark.parametrize("virtual", [False, True])
+def test_stack_empty_list_raises_valueerror_not_indexerror(virtual):
+    with pytest.raises(ValueError):
+        MinimalObjectStack([], virtual=virtual)
+
+
+@pytest.mark.parametrize("virtual", [False, True])
+def test_stack_zero_width_slice_raises(list1darrays, virtual):
+    sources = list1darrays
+    stack = MinimalObjectStack(sources, virtual=virtual)
+    with pytest.raises(ValueError):
+        stack[0:0]
+    with pytest.raises(ValueError):
+        stack[len(stack) : len(stack)]
+    with pytest.raises(ValueError):
+        stack[5:5]
+
+
+@pytest.mark.parametrize("source", ["", "no/such/path", "no/such/*.tif"])
+def test_imagestack_bad_string_source_raises_valueerror_not_indexerror(source):
+    # A string source that resolves to no files is a typo, not an empty stack -- it must keep
+    # raising its own clear ValueError (from _split_source), distinct from the empty-list
+    # ValueError above, and never IndexError. "" is the tricky case: source[0] on an empty
+    # string is what used to raise IndexError directly inside __init__, before _split_source
+    # was ever reached.
+    with pytest.raises(ValueError) as excinfo:
+        ImageStack(source)
+    assert not isinstance(excinfo.value, IndexError)
+
+
+def test_stack_del_all_still_yields_working_empty_stack(list1darrays):
+    """Emptying a stack via manipulation (as opposed to constructing one empty) is not being
+    taken away by this fix -- __delitem__ doesn't go through __init__, so it must keep working,
+    and the result must still behave like a normal (if empty) stack."""
+    stack = MinimalObjectStack(list1darrays, virtual=False)
+    del stack[:]
+    assert len(stack) == 0
+    assert list(stack) == []
+    assert stack.elements == []
+
+
+def test_stack_setattr_mismatched_iterable_on_empty_stack_raises(list1darrays):
+    """Regression for a silent hole found while fixing empty-stack construction: the collision
+    check in __setattr__ (`collides = len(self) and hasattr(self[0], attr)`) short-circuits to
+    falsy for an empty stack, so a mismatched-length iterable used to sail through to the
+    print-and-attach path -- silently creating a stack-level attribute that permanently shadows
+    the per-element gather in __getattr__, exactly what the non-empty collision check exists to
+    prevent. Must now raise instead, mirroring the scalar branch's existing empty-stack guard.
+    """
+    stack = MinimalObjectStack(list1darrays, virtual=False)
+    del stack[:]
+    assert len(stack) == 0
+    with pytest.raises(ValueError):
+        stack.some_meta = [1, 2, 3]
+    # the rejected assignment must not have taken effect as a shadowing instance attribute
+    assert "some_meta" not in stack.__dict__
+
+
 def test_stack_setattr_scalar_broadcast_survives_indexing(list1darrays):
     """A scalar assigned to the stack must really be written onto every element, not just
     kept somewhere that only the stack's own __getattr__ gather can see -- so it also has to
@@ -863,6 +932,30 @@ def test_stack_save():
     load_stack = ImageStack(TESTDATA_DIR + "test_image.tiff")
     os.remove(TESTDATA_DIR + "test_image.tiff")
     assert all([(img1.image == img2).all() for img1, img2 in zip(load_stack, array)])
+
+
+def test_imagestack_average_nonpositive_avg_raises():
+    """`avg <= 0` must raise a clear error rather than a misleading one. Before the empty-stack
+    constructor fix, `stack.average(-2)` on a 10-frame stack passed `10 % -2 == 0`, iterated
+    `range(0, -5)` zero times, and crashed building `type(self)([])` with a bare IndexError;
+    after that fix it would instead report "cannot create an empty stack", which points at the
+    wrong thing -- the input average, not the (non-empty) stack, is what's actually bad. `avg=0`
+    hit a bare ZeroDivisionError before; both must now raise ValueError."""
+    stack = ImageStack([np.eye(4) * i for i in range(10)])
+    with pytest.raises(ValueError):
+        stack.average(0)
+    with pytest.raises(ValueError):
+        stack.average(-2)
+
+
+def test_imagestack_save_tiff_empty_stack_raises(tmp_path):
+    stack = ImageStack([np.eye(4) * i for i in range(3)])
+    del stack[:]
+    assert len(stack) == 0
+    target = tmp_path / "empty.tiff"
+    with pytest.raises(ValueError):
+        stack.save(str(target))
+    assert not target.exists()
 
 
 ### Loading a stack from per-frame ".tiff" files (glob / folder), as opposed to a single 3D

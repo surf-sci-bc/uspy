@@ -262,7 +262,7 @@ class Line(_ArithmeticMixin, DataObject):
 
         return line
 
-    def save(self, fname: str) -> Line:
+    def save(self, fname: str, **kwargs) -> Line:
         """
         Saves the line as .csv
 
@@ -272,17 +272,29 @@ class Line(_ArithmeticMixin, DataObject):
             Filename of the file to save.
             If it ends with .csv a csv file of the dataframe representation of the line is saved
             Otherwise the parent(dataobject) save method is called.
+        **kwargs
+            Only meaningful for an HDF5 target (.h5/.hdf5/.nxs); see `uspy.hdf5.write`.
 
         Returns
         -------
             None
         """
         if fname.lower().endswith(".csv") or fname.lower().endswith(".txt"):
+            if kwargs:
+                raise TypeError(
+                    f"save() got unexpected keyword argument(s) {list(kwargs)!r}: these are "
+                    "only accepted for an HDF5 target (.h5/.hdf5/.nxs)."
+                )
             self.dataframe.to_csv(fname, index=False, header=True)
         elif fname.lower().endswith(".tsf"):  # This is for CasaXPS
+            if kwargs:
+                raise TypeError(
+                    f"save() got unexpected keyword argument(s) {list(kwargs)!r}: these are "
+                    "only accepted for an HDF5 target (.h5/.hdf5/.nxs)."
+                )
             self.dataframe.to_csv(fname, index=False, header=False, sep="\t")
         else:
-            super().save(fname)
+            super().save(fname, **kwargs)
 
         return self
 

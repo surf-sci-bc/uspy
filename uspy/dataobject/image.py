@@ -18,6 +18,15 @@ import cv2 as cv
 
 from uspy.dataobject.base import DataObject, DataObjectStack, _ArithmeticMixin
 
+try:
+    # Extensions imageio itself knows how to write, keyed lowercase-with-dot (e.g. ".png").
+    # Used by Image.save to decide whether an unrecognized extension should go to imageio or
+    # raise -- older imageio releases without this registry fall back to attempting the write
+    # unconditionally (see Image.save).
+    from imageio.config import known_extensions as _IMAGEIO_KNOWN_EXTENSIONS
+except ImportError:  # pragma: no cover -- depends on installed imageio version
+    _IMAGEIO_KNOWN_EXTENSIONS = None
+
 
 # Recognized per-frame image file suffixes for glob/folder expansion (list_image_files below)
 # -- deliberately mirrors what uspy.leem.readers.elmitec/elettra recognize for their own
@@ -27,6 +36,11 @@ IMAGE_EXTENSIONS = (".tif", ".tiff", ".png", ".jpg", ".jpeg", ".bmp")
 
 def _has_glob_magic(pattern: str) -> bool:
     return any(char in pattern for char in "*?[")
+
+
+def _ext(fname: str) -> str:
+    """Lowercase file extension including the dot, e.g. "x.PNG" -> ".png"."""
+    return os.path.splitext(fname)[1].lower()
 
 
 def list_image_files(source: Any) -> list:
@@ -79,14 +93,37 @@ class Image(_ArithmeticMixin, DataObject):
         return_val = {"image": image, "width": image.shape[1], "height": image.shape[0]}
         return return_val
 
-    def save(self, fname: str, **kwargs) -> None:
-        if fname.lower().endswith((".tiff", ".tif")):
+    def save(self, fname: str, **kwargs) -> Image:
+        # Dispatches on an explicit extension whitelist rather than trying imageio first and
+        # falling back on failure -- imageio doesn't reliably raise for an extension it can't
+        # place. Empirically (imageio 2.37.2): `imageio.imwrite("x.hdf5"/"x.nxs"/"x.pickle"/
+        # "x.json"/"x.notarealformat", arr)` all silently succeed, brute-forcing the first
+        # plugin willing to write, and produce a mislabelled TIFF -- so a `try/except
+        # ValueError: super().save(...)` fallback (the previous approach here) never actually
+        # ran for those extensions; `Image.save("foo.pickle")` silently wrote TIFF bytes
+        # instead of a real pickle. Checked first and unconditionally: an HDF5-shaped
+        # extension, since imageio doesn't recognize those either.
+        from uspy.hdf5 import is_hdf5_path
+
+        if is_hdf5_path(fname):
+            super().save(fname, **kwargs)
+        elif fname.lower().endswith((".tiff", ".tif")):
             tifffile.imwrite(fname, self.image, **kwargs)
+        elif self._is_serialize_path(fname):
+            super().save(fname, **kwargs)
+        elif _IMAGEIO_KNOWN_EXTENSIONS is None or _ext(fname) in _IMAGEIO_KNOWN_EXTENSIONS:
+            # kwargs are forwarded (mirroring the tifffile branch above) so e.g. PNG
+            # compress_level=/JPEG quality= can be passed through -- note imageio does not
+            # validate kwargs itself, so a typo'd one is silently ignored rather than raising,
+            # unlike the tifffile/HDF5 branches.
+            imageio.imwrite(fname, np.uint16(self.image), **kwargs)
         else:
-            try:
-                imageio.imwrite(fname, np.uint16(self.image))
-            except ValueError:
-                super().save(fname)
+            raise ValueError(
+                f"Unrecognized file extension for {fname!r}: expected an HDF5 (.h5/.hdf5/"
+                ".nxs), TIFF (.tif/.tiff), serialize (.pickle/.pickle.bz2/.json), or a "
+                "format imageio can write (.png, .jpg, ...)."
+            )
+        return self
 
     def filter(self, method="gaussian", **kwargs):
         """Apply 2D Filter to image
@@ -288,6 +325,12 @@ class ImageStack(DataObjectStack):
         15
 
         """
+        if avg < 1:
+            # `avg <= 0` slips through the modulo check below (e.g. 10 % -2 == 0) and then
+            # either divides by zero (avg == 0) or iterates range(0, negative) zero times,
+            # silently returning an empty stack -- a bad `avg`, not a bad (non-empty) stack, is
+            # what's actually wrong here, so this must be caught before that check.
+            raise ValueError(f"avg must be a positive integer, got {avg}")
         if len(self) % avg != 0:
             raise ValueError(
                 f"Number of Images in Stack ({len(self)}) is not dividable by {avg}"
@@ -301,9 +344,19 @@ class ImageStack(DataObjectStack):
 
         return type(self)(imgs)
 
-    def save(self, fname: str) -> None:
+    def save(self, fname: str, **kwargs) -> None:
         if not fname.lower().endswith((".tiff", ".tif")):
-            return super().save(fname)
+            return super().save(fname, **kwargs)
+        if kwargs:
+            raise TypeError(
+                f"save() got unexpected keyword argument(s) {list(kwargs)!r}: these are only "
+                "accepted for an HDF5 target (.h5/.hdf5/.nxs)."
+            )
+        if len(self) == 0:
+            # An empty stack can't be constructed directly (see DataObjectStack.__init__), but
+            # can still arise from e.g. `del stack[:]` -- mirrors uspy.hdf5.write's identical
+            # empty-stack refusal for the HDF5 target.
+            raise ValueError(f"Cannot export an empty stack to TIFF ({fname!r}).")
 
         # Streamed frame-by-frame instead of `np.stack([image.image for image in
         # self])` (which builds a second full (N, H, W) copy of the whole stack,

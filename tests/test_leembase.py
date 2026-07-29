@@ -556,13 +556,39 @@ def test_stack_align_does_not_modify_source():
         np.testing.assert_array_equal(img.warp_matrix, original_wm)
 
 
-# Note: an "align() on an empty stack" test is not included here -- constructing an
-# empty LEEMStack at all (e.g. via `stack[0:0]`) currently crashes with IndexError
-# inside DataObjectStack.__init__ (uspy/dataobject/base.py:303,
-# `isinstance(source[0], self._type)` with source=[]), which is a pre-existing bug
-# unrelated to align() and out of scope here. align() still guards len(self) == 0
-# defensively (raising a clear ValueError) in case that upstream limitation is ever
-# lifted, or a subclass/virtual stack allows empty construction some other way.
+def test_leemstack_zero_width_slice_raises():
+    """A stack is a container for one or more objects -- an empty stack is not something
+    __init__ can build, so LEEMStack.__getitem__ (which re-enters __init__ for a slice) must
+    surface a clear ValueError for a zero-width slice instead of the opaque IndexError it used
+    to raise via DataObjectStack.__init__'s unchecked `source[0]`."""
+    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")[0:5]
+    with pytest.raises(ValueError):
+        stack[0:0]
+    with pytest.raises(ValueError):
+        stack[5:5]
+
+
+def test_leemstack_all_false_boolean_mask_raises():
+    """LEEMStack's boolean-mask __getitem__ (unlike plain ImageStack, which has none) can
+    itself select zero elements -- must raise the same clear ValueError as a zero-width slice,
+    not IndexError."""
+    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")[0:5]
+    mask = np.zeros(len(stack), dtype=bool)
+    with pytest.raises(ValueError):
+        stack[mask]
+
+
+def test_stack_align_empty_raises():
+    """align() on an empty stack must raise a clear ValueError (uspy/leem/base.py's own
+    len(self) == 0 guard) rather than crash somewhere downstream. An empty LEEMStack can't be
+    *constructed* (see test_leemstack_zero_width_slice_raises above), but it can still *arise*
+    from manipulating an existing one -- del stack[:] doesn't go through __init__, so that route
+    stays open and is what this test exercises."""
+    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")[0:5]
+    del stack[:]
+    assert len(stack) == 0
+    with pytest.raises(ValueError, match="empty"):
+        stack.align()
 
 
 ### _resolve_shifts (shift cleanup helper used by align())

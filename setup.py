@@ -43,7 +43,7 @@ setup(
         "kneed",
         "lmfit",
         "ipython",
-        "netCDF4",
+        "h5py>=3.0",  # NeXus-flavoured HDF5 export/import (uspy.hdf5); >=3.0 for Dataset.asstr
         "json_tricks",
         "setuptools_scm",  # see uspy/version.py
         'tomli; python_version < "3.11"',  # tomllib is stdlib from 3.11 on

@@ -517,10 +517,25 @@ class LazyImageStack(ImageStack):
         ]
         return self._materialized_type(elements)
 
-    def save(self, fname: str) -> "LazyImageStack":
+    def save(self, fname: str, **kwargs) -> "LazyImageStack":
         """Persist pixel data to a *new* file -- never touches the original source data.
-        Supports '.zarr' (chunked, itself lazily re-readable) and '.tif'/'.tiff' (streamed
-        frame-by-frame, bounded memory). Pickle/JSON aren't supported -- see `dumps`."""
+        Supports '.h5'/'.hdf5'/'.nxs' (NeXus-flavoured HDF5, see `uspy.hdf5` -- unlike '.zarr'
+        below, this keeps per-frame metadata, streamed one chunk at a time via plain iteration
+        over `self`), '.zarr' (chunked, itself lazily re-readable, pixels only -- no metadata),
+        and '.tif'/'.tiff' (streamed frame-by-frame, bounded memory). Pickle/JSON aren't
+        supported -- see `dumps`."""
+        from uspy.hdf5 import is_hdf5_path
+
+        if is_hdf5_path(fname):
+            from uspy.hdf5 import write
+
+            write(self, fname, **kwargs)
+            return self
+        if kwargs:
+            raise TypeError(
+                f"save() got unexpected keyword argument(s) {list(kwargs)!r}: these are only "
+                "accepted for an HDF5 target (.h5/.hdf5/.nxs)."
+            )
         if fname.lower().endswith(".zarr"):
             self._dask.to_zarr(fname)
             return self

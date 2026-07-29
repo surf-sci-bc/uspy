@@ -325,8 +325,28 @@ class DataObjectStack(Loadable):
 
     def __init__(self, source: Union[str, Iterable], virtual: bool = False) -> None:
         self._virtual = virtual
-        # If the Stack is initialized from a list of Objects
-        if isinstance(source, Iterable) and isinstance(source[0], self._type):
+        # A stack is a container for one or more objects -- an empty list is a deliberate,
+        # unsupported request to build a stack out of nothing (as opposed to a *string* source
+        # that simply resolves to no files, which is a typo and keeps its own distinct error
+        # from _split_source below). Checked before the isinstance/source[0] probe right below,
+        # which would otherwise raise a bare, uninformative IndexError for `source == []`.
+        if isinstance(source, list) and not source:
+            raise ValueError(
+                f"Cannot create an empty {type(self).__name__}: a stack is a container for "
+                "one or more objects. (wrong slice or filter?)"
+            )
+        # If the Stack is initialized from a list of Objects. `str`/`bytes` are excluded here
+        # so that `source[0]` is never evaluated on a string -- an empty string source[0] is
+        # exactly what used to raise `IndexError: string index out of range` above; a non-empty
+        # string never satisfied `isinstance(source[0], self._type)` anyway, so excluding
+        # strings here is behavior-neutral except for fixing that one case. Both empty and
+        # non-empty string sources still reach _split_source below for the real "no files
+        # found" error.
+        if (
+            not isinstance(source, (str, bytes))
+            and isinstance(source, Iterable)
+            and isinstance(source[0], self._type)
+        ):
             if virtual:
                 warnings.warn(
                     UserWarning(
@@ -541,7 +561,17 @@ class DataObjectStack(Loadable):
             for obj, single_value in zip(self, value):
                 setattr(obj, attr, single_value)
         elif is_sequence:
-            collides = len(self) and hasattr(self[0], attr)
+            if not len(self):
+                # Can't tell whether `attr` collides with a per-element field (there's no
+                # element to check against), so it can't be safely attached to the stack
+                # either -- that's exactly the ambiguity the collision check below exists to
+                # resolve for a non-empty stack. Mirrors the scalar branch's empty-stack guard.
+                raise ValueError(
+                    f"Can't assign a length-{len(value)} iterable to attribute '{attr}' on an "
+                    "empty stack: there are no elements to distribute it over or check for a "
+                    "collision against. (wrong slice or filter?)"
+                )
+            collides = hasattr(self[0], attr)
             if collides:
                 raise ValueError(
                     f"'{attr}' is a per-element attribute; can't overwrite it with a "
