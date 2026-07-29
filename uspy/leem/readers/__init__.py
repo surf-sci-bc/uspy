@@ -54,19 +54,23 @@ requested explicitly or declared via `set_reader`/a `uspy.toml` file. To support
 endstation, write a `LEEMReader` subclass (see `uspy.leem.readers.base.LEEMReader`) and
 give it a unique `name`; it registers itself automatically and can then be selected by
 that name.
+
+The same `uspy.toml` files also carry a `[uspy.paths]` table (`datadir`, `leemdir`,
+...), which supplies `uspy.DATADIR`/`uspy.LEEMDIR` -- see `uspy.config` for that part of
+the config format; the search/parse primitives here (`_config_search_paths`,
+`_uspy_tables`, ...) are shared with it via `uspy.config`.
 """
 
 from __future__ import annotations
-import functools
-import os
-from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Union
 
-try:
-    import tomllib  # Python >= 3.11
-except ModuleNotFoundError:  # pragma: no cover
-    import tomli as tomllib
-
+from uspy.config import (  # noqa: F401  (re-exported for backwards compatibility)
+    CONFIG_FILENAME,
+    config_folder as _config_folder,
+    global_config_dir as _global_config_dir,
+    config_search_paths as _config_search_paths,
+    uspy_tables as _uspy_tables,
+)
 from uspy.leem.readers.base import LEEMReader
 from uspy.leem.readers.elmitec import ElmitecReader
 from uspy.leem.readers.elettra import ElettraReader
@@ -83,8 +87,6 @@ __all__ = [
     "get_reader",
     "reset_reader",
 ]
-
-CONFIG_FILENAME = "uspy.toml"
 
 # Programmatic session-wide reader override, set via `set_reader()` -- see the module
 # docstring. Ranks below an explicit `reader=` argument but above every `uspy.toml`.
@@ -119,78 +121,6 @@ def reset_reader() -> None:
     """Clears the session-wide reader override set via `set_reader`."""
     _session_reader["reader"] = None
     _session_reader["options"] = {}
-
-
-def _config_folder(source: Any) -> Optional[Path]:
-    """Best-effort guess at the data folder a `source` argument refers to, so a
-    `uspy.toml` placed there can be found."""
-    if isinstance(source, (list, tuple)) and source:
-        source = source[0]
-    if not isinstance(source, str):
-        return None
-    path = Path(source)
-    if path.is_dir():
-        return path
-    return path.parent
-
-
-def _global_config_dir() -> Path:
-    """The global config directory: `$XDG_CONFIG_HOME/uspy`, or `~/.config/uspy` if
-    `XDG_CONFIG_HOME` is unset -- for a `uspy.toml` that applies machine-/user-wide
-    (e.g. a measurement machine that only ever produces one file format)."""
-    xdg_config_home = os.environ.get("XDG_CONFIG_HOME")
-    base = Path(xdg_config_home) if xdg_config_home else Path.home() / ".config"
-    return base / "uspy"
-
-
-def _config_search_paths(source: Any) -> list:
-    """
-    Ordered list of folders to look for a `uspy.toml` in, most specific first (see the
-    module docstring): the data folder, its parent, the current working directory, and
-    the global config directory. Entries are de-duplicated by resolved path (e.g. when
-    the data folder IS the current working directory) while preserving the first,
-    most-specific occurrence.
-    """
-    candidates = []
-    data_folder = _config_folder(source)
-    if data_folder is not None:
-        candidates.append(data_folder)
-        candidates.append(data_folder.parent)
-    candidates.append(Path.cwd())
-    candidates.append(_global_config_dir())
-
-    seen = set()
-    paths = []
-    for folder in candidates:
-        resolved = folder.resolve()
-        if resolved in seen:
-            continue
-        seen.add(resolved)
-        paths.append(folder)
-    return paths
-
-
-@functools.lru_cache(maxsize=32)
-def _parse_toml_cached(config_path_str: str, mtime_ns: int) -> dict:  # pylint: disable=unused-argument
-    """Parse a uspy.toml file, cached on its path+mtime so re-instantiating many
-    `LEEMImg`s from the same folder (e.g. one per frame of a stack) doesn't re-open
-    and re-parse the file each time."""
-    with open(config_path_str, "rb") as f:
-        return tomllib.load(f)
-
-
-def _uspy_tables(source: Any) -> list:
-    """Returns the `[uspy]` table of every `uspy.toml` found along `source`'s config
-    search path (see `_config_search_paths`), most specific first. Folders without a
-    `uspy.toml` are silently skipped."""
-    tables = []
-    for folder in _config_search_paths(source):
-        config_path = folder / CONFIG_FILENAME
-        if not config_path.is_file():
-            continue
-        config = _parse_toml_cached(str(config_path), config_path.stat().st_mtime_ns)
-        tables.append(config.get("uspy", {}))
-    return tables
 
 
 def _load_config(source: Any) -> tuple:

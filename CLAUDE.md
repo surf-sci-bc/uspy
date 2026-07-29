@@ -86,6 +86,13 @@ Nearly everything in this codebase is built on a small set of base classes defin
 
 Domain-specific subpackages build on these bases rather than replacing them:
 
+- **`uspy/config.py`**: shared `uspy.toml` machinery — locating config files (data folder → parent
+  → cwd → global `$XDG_CONFIG_HOME/uspy` dir), parsing them (`tomllib`/`tomli`, cached on
+  path+mtime), and resolving a `[uspy.paths]` table (`datadir`, `leemdir`, and arbitrary
+  site-specific keys via `get_path(name)`) with `~`/env-var expansion and a session-override API
+  (`set_datadir`/`set_leemdir`/`set_path`/`reset_paths`). Backs `uspy.DATADIR`/`LEEMDIR` (see "Data
+  location convention" below) and is reused by `uspy/leem/readers/` for `[uspy] reader`/
+  `[uspy.options]`/`[uspy.plotting]` resolution.
 - **`uspy/leem/base.py`**: `LEEMImg(Image)` and `LEEMStack(ImageStack)` — the Elmitec `.dat` binary
   format parser (`parse_dat`) lives at the bottom of this file. `LEEMStack` loads a directory/glob of
   `.dat` files, tracks a `TimeOrigin` shared across images, and provides `.align()` for image
@@ -132,9 +139,15 @@ from disk.
 
 ### Data location convention
 
-`uspy/__init__.py` defines `DATADIR`/`LEEMDIR` pointing at `~/data/...` — plotting and example
-notebooks assume real experimental data lives under the user's home directory, separate from the
-`testdata` submodule used for automated tests.
+`uspy/__init__.py` exposes `DATADIR`/`LEEMDIR`, defaulting to `~/data/...` — real experimental
+data is conventionally kept under the user's home directory, separate from the `testdata`
+submodule used for automated tests. They're resolved lazily on every access (module `__getattr__`,
+not frozen at import time) from a `[uspy.paths]` table in a `uspy.toml` (search order: current
+working directory, then `$XDG_CONFIG_HOME/uspy`/`~/.config/uspy`), or from a session override —
+see `uspy/config.py`, which also holds the `uspy.toml` search/parse machinery shared with
+`uspy/leem/readers/`'s reader-selection config. This makes the data root configurable per
+site/project instead of hardcoded, while keeping the historical `~/data/...` default and the
+trailing-slash `str` type notebooks rely on (`LEEMDIR + "file.dat"`).
 
 ### Notebooks
 

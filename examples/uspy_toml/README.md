@@ -1,8 +1,11 @@
 # Baseline `uspy.toml` files
 
-Each subfolder here holds a ready-to-copy baseline `uspy.toml` for one built-in reader,
-with plotting fields tailored to that endstation's metadata. Copy the file (unchanged or
-edited to taste) into the folder that contains your data, named exactly `uspy.toml`.
+Each subfolder here holds a ready-to-copy baseline `uspy.toml`. `elmitec`/`elettra`/`smart`
+are per-reader, with plotting fields tailored to that endstation's metadata -- copy one of
+those (unchanged or edited to taste) into the folder that contains your data, named exactly
+`uspy.toml`. `site/uspy.toml` is different: a combined reader+data-root baseline meant for
+the *global* config location (`~/.config/uspy/uspy.toml`) instead of a data folder -- see
+"Data directories" below.
 
 See the module docstring of `uspy.leem.readers` for the full reader-selection order.
 Two things worth knowing that aren't obvious from a single example file:
@@ -38,3 +41,47 @@ set_reader(None)                # or reset_reader() -- clears the override again
 
 This ranks below an explicit `reader=` argument to `LEEMImg`/`LEEMStack`, but above every
 `uspy.toml`.
+
+## Data directories (`[uspy.paths]`)
+
+The same `uspy.toml` files can also declare where real experimental data lives, via a
+`[uspy.paths]` table:
+
+```toml
+[uspy.paths]
+datadir = "/mnt/surfer/data"
+leemdir = "/mnt/surfer/data/LEEM"   # optional; defaults to "<datadir>/LEEM"
+xps     = "/mnt/surfer/data/XPS"    # arbitrary extra keys are allowed
+```
+
+`uspy.DATADIR`/`uspy.LEEMDIR` (each a `str` ending in a path separator, e.g.
+`"/mnt/surfer/data/"`) resolve these lazily on every access -- with no `uspy.toml`
+anywhere, they default to `~/data/` and `~/data/LEEM/`. Other keys (`xps` above) are
+read with `uspy.config.get_path("xps")`.
+
+**The search path here is shorter than the reader one above:** there's no data folder
+to look relative to `[uspy.paths]` -- the data folder is exactly what's being resolved
+-- so only two locations are checked, most specific first:
+
+1. the current working directory
+2. the global config directory: `$XDG_CONFIG_HOME/uspy/uspy.toml`, or
+   `~/.config/uspy/uspy.toml` if `XDG_CONFIG_HOME` is unset
+
+As with the reader tables, multiple files layer together, most specific first -- but
+**a full `datadir`/`leemdir` pair is taken as a unit from the most specific file that
+mentions either one**, rather than merged key-by-key: if a project-local `uspy.toml`
+overrides only `datadir`, `leemdir` moves with it (defaulting to `<that datadir>/LEEM`)
+even if a less-specific file set `leemdir` explicitly. Otherwise `LEEMDIR` could
+silently end up pointing into an unrelated tree.
+
+Values may use `~` and `$VAR`/`${VAR}` environment-variable references; a relative
+value is anchored to the folder of the `uspy.toml` that declared it.
+
+A session override, mirroring `set_reader`, ranks above every `uspy.toml`:
+
+```python
+from uspy.config import set_datadir, reset_paths
+
+set_datadir("/mnt/surfer/data")   # every uspy.DATADIR/LEEMDIR access uses this now
+reset_paths()                     # clears it again
+```

@@ -1,0 +1,16 @@
+# Baseline machine-/site-wide uspy.toml -- combines a fixed reader with the data root
+# for that site. Unlike the per-endstation baselines in the sibling folders (meant to
+# sit next to your data), this one is meant for the *global* config location:
+# $XDG_CONFIG_HOME/uspy/uspy.toml, or ~/.config/uspy/uspy.toml if XDG_CONFIG_HOME is
+# unset. Drop one of these there and every load on that machine gets the right reader
+# and the right uspy.DATADIR/LEEMDIR without needing a per-folder uspy.toml at all.
+#
+# To use: copy this file (edited to taste) to ~/.config/uspy/uspy.toml.
+
+[uspy]
+reader = "elettra"   # or "elmitec" (the default, so omit this table entirely) / "smart"
+
+[uspy.paths]
+datadir = "/mnt/surfer/data"
+# leemdir defaults to "<datadir>/LEEM" -- only set it if your data lives elsewhere:
+# leemdir = "/mnt/surfer/data/LEEM"
