@@ -1,13 +1,9 @@
 """
 uspy -- surface-science microscopy/spectroscopy data analysis.
 
-`uspy.DATADIR`/`uspy.LEEMDIR` are the default data roots (`~/data/` and `~/data/LEEM/`
-respectively, each a `str` ending in a path separator). They are resolved lazily on
-every access from a `uspy.toml` `[uspy.paths]` table (current working directory, then
-the global config directory) or a session override -- see `uspy.config` for the full
-resolution order, and `uspy.config.set_datadir`/`set_leemdir` to override them from a
-notebook without a config file. With no config anywhere, they keep their historical
-`~/data/...` default.
+`uspy.DATADIR`/`uspy.LEEMDIR` are the default data roots (`~/data/` and `~/data/LEEM/`,
+each a `str` ending in a path separator), resolved lazily on every access from a
+`uspy.toml` `[uspy.paths]` table or a session override -- see `uspy.config`.
 """
 
 from typing import TYPE_CHECKING

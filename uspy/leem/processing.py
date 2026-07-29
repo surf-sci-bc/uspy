@@ -99,9 +99,7 @@ def find_reflections(img, n, min_distance=10, threshold_rel=0.1, **kwds):
             f"criteria, expected {n}. Try lowering min_distance/threshold_rel."
         )
     # peak_local_max returns (row, col); uspy uses (x, y) throughout (cf. uspy.roi.ROI).
-    # Cast to float: correct_img_distortion feeds these through symmetrize's
-    # cv2.getRotationMatrix2D, which rejects the integer pixel indices
-    # peak_local_max returns (numpy int64 elements aren't accepted there).
+    # Cast to float: cv2.getRotationMatrix2D (used downstream) rejects int64 indices.
     return np.ascontiguousarray(coords[:, ::-1], dtype=float)
 
 
@@ -122,24 +120,20 @@ def correct_img_distortion(stack, pks: list, symmetry="hexagonal", rot=None):
         stack: LEEMImg or LEEMStack to correct.
         pks: pixel coordinates (x, y) of the reflections, including the
             center spot (e.g. from `find_reflections`).
-        symmetry: target symmetry of the reflection pattern around the center
-            spot. One of:
+        symmetry: target symmetry of the reflection pattern around the center spot. One of:
                 "hexagonal" -- 6 equivalent reflections, 60 deg apart (default).
                 "square" -- 4 equivalent reflections, 90 deg apart.
-                "rectangular" -- 4 reflections forming two opposing pairs with
-                    two independent, alternating center-vertex distances.
-                anything else -- `rot` must give the inter-vertex rotation
-                    angles explicitly, as accepted by
-                    `symmetrize.sym.rotVertexGenerator`. Angles are applied in
-                    symmetrize's internal (row, col) frame (see below), so
-                    their rotation sense is mirrored relative to the displayed
-                    (x, y) image.
+                "rectangular" -- 4 reflections forming two opposing pairs with two
+                    independent, alternating center-vertex distances.
+                anything else -- `rot` must give the inter-vertex rotation angles
+                    explicitly, as accepted by `symmetrize.sym.rotVertexGenerator`
+                    (applied in symmetrize's (row, col) frame, so mirrored relative
+                    to the displayed (x, y) image).
         rot: inter-vertex rotation angles, only used when `symmetry` is not one
             of the built-in options above.
     """
-    # symmetrize (pointops/sym/tps, imported above as po/sym/tps) works
-    # natively in (row, col); uspy's public convention is (x, y). Swap once at
-    # this boundary and leave the whole symmetrize call chain below untouched.
+    # symmetrize works natively in (row, col); uspy's convention is (x, y). Swap once here
+    # and leave the symmetrize call chain below untouched.
     pks = np.asarray(pks)[:, ::-1]
 
     pcent, psur = po.pointset_center(pks, method="centroidnn")
@@ -193,15 +187,9 @@ def correct_img_distortion(stack, pks: list, symmetry="hexagonal", rot=None):
     interp_order = 3  # interpolation order
 
     for img, warped_img in zip(stack, warped_stack):
-        # symmetrize's 2D TPS routine (tps.tpsWarping with axis=None) defaults
-        # output_region to (0, 0, ncols, nrows) but samples it against the
-        # array using the opposite axis order, which only cancels out for a
-        # square image. For a non-square image this evaluates the warp over
-        # the wrong coordinate range and corrupts the result (not just the
-        # output shape). Passing the matching (row, col)-ordered
-        # output_region keeps the landmarks (swapped to (row, col) at the top
-        # of this function) and the image in one consistent convention for
-        # any aspect ratio, so no transposing of either is needed.
+        # tps.tpsWarping's default output_region=(0,0,ncols,nrows) samples the array with
+        # the opposite axis order, only cancelling out for a square image -- pass the
+        # matching (row, col)-ordered output_region so a non-square image isn't corrupted.
         nr, nc = img.image.shape
         img_warped, spline_warp = tps.tpsWarping(
             psur_ord,

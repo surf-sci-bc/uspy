@@ -21,16 +21,10 @@ __all__ = ["Loadable", "DataObject", "DataObjectStack"]
 
 
 class _ArithmeticMixin:
-    """Mixin providing elementwise +, -, *, / for DataObject subclasses that hold a
-    single numeric array. Subclasses set ``_op_attr`` to the name of that array
-    attribute (e.g. "image" for Image, "y" for Line).
-
-    Matches the operators of a same-shaped instance duck-typed on ``_op_attr`` (so
-    e.g. Image accepts other Images/Waterfalls but not a Line), a plain Number, or an
-    ndarray -- exactly what the original per-class Image/Line dunders accepted. The
-    in-place variants mutate the underlying array object in place (like the original
-    ``self.image += other.image``), not just rebind the attribute to a new array.
-    """
+    """Mixin providing elementwise +, -, *, / for DataObject subclasses that hold a single
+    numeric array. Subclasses set ``_op_attr`` to that array's attribute name (e.g. "image"
+    for Image, "y" for Line). Accepts a same-shaped instance duck-typed on ``_op_attr``, a
+    plain Number, or an ndarray; in-place variants mutate the array in place."""
 
     _op_attr: Optional[str] = None
 
@@ -131,12 +125,8 @@ class DataObject(Loadable):
             else:
                 self._meta[k] = value
         for k in self._meta:
-            # Gap-fill this *instance's* _units, not the class-level _unit_defaults: _units
-            # was already copied from _unit_defaults back in __new__ (before parse() ran), so
-            # writing to _unit_defaults here would never reach this instance -- only ones
-            # constructed afterwards -- and would permanently pollute a dict shared by every
-            # sibling subclass that doesn't declare its own _unit_defaults (e.g. Image and
-            # Waterfall both inherit DataObject._unit_defaults).
+            # Gap-fill this instance's _units, not the shared class-level _unit_defaults
+            # dict, which would pollute every sibling subclass that inherits it.
             self._units.setdefault(k, "")
 
     def parse(self, source: str) -> dict[str, Any]:
@@ -148,39 +138,18 @@ class DataObject(Loadable):
         return copy.deepcopy(self)
 
     def _with_data(self, **data: Any) -> DataObject:
-        """Return a new instance of the same type, with the given data array(s)
-        substituted for the current ones and `_data`/`_meta`/`_units` independently
-        copied -- without duplicating any data array in the process (unlike `copy()`,
-        which deep copies everything, including arrays that are about to be thrown
-        away).
+        """Return a new instance of the same type with the given data array(s) substituted
+        for the current ones, without deep-copying any array (unlike `copy()`). Meant for
+        methods computing a brand-new array from scratch (e.g. `Image.filter`) where a plain
+        `self.copy()` would deep-copy the original array only to immediately discard it.
 
-        Meant for methods that compute a brand-new data array from scratch (e.g. a
-        filtered or warped image) and just need somewhere to put it alongside the
-        original's metadata -- `self.copy()` followed by overwriting the array would
-        deep-copy the original array only to immediately discard it, doubling peak
-        memory for no benefit. Because of that, this is only worth reaching for where
-        it runs on every element of a potentially large stack (e.g. `Image.filter`/
-        `.contrast`, mapped by `ImageStack.filter`); for something applied to a
-        handful of images at a time, plain `self.copy()` is simpler and not worth
-        replacing.
-
-        Independence contract, weaker than `copy()`'s: `_data` (a new dict; the
-        substituted arrays plus the rest shared by reference with `self`), `_meta`,
-        and `_units` are independent of `self` afterwards (mutating one's contents
-        doesn't affect the other's). Everything else on the instance -- `_source`, and
-        any subclass-specific state such as `LEEMImg._reader`/`_time_origin`/
-        `default_mask` -- is shared by reference with `self`, not deep-copied. That's
-        intentional (this is lightweight, shared config rather than per-call data --
-        e.g. a `LEEMStack` already shares one `_reader` instance across all of its
-        elements), but it is a real difference from `copy()`, worth remembering if a
-        future caller assumes full independence.
+        Weaker independence contract than `copy()`: `_data`/`_meta`/`_units` are independent
+        of `self` afterwards, but everything else (`_source`, `LEEMImg._reader`/
+        `_time_origin`/`default_mask`, ...) is shared by reference, not deep-copied.
         """
         new = copy.copy(self)  # shares _data/_meta/_units/other attrs by reference
-        # `__setattr__` below silently no-ops `self._data = ...`/`self._meta = ...`
-        # once those already exist on the instance (see `__setattr__`, intended to
-        # force in-place mutation of the dict rather than replacing it) -- `object.
-        # __setattr__` bypasses that guard, which we need here to give `new` its own
-        # independent dicts instead of the ones it started out sharing with `self`.
+        # object.__setattr__ bypasses __setattr__'s no-op-on-existing-dict guard, needed
+        # here to give `new` its own independent dicts instead of sharing `self`'s.
         object.__setattr__(new, "_data", dict(self._data, **data))
         object.__setattr__(new, "_meta", copy.deepcopy(self._meta))
         object.__setattr__(new, "_units", copy.deepcopy(self._units))
@@ -233,19 +202,16 @@ class DataObject(Loadable):
         if attr.startswith("_") or attr in self.__dict__:
             super().__setattr__(attr, value)
         elif isinstance(getattr(type(self), attr, None), property):
-            # A class-level property (e.g. LEEMImg.time_origin, .pressure, .binding_energy)
-            # must run its own setter (or raise, if read-only) instead of being swallowed
-            # into _meta below -- the getter is a data descriptor and always wins on read,
-            # so a bare _meta write here would be silently invisible.
+            # A class-level property (e.g. LEEMImg.time_origin) must run its own setter (or
+            # raise, if read-only) instead of being silently swallowed into _meta below.
             super().__setattr__(attr, value)
         elif attr in self._data:
             self._data[attr] = value
         else:
             self._meta[attr] = value
-            # Arbitrary metadata must always have a unit entry -- plotting/derivation code
-            # (e.g. IntensityLine.parse, waterfall()) indexes `_units` directly by field name
-            # and would otherwise KeyError the first time this field is used as an axis.
-            # setdefault: never clobber a real unit set earlier via set_unit() or a reader.
+            # Arbitrary metadata must always have a unit entry, or plotting/derivation code
+            # indexing `_units` by field name would KeyError; setdefault never clobbers a
+            # unit set earlier via set_unit() or a reader.
             self._units.setdefault(attr, "")
 
     def __eq__(self, other: DataObject):
@@ -287,11 +253,10 @@ class DataObject(Loadable):
         return isinstance(other, type(self))
 
     def incompatibility_reason(self, other: DataObject) -> str:
-        """Human-readable reason `other` failed `is_compatible(other)`, for error messages
-        raised when a stack can't be built from mismatched elements (see
-        `DataObjectStack._construct`). Subclasses whose `is_compatible` checks something more
-        specific than just the type (e.g. `Image` checking pixel shape) should override this
-        to explain *what* differs, not just restate that it does."""
+        """Human-readable reason `other` failed `is_compatible(other)`, used in error
+        messages when a stack can't be built from mismatched elements. Subclasses with a
+        more specific `is_compatible` (e.g. `Image` checking pixel shape) should override
+        this to explain what differs."""
         if not isinstance(other, type(self)):
             return f"{type(other).__name__} is not a {type(self).__name__}"
         return "not compatible"
@@ -325,21 +290,15 @@ class DataObjectStack(Loadable):
 
     def __init__(self, source: Union[str, Iterable], virtual: bool = False) -> None:
         self._virtual = virtual
-        # A stack is a container for one or more objects -- an empty list is a deliberate,
-        # unsupported request to build a stack out of nothing (as opposed to a *string* source
-        # that simply resolves to no files, which is a typo and keeps its own distinct error
-        # from _split_source below). Checked before the isinstance/source[0] probe right below,
-        # which would otherwise raise a bare, uninformative IndexError for `source == []`.
+        # An empty list is a deliberate, unsupported request to build a stack out of
+        # nothing; checked before the isinstance/source[0] probe below, which would
+        # otherwise raise a bare IndexError for `source == []`.
         if isinstance(source, list) and not source:
             raise ValueError(
                 f"Cannot create an empty {type(self).__name__}: a stack is a container for "
                 "one or more objects. (wrong slice or filter?)"
             )
-        # If the Stack is initialized from a list of Objects. `str`/`bytes` are excluded here
-        # so that `source[0]` is never evaluated on a string -- an empty string source[0] is
-        # exactly what used to raise `IndexError: string index out of range` above; a non-empty
-        # string never satisfied `isinstance(source[0], self._type)` anyway, so excluding
-        # strings here is behavior-neutral except for fixing that one case. Both empty and
+        # str/bytes are excluded here so `source[0]` is never evaluated on a string. Both empty and
         # non-empty string sources still reach _split_source below for the real "no files
         # found" error.
         if (
@@ -537,18 +496,13 @@ class DataObjectStack(Loadable):
             return super().__setattr__(attr, value)
         if isinstance(getattr(type(self), attr, None), property):
             # A stack-level property (e.g. `virtual`, `LEEMStack.time_origin`) must run its
-            # own setter (or raise, if read-only like `elements`/`sources`) rather than being
-            # distributed into the elements below.
+            # own setter (or raise, if read-only) rather than being distributed to elements.
             return super().__setattr__(attr, value)
-        # A stack has no metadata of its own -- setting a per-element field on the stack
-        # means setting it on every element. A scalar (including a plain string -- not split
-        # character-wise) is set on every element as metadata. A sequence whose length
-        # matches the stack is distributed elementwise, one value per element (unchanged
-        # long-standing behavior). A sequence of any other length can't be either of those,
-        # so it attaches to the stack object itself -- unless `attr` names a real per-element
-        # field, in which case that would silently shadow this class's own __getattr__
-        # gather (e.g. `stack.energy = [1, 2]` on a 5-long stack would make `stack.energy`
-        # return `[1, 2]` instead of the per-element array), so it's refused instead.
+        # A stack has no metadata of its own: a scalar (incl. plain string) is set on every
+        # element; a sequence matching the stack's length is distributed elementwise; any
+        # other length attaches to the stack itself, unless `attr` names a real per-element
+        # field -- that would silently shadow this class's own __getattr__ gather, so it's
+        # refused instead.
         if isinstance(value, Iterable) and not isinstance(value, (str, bytes)):
             value = list(value)
             is_sequence = True
@@ -562,10 +516,8 @@ class DataObjectStack(Loadable):
                 setattr(obj, attr, single_value)
         elif is_sequence:
             if not len(self):
-                # Can't tell whether `attr` collides with a per-element field (there's no
-                # element to check against), so it can't be safely attached to the stack
-                # either -- that's exactly the ambiguity the collision check below exists to
-                # resolve for a non-empty stack. Mirrors the scalar branch's empty-stack guard.
+                # No element to check `attr` against for a per-element-field collision, so
+                # it can't be safely attached to the stack either.
                 raise ValueError(
                     f"Can't assign a length-{len(value)} iterable to attribute '{attr}' on an "
                     "empty stack: there are no elements to distribute it over or check for a "

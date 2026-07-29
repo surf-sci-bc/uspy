@@ -2,42 +2,30 @@
 Reader for the SMART photoemission electron microscope at the SMART/BESSY beamline
 (Helmholtz-Zentrum Berlin).
 
-SMART data is saved as **HDF4** files (not HDF5 -- `h5py` cannot read them) via the HDF4
-"Scientific Data Set" (SD) API. Each file holds a single 3-D dataset named "Range0"
-(int16, shape `(n_frames, height, width)`); a plain single-image acquisition is just a
-1-frame file. There are no per-dataset SD attributes -- instead, all acquisition metadata is
-written as one free-text HDF4 *file description* annotation ("KEY = VALUE;" pairs,
-several per line), alongside a *file label* annotation giving the original acquisition path
-(used here only to confirm the file is SMART data).
+SMART data is **HDF4** (not HDF5 -- `h5py` cannot read it). Each file holds one 3-D SD
+dataset "Range0" (int16, shape `(n_frames, height, width)`); a single image is a 1-frame
+file. All metadata is one free-text "KEY = VALUE;" file-description annotation, no
+per-dataset attributes.
 
-Unlike Elmitec/Elettra, a stack (e.g. an I(V) energy scan, "SCAN_MODE = EDC") is *not* one
-file per frame -- the whole scan is written into a single multi-frame file, with the energy
-axis given by `MICRO_START_1`/`MICRO_END_1`/`POINTS_1` in the file description. A stack
-element is therefore addressed as a `(path, frame_index)` tuple rather than a bare path.
+Unlike Elmitec/Elettra, a whole stack/scan (e.g. an I(V) scan, "SCAN_MODE = EDC") is one
+multi-frame file, with the energy axis given by `MICRO_START_1`/`MICRO_END_1`/`POINTS_1`.
+A stack element is addressed as a `(path, frame_index)` tuple, not a bare path.
 
-Very long scans that don't fit in a single file are split by SMART into "<base>.hdf",
-"<base>_1.hdf", "<base>_2.hdf", ... -- note the *first* part is the un-suffixed "<base>.hdf";
-only the continuations get a "_N" suffix. This reader does *not* auto-discover and concatenate
-those siblings -- `list_files()` only expands the frames of the file(s) it is actually given
-(a single file, an explicit list, a glob, or a folder of files). To load a whole split scan as
-one stack, pass the **basename** ("<base>", no extension) or a "<base>*.hdf" glob: `natsort`
-sorts the un-suffixed base file before its numbered siblings (since "." < "_"), so the parts
-concatenate in acquisition order. Passing the exact "<base>.hdf" path loads only that one file.
+Long scans are split by SMART into "<base>.hdf", "<base>_1.hdf", "<base>_2.hdf", ... .
+`list_files()` does not auto-discover/concatenate siblings; pass the basename ("<base>",
+no extension) or a "<base>*.hdf" glob to load a whole split scan as one stack (`natsort`
+sorts "." before "_", so parts concatenate in order). The exact "<base>.hdf" path loads
+only that one file.
 
-Reading files uses the optional `pyhdf` package (which wraps the HDF4 C library) when it is
-installed -- it is the preferred, battle-tested backend. `pyhdf` is awkward to install on
-macOS/Windows, though, so it is fully optional: when it is absent, a small built-in pure-Python
-HDF4 reader (`uspy.leem.readers._hdf4`) is used as a fallback. The fallback covers the
-uncompressed contiguous/linked-block storage that SMART actually writes; a (hypothetical)
-compressed or chunked file would still need `pyhdf` (`conda install -c conda-forge pyhdf`, then
+Uses the optional `pyhdf` package (wraps the HDF4 C library) when installed; otherwise
+falls back to the pure-Python `uspy.leem.readers._hdf4` reader, which only covers
+uncompressed contiguous/linked-block storage (all SMART actually writes) -- a compressed
+or chunked file needs `pyhdf` (`conda install -c conda-forge pyhdf`, then
 `pip install uspy[smart]`).
 
-SMART records only one wall-clock time per file ("DATE"/"TIME", the acquisition start) --
-there is no true per-frame clock, even for a multi-frame scan file. `_metadata_dict` estimates
-a per-frame `timestamp` as `start + frame_index * exposure` (see there) so that per-frame
-timing (`LEEMImg.rel_time` etc.) is a monotonic ramp instead of a constant; this is an
-estimate, not a measurement, and drifts by whatever per-frame readout overhead SMART doesn't
-report.
+SMART records only one wall-clock time per file ("DATE"/"TIME", acquisition start); with
+no true per-frame clock, `_metadata_dict` estimates per-frame `timestamp` as
+`start + frame_index * exposure` -- an estimate, not a measurement.
 """
 # pylint: disable=missing-docstring
 
@@ -70,10 +58,9 @@ _FD_ENTRY_RE = re.compile(r"([A-Za-z0-9_]+)\s*=\s*([^;]*);")
 
 @lru_cache(maxsize=1)
 def _pyhdf():
-    """Return `(HDF, SD, AN_FILE_LABEL, AN_FILE_DESC)` from pyhdf if it is importable, else
-    `None`. pyhdf is the preferred backend but optional: when it is missing, the callers fall
-    back to the built-in pure-Python HDF4 reader (`uspy.leem.readers._hdf4`). Done lazily (and
-    cached) so `SmartReader` imports/registers whether or not pyhdf is installed."""
+    """`(HDF, SD, AN_FILE_LABEL, AN_FILE_DESC)` from pyhdf if importable, else `None`
+    (callers then fall back to `uspy.leem.readers._hdf4`). Lazy so `SmartReader` imports
+    whether or not pyhdf is installed."""
     # pylint: disable=import-outside-toplevel,invalid-name
     try:
         from pyhdf.HDF import HDF
@@ -135,11 +122,9 @@ def _read_smart_metadata(path: str) -> dict:
 
 @lru_cache(maxsize=128)
 def _read_smart_dims(path: str, _mtime: float) -> tuple:
-    """``(height, width)`` of the "Range0" dataset's frames, read from the file header only --
-    no pixel data touched. Used by `SmartReader.parse_metadata` so building a lazy stack's
-    per-frame metadata (`uspy.dataobject.lazy`) doesn't read every frame's pixels just to know
-    its shape. Cached on `(path, mtime)` like `_read_smart_annotations`, since a multi-frame
-    scan file calls this once per frame."""
+    """``(height, width)`` of the "Range0" dataset's frames, from the file header only --
+    no pixel data touched. Cached on `(path, mtime)` since a multi-frame scan file calls
+    this once per frame."""
     pyhdf = _pyhdf()
     if pyhdf is None:  # pure-Python fallback -- already parses dims, not pixels, in __init__
         return _hdf4_fallback(path, _mtime).shape[1:]
@@ -169,10 +154,9 @@ def _energy_axis(
     fd: dict, prefix: str, n_frames: int, negative_means_unused: bool = False
 ) -> np.ndarray:
     """Linear energy axis from "<prefix>_START_1"/"<prefix>_END_1" ("MICRO" for the imaging
-    electron energy, "MONO" for the photon/monochromator energy). `negative_means_unused` is
-    for MONO only: SMART writes -1/-1 there for plain LEEM (no monochromator) acquisitions --
-    it must NOT be applied to MICRO, since a genuinely negative start voltage is a valid
-    setting in mirror-electron-microscopy mode."""
+    electron energy, "MONO" for the photon/monochromator energy). `negative_means_unused`
+    is MONO-only: SMART writes -1/-1 there when no monochromator is used; MICRO can be
+    genuinely negative (mirror-electron-microscopy mode)."""
     try:
         start = float(fd[f"{prefix}_START_1"])
         end = float(fd[f"{prefix}_END_1"])
@@ -199,10 +183,9 @@ def _smart_timestamp(date_str: str, time_str: str) -> float:
 
 
 def _metadata_dict(fd: dict, index: int, height: int, width: int) -> dict[str, Any]:
-    """Fields shared by `SmartReader.parse_image`/`parse_metadata` -- everything except the
-    "image" data key itself. `height`/`width` come from the real pixel array in the former,
-    and from a pixel-free header read (`_read_smart_dims`) in the latter, so the two can't
-    drift apart."""
+    """Fields shared by `SmartReader.parse_image`/`parse_metadata`, everything except the
+    "image" data key. `height`/`width` come from the real pixel array in the former, a
+    pixel-free header read (`_read_smart_dims`) in the latter."""
     n_frames = _n_frames(fd)
     energy = _energy_axis(fd, "MICRO", n_frames)
     photon_energy = _energy_axis(fd, "MONO", n_frames, negative_means_unused=True)
@@ -219,14 +202,8 @@ def _metadata_dict(fd: dict, index: int, height: int, width: int) -> dict[str, A
         "energy": energy[index] if index < len(energy) else np.nan,
         "energy_unit": "eV",
         "photon_energy": photon_energy[index] if index < len(photon_energy) else np.nan,
-        # SMART writes only one DATE/TIME pair per file -- the scan's acquisition *start*,
-        # not a per-frame clock. For a multi-frame file (e.g. a 161-point EDC scan) every
-        # frame would otherwise get that identical start time, which collapses
-        # LEEMImg.rel_time (timestamp - time_origin) to all zeros within the file. Estimate
-        # a per-frame timestamp instead as start + index * exposure -- exact if frames are
-        # acquired back-to-back at the recorded exposure, drifting by the (unrecorded)
-        # per-frame readout overhead otherwise; falls back to the plain file-start time if
-        # exposure is unknown.
+        # SMART records only one DATE/TIME (acquisition start) per file, so per-frame
+        # timestamp is estimated as start + index * exposure -- not a real measurement.
         "timestamp": _smart_timestamp(fd.get("DATE", ""), fd.get("TIME", ""))
         + (index * exposure if index and np.isfinite(exposure) else 0.0),
         "scan_mode": fd.get("SCAN_MODE", ""),
@@ -297,14 +274,9 @@ class SmartReader(LEEMReader):
         return idict
 
     def parse_metadata(self, source: Union[str, tuple]) -> dict[str, Any]:
-        """Metadata-only counterpart to `parse_image`, for the lazy/out-of-core stack backend
-        (`uspy.dataobject.lazy`). Sources frame dimensions from the file header
-        (`_read_smart_dims`) instead of the real pixel array, so building a lazy stack's
-        per-frame metadata never reads pixel data -- matching
-        `ElmitecReader.parse_metadata`. Without this override, the base `LEEMReader.
-        parse_metadata` falls back to `parse_image` and discards the image, which for SMART's
-        single-multi-frame-file-per-scan layout means reading every frame's pixels just to
-        build metadata, defeating out-of-core loading."""
+        """Metadata-only counterpart to `parse_image`, for the lazy stack backend
+        (`uspy.dataobject.lazy`): sources frame dimensions from the file header
+        (`_read_smart_dims`) instead of reading pixel data."""
         path, index = (source, 0) if isinstance(source, str) else source
         fd = _read_smart_metadata(path)
         height, width = _read_smart_dims(path, os.path.getmtime(path))

@@ -116,11 +116,9 @@ class LEEMImg(Image):
     ) -> None:
         source = args[0] if args else kwargs.get("source")
         self._reader = resolve_reader(source, reader)
-        # resolve per-instance plotting-field defaults from a uspy.toml, if present --
-        # object.__setattr__ is required here since default_fields/meta_fields/print_fields
-        # are plain class attributes: a normal `self.x = ...` would be routed by
-        # DataObject.__setattr__ into self._meta instead of overriding the class attribute
-        # (which normal attribute lookup would keep returning, bypassing __getattr__).
+        # object.__setattr__ needed: default_fields/meta_fields/print_fields are class
+        # attributes, and a normal `self.x = ...` would route through DataObject.__setattr__
+        # into self._meta instead of overriding the class attribute.
         plotting_fields = resolve_plotting_fields(
             source,
             {
@@ -206,11 +204,8 @@ class LEEMImg(Image):
         if not isinstance(dark_counts, (int, float, complex)):
             dark_counts = imgify(dark_counts)
 
-        # In-place `/=` and `nan_to_num(..., copy=False)` avoid two of the four
-        # transient full-image allocations the naive `(a) / (b)` + reassignment would
-        # produce here (`self - dark_counts` and `mcp - dark_counts` still each need
-        # one copy, to avoid mutating `self`/`mcp`) -- this loop runs once per image in
-        # `LEEMStack.normalize`.
+        # In-place `/=` and `nan_to_num(..., copy=False)` avoid two transient full-image
+        # allocations here -- this loop runs once per image in `LEEMStack.normalize`.
         result = self - dark_counts
         result /= mcp - dark_counts
         np.nan_to_num(result.image, copy=False, posinf=0, neginf=0)
@@ -353,16 +348,12 @@ class LEEMImg(Image):
 
 
 class LEEMStack(ImageStack):
-    """Stack of `LEEMImg`s, held fully in memory as a list of independent per-frame
-    objects (see `uspy.dataobject.base.DataObjectStack`). For a stack close to or
-    larger than available RAM, prefer building it lazily instead --
-    ``LEEMStack(path, lazy=True)`` (or ``.to_lazy()`` on an existing stack) returns a
-    `LazyLEEMStack` backed by a chunked, out-of-core `dask.array`: loading, slicing,
-    `+ - * /`, `.average()`, and `.normalize()` all stay streamed/chunked there instead
-    of materializing every frame at once. `.align()` and anything that touches
-    `stack.image` (which always rebuilds a full `(N, H, W)` array on access, see
-    `DataObjectStack.__getattr__`) still require the eager, fully in-memory `LEEMStack`
-    -- call `.materialize()` on a (small enough) slice of a lazy stack for those.
+    """Stack of `LEEMImg`s, held fully in memory as a list of independent per-frame objects
+    (see `uspy.dataobject.base.DataObjectStack`). For a stack close to or larger than
+    available RAM, prefer building it lazily instead: ``LEEMStack(path, lazy=True)`` (or
+    ``.to_lazy()``) returns a `LazyLEEMStack`. `.align()` and anything touching
+    `stack.image` still require this eager backend -- call `.materialize()` on a lazy
+    stack (or a small enough slice of one) for those.
     """
 
     _type = LEEMImg
@@ -389,16 +380,11 @@ class LEEMStack(ImageStack):
             # this branch only guards against __init__ being invoked directly.
             return
         source = args[0] if args else kwargs.get("source")
-        # If constructed directly from a list of already-built LEEMImgs (rather than from a
-        # path/glob) -- as slicing, boolean-mask filtering, and .average() all do internally,
-        # by rebuilding a LEEMStack from the previous stack's own elements -- inherit their
-        # reader instead of silently defaulting to Elmitec (relevant if the stack is later
-        # virtualized/reconstructed), and skip post_process_stack below: it mutates each
-        # element's own metadata in place on the *original* construction (e.g. distributing a
-        # shared tracefile's per-image values), so already-built elements carried over into a
-        # slice/filter/average already have correct metadata -- there's nothing left to
-        # post-process, and re-running it would re-read the reader's source data (e.g. the
-        # full, now-mismatched-length tracefile) against a differently-sized stack.
+        # If built directly from a list of already-built LEEMImgs (as slicing, mask
+        # filtering, and .average() all do internally), inherit their reader instead of
+        # defaulting to Elmitec, and skip post_process_stack below -- those elements'
+        # metadata is already correct, and re-running it would re-read the reader's source
+        # data against a differently-sized stack.
         built_from_objects = False
         try:
             if not isinstance(source, str) and isinstance(source[0], LEEMImg):
@@ -408,10 +394,8 @@ class LEEMStack(ImageStack):
         except (TypeError, IndexError):
             pass
         self._reader = resolve_reader(source, reader)
-        # initialize with np.nan for the first calls to self._single_construct
-        # An already-built TimeOrigin (e.g. passed in by __getitem__ when slicing, or by
-        # to_lazy()) is reused by reference rather than rewrapped, so the new stack keeps
-        # sharing the same mutable origin as its source stack -- mirrors LEEMImg.__init__.
+        # An already-built TimeOrigin (e.g. from __getitem__/to_lazy()) is reused by
+        # reference so the new stack shares its source's mutable origin.
         if isinstance(time_origin, TimeOrigin):
             self._time_origin = time_origin
         else:
@@ -465,18 +449,11 @@ class LEEMStack(ImageStack):
         )
 
     def extend(self, other: Union[LEEMImg, LEEMStack]) -> None:
-        """Add new LEEMImg(s) to the end of the stack.
-
-        Unlike a plain `DataObjectStack.extend`, this reconciles `time_origin`: `other` may
-        come from an independently-constructed stack (e.g. the two halves of a measurement
-        that was split and resumed), which by default has its own time origin (its own first
-        frame's timestamp) rather than this stack's. Appending it as-is would silently leave
-        part of the merged stack's `rel_time` computed against a different, unrelated origin
-        -- so a mismatch is warned about, and (for non-virtual stacks) the newly appended
-        elements are rebound to this stack's `_time_origin`, restoring one shared origin
-        across the whole stack. `timestamp` itself is an absolute instrument-clock value and
-        is never touched -- only which origin `rel_time` is measured from.
-        """
+        """Add new LEEMImg(s) to the end of the stack, reconciling `time_origin`: if `other`
+        has a different one (e.g. two halves of a split/resumed measurement), a warning
+        names the mismatch and (for non-virtual stacks) the appended elements are rebound
+        to this stack's `_time_origin` so `rel_time` shares one origin. `timestamp` itself
+        is never touched."""
         if isinstance(other, (LEEMImg, LEEMStack)):
             self_origin, other_origin = self.time_origin, other.time_origin
             if not (np.isnan(self_origin) or np.isnan(other_origin)) and (
@@ -504,41 +481,27 @@ class LEEMStack(ImageStack):
         **kwargs,
     ) -> LEEMStack:
         """
-        Image registration of the stack
+        Image registration of the stack.
 
-        By default (``template=None``) the images of the stack are registered
-        sequentially: each image is aligned to its predecessor by calling
-        ``Image.find_warp_matrix()``, and the resulting shifts are accumulated so
-        every warp matrix is relative to the first image. Alternatively, passing
-        ``template`` aligns every image directly against that one fixed image
-        instead -- useful when drift between neighboring frames is small relative to
-        noise but the whole stack drifts relative to a known reference.
+        By default (``template=None``) images are registered sequentially, each against
+        its predecessor via ``Image.find_warp_matrix()``, with shifts accumulated so every
+        warp matrix is relative to the first image. Passing ``template`` instead aligns
+        every image directly against that one fixed image.
 
-        After initial registration, the recovered translation shifts (dx, dy) are
-        checked for sanity using a robust (median/MAD-based) outlier score (see
-        `_modified_zscore`) -- unlike a classic mean/std z-score, this does not get
-        skewed (and so does not miss outliers) when one shift is extremely far off.
-        Outliers, together with any frame where registration raised an exception,
-        are replaced by interpolating (and, for boundary
-        frames, extrapolating) over the remaining valid shifts -- this is the
-        expected, routine path (not an error), so it is only printed, never raised
-        as a warning; the spline order automatically adapts to the number of valid
-        frames so short stacks don't crash. If too few valid frames remain to
-        interpolate at all, this is the unexpected, unrecoverable case: the affected
-        frames fall back to identity (no shift) and a ``UserWarning`` names them and
-        the fallback used. Finally the resulting warp matrices are applied via
-        ``Image.warp()``.
+        Recovered translation shifts are then checked with a robust (median/MAD-based)
+        outlier score (`_modified_zscore`); outliers and failed-registration frames are
+        replaced by interpolation/extrapolation over the remaining valid shifts (printed,
+        not warned -- this is the expected, routine path). If too few valid frames remain
+        to interpolate, affected frames fall back to identity shift and a ``UserWarning``
+        names them. The resulting warp matrices are applied via ``Image.warp()``.
 
         Parameters
         ----------
         inplace : bool, default False
             If 'True' the stack itself will be registered
-            If 'False' a copy of the stack will be registered
-
-            .. note:: With 'False' (the default) the whole stack is deep-copied up
-                front, so peak memory is briefly ~2x the stack's size. For a stack
-                close to the memory limit, pass 'inplace=True' (registering the stack
-                in place) instead.
+            If 'False' a copy of the stack will be registered (peak memory briefly ~2x
+            the stack's size, since the whole stack is deep-copied up front; prefer
+            'inplace=True' for a stack close to the memory limit)
         mask : bool, np.ndarray or None, default True
             Mask that will be used during registration
 
@@ -547,12 +510,10 @@ class LEEMStack(ImageStack):
             - If np.ndarray the array must be of dtype=np.uint8 and contain the mask that should be
               applied
         template : int, Image or None, default None
-            If given, every image is aligned directly against this fixed reference
-            image instead of sequentially against its predecessor. An int is used as
-            an index into 'stack' (e.g. 'template=0' aligns against the first
-            image); an 'Image' is used directly. Template alignment is less
-            battle-tested than the default sequential alignment, so a caution is
-            raised -- sanity-check the result.
+            If given, every image is aligned directly against this fixed reference image
+            instead of sequentially against its predecessor. An int indexes 'stack'
+            ('template=0' = first image); an 'Image' is used directly. Less
+            battle-tested than sequential alignment -- sanity-check the result.
         sanity : bool, default True
             Whether to run the z-score outlier check described above.
 
@@ -637,10 +598,8 @@ class LEEMStack(ImageStack):
                 "align(): aligning against a fixed template is less battle-tested "
                 "than the default sequential alignment -- sanity-check the result."
             )
-            # Every image (including the template's own frame) is aligned directly
-            # and independently against the template, so each warp matrix is already
-            # absolute -- unlike sequential mode, these must NOT be cumulatively
-            # composed further down.
+            # Every image is aligned directly and independently against the template, so
+            # each warp matrix is already absolute -- must NOT be cumulatively composed.
             warp_matrices = []
             for index, img in enumerate(stack):
                 try:
@@ -712,11 +671,9 @@ class LEEMStack(ImageStack):
             stack = self.copy()
 
         for index, img in enumerate(tqdm(stack)):
-            # if an image is multiple times in a stack and inplace is True, it should not be
-            # normalized twice, so if the mcp is already the current mcp, it will not be
-            # processed. img.mcp holds the *source* of the mcp it was last normalized
-            # against (see LEEMImg.normalize), so compare against mcp.source rather than
-            # the Image itself -- comparing to the Image would compare a str to an Image.
+            # Skip an image already normalized against this mcp (relevant if inplace=True
+            # and the same image appears twice in the stack). img.mcp holds the *source* of
+            # the mcp it was last normalized against, hence comparing to mcp.source.
             if img.mcp is None or img.mcp != mcp.source:
                 stack[index] = img.normalize(mcp=mcp, **kwargs)
 
@@ -734,17 +691,13 @@ class LEEMStack(ImageStack):
 
 
 class LazyLEEMStack(LazyImageStack):
-    """
-    Out-of-core counterpart to `LEEMStack`, backed by a lazy `dask.array` of pixel data
-    instead of a fully in-memory list of `LEEMImg`s. See `uspy.dataobject.lazy.LazyImageStack`
-    for the general design (metadata kept resident, pixels lazy/chunked).
+    """Out-of-core counterpart to `LEEMStack`, backed by a lazy `dask.array` of pixel data.
+    See `uspy.dataobject.lazy.LazyImageStack` for the general design.
 
-    Only a subset of `LEEMStack`'s API is supported: construction from a `.dat` folder/glob or
-    a 3D TIFF, indexing/slicing, per-frame metadata access, `average()`, elementwise arithmetic
-    (+ - * /), and `.normalize()`. `.align()` is intentionally NOT provided here -- ECC
-    registration needs pairwise access to full-resolution frames and doesn't parallelize onto
-    dask cleanly; call `.materialize()` (or build a `LEEMStack` over a smaller slice) and use
-    the regular `.align()` there.
+    Only a subset of `LEEMStack`'s API is supported: construction from a `.dat` folder/glob
+    or a 3D TIFF, indexing/slicing, per-frame metadata, `average()`, elementwise arithmetic,
+    and `.normalize()`. `.align()` is not provided -- ECC registration doesn't parallelize
+    onto dask cleanly; call `.materialize()` and use the regular `.align()` there.
 
     Requires the optional 'dask'/'zarr' dependencies: ``pip install uspy[bigdata]``.
     """
@@ -791,12 +744,8 @@ class LazyLEEMStack(LazyImageStack):
         if isinstance(source, list) and source:
             return self._build_from_files(source, chunks)
 
-        # No reader recognized `source` as a stack -- also try the generic glob-pattern/
-        # directory expansion (uspy.dataobject.image.list_image_files) that the eager
-        # ImageStack._split_source falls back to, e.g. a "*.tiff" glob of per-frame images
-        # with the default Elmitec reader (which only recognizes ".dat"). Mirrors that
-        # eager path's own ambiguity rule: a single matched/contained file that is itself a
-        # 3D multi-frame TIFF still loads as one 3D stack, not a one-element per-frame stack.
+        # No reader recognized `source` as a stack -- also try the generic glob/directory
+        # expansion (`list_image_files`) that the eager ImageStack._split_source falls back to.
         glob_fnames = list_image_files(source)
         if len(glob_fnames) > 1:
             return self._build_from_files(glob_fnames, chunks)
@@ -821,22 +770,15 @@ class LazyLEEMStack(LazyImageStack):
     def _read_pixels(self, fname: str) -> np.ndarray:
         if self._reader.handles(fname):
             return np.asarray(self._reader.parse_image(fname)["image"], dtype=np.float32)
-        # The reader doesn't recognize this file -- e.g. a per-frame ".tiff"/".png" loaded via
-        # a glob/folder with a reader that only handles its own binary format (the default
-        # Elmitec reader only handles ".dat"). Mirror LEEMImg.parse's own fallback to the
-        # generic Image reader instead of misparsing it through this reader's format-specific
-        # parser (previously this call was unconditional, so e.g. a ".tiff" frame got parsed
-        # as an Elmitec ".dat" file and produced garbage pixel data with no error).
+        # Reader doesn't recognize this file (e.g. a ".tiff" frame with an Elmitec reader);
+        # fall back to the generic Image reader, mirroring LEEMImg.parse's own fallback.
         return np.asarray(LEEMImg(fname, reader=self._reader).image, dtype=np.float32)
 
     def _read_metadata(self, fname: str) -> dict:
         """Per-frame metadata dict, built the same way a real `LEEMImg(fname, reader=...)`
-        would populate its `_meta`/`_units` (see `LEEMImg.__init__`/`DataObject.__init__`):
-        class-level `_meta_defaults`/`_unit_defaults`, gap-filled by the reader's own
-        `meta_defaults`/`unit_defaults`, then overwritten by the reader's actually-parsed
-        values, with the same `temperature > 3000 -> nan` sentinel rule `LEEMImg.parse`
-        applies. Without this, defaulted keys (e.g. 'mcp', 'photon_energy') would raise
-        AttributeError on a lazy stack instead of returning their eager default."""
+        would populate its `_meta`/`_units`: class defaults gap-filled by the reader's own
+        defaults, then overwritten by parsed values, with the same
+        `temperature > 3000 -> nan` sentinel rule `LEEMImg.parse` applies."""
         meta = dict(self._type._meta_defaults)  # pylint: disable=protected-access
         units = dict(self._type._unit_defaults)  # pylint: disable=protected-access
 
@@ -847,15 +789,12 @@ class LazyLEEMStack(LazyImageStack):
                 units.setdefault(key, value)
             parsed = dict(self._reader.parse_metadata(fname))
         elif fname.lower().endswith((".tif", ".tiff")):
-            # Same "reader doesn't recognize this file" case as _read_pixels above, but stays
-            # pixel-free: only the TIFF header is needed for width/height (the mismatched-
-            # shape check in LazyImageStack._build_from_files relies on this being cheap).
+            # Reader doesn't recognize this file; read only the TIFF header, pixel-free.
             with tifffile.TiffFile(fname) as tif:
                 height, width = tif.pages[0].shape
             parsed = {"width": width, "height": height}
         else:
-            # No cheap metadata-only path for other generic formats -- falls back to a full
-            # parse, same as LazyImageStack._read_metadata's own generic fallback.
+            # No cheap metadata-only path for other generic formats -- falls back to a full parse.
             parsed = super()._read_metadata(fname)
 
         if parsed.get("temperature", 0) > 3000:
@@ -868,9 +807,7 @@ class LazyLEEMStack(LazyImageStack):
             else:
                 meta[key] = value
 
-        # Every metadata key must have a unit entry (default "") -- mirrors
-        # DataObject.__init__'s own gap-fill, which this function reimplements by hand since
-        # a lazy stack never actually constructs a LEEMImg to run it on.
+        # Every metadata key must have a unit entry (default ""), mirroring DataObject.__init__.
         for key in meta:
             units.setdefault(key, "")
 
@@ -1050,30 +987,16 @@ def do_ecc_align(
 
 #: Threshold on the robust (modified) z-score above which a shift is rejected as a
 #: registration outlier -- see `_modified_zscore`. Deliberately high (rather than the
-#: textbook 3.5): a genuine registration failure lands orders of magnitude beyond the
-#: robust scale (score in the tens-hundreds), so a high, well-separated threshold
-#: catches real failures while keeping the false-positive rate on clean data low, even
-#: for the large, mutually-independent frame-to-frame shifts a stack can legitimately
-#: have. Empirically chosen; adjust if real-world data needs more/less sensitivity.
+#: textbook 3.5): a genuine failure scores in the tens-hundreds, so this stays
+#: well-separated from normal frame-to-frame shifts. Empirically chosen.
 _OUTLIER_ZSCORE_THRESHOLD = 8.0
 
 
 def _modified_zscore(x: np.ndarray) -> np.ndarray:
-    """Robust (median/MAD-based) z-score, used by `_resolve_shifts` to flag
-    registration outliers.
-
-    Unlike the classic mean/std z-score, this is not inflated -- and so not
-    self-masked -- by the very outliers it's meant to detect: a single huge outlier
-    drags the mean and inflates the std enough that both its own z-score and other,
-    smaller outliers' z-scores can fall back under the detection threshold
-    ("masking"/"swamping"). The median and MAD (median absolute deviation) are far
-    less sensitive to extreme values, so this keeps working regardless of an
-    outlier's magnitude or how many there are.
-
-    If more than half the values are identical, the MAD itself collapses to 0 (a
-    plain division would produce inf/nan); the mean absolute deviation is used as a
-    fallback scale in that case, and only if all values are exactly identical does
-    this return all zeros (no possible outliers).
+    """Robust (median/MAD-based) z-score, used by `_resolve_shifts` to flag registration
+    outliers. Unlike a mean/std z-score, a single huge outlier can't inflate the scale
+    enough to mask itself or other outliers. Falls back to mean-absolute-deviation scaling
+    if MAD collapses to 0, or to all zeros if every value is identical.
 
     Parameters
     ----------
@@ -1100,24 +1023,16 @@ def _modified_zscore(x: np.ndarray) -> np.ndarray:
 def _resolve_shifts(
     dx: np.ndarray, dy: np.ndarray, sanity: bool = True
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Cleans up raw x/y translation shifts coming out of pairwise/template
-    registration, used by `LEEMStack.align()`.
+    """Cleans up raw x/y translation shifts from pairwise/template registration, used by
+    `LEEMStack.align()`. A failed registration marking only one of dx/dy as nan is
+    unified to both. When 'sanity' is set, shifts whose robust z-score (`_modified_zscore`)
+    exceeds `_OUTLIER_ZSCORE_THRESHOLD` are flagged as outliers and set to nan too
+    (printed, not warned -- this is the expected, routine path).
 
-    A failed registration is expected to mark both components of a frame as nan;
-    this is unified (rather than asserted) so a partial failure can't crash. When
-    'sanity' is set, shifts whose robust (median/MAD-based) z-score (see
-    `_modified_zscore`) exceeds `_OUTLIER_ZSCORE_THRESHOLD` are additionally flagged
-    as outliers and replaced with nan -- this is the expected, routine path (not an
-    error), so it is only printed, never raised as a warning.
-
-    All nan gaps (whether from failed registration or outlier rejection) are then
-    filled by interpolation, with the spline order adapted to the number of valid
-    (non-nan) frames so that short stacks don't crash pandas' interpolation (which
-    needs at least 'order + 1' points). Leading/trailing nan (boundary frames) are
-    extrapolated rather than left as nan. If there are too few valid points to
-    interpolate/extrapolate at all (0 or 1), this is the unexpected, unrecoverable
-    case: the affected frames fall back to identity (zero shift) and a warning names
-    the frames and the fallback used.
+    All nan gaps are then filled by interpolation/extrapolation, with spline order
+    adapted to the number of valid frames so short stacks don't crash. If too few valid
+    points remain (0 or 1) to interpolate at all, affected frames fall back to identity
+    (zero shift) and a warning names them.
 
     Parameters
     ----------
@@ -1144,11 +1059,7 @@ def _resolve_shifts(
 
     if sanity:
         n_valid = int((~np.isnan(dx)).sum())
-        # A robust z-score needs a handful of points to be meaningful -- skip it on
-        # very short input. Unlike the classic mean/std z-score, the degenerate
-        # (constant/near-constant) case is already handled inside _modified_zscore
-        # itself (falls back to mean-absolute-deviation scaling, or returns all
-        # zeros if truly constant), so no separate std > 0 guard is needed here.
+        # A robust z-score needs a handful of points to be meaningful -- skip on short input.
         if n_valid >= 4:
             dx_z = _modified_zscore(dx)
             dy_z = _modified_zscore(dy)

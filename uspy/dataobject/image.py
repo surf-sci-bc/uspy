@@ -44,15 +44,10 @@ def _ext(fname: str) -> str:
 
 
 def list_image_files(source: Any) -> list:
-    """Expand a glob pattern or an existing directory into a natural-sorted list of per-frame
-    image file paths (".tif"/".tiff"/".png"/".jpg"/".jpeg"/".bmp"). Mirrors
-    `LEEMReader.list_files` (see `uspy.leem.readers`) so glob/folder discovery behaves the
-    same way everywhere in the codebase -- including natural sort order, so e.g.
-    "frame_2.tiff" sorts before "frame_10.tiff".
-
-    Returns `[]` for anything that isn't a glob pattern or an existing directory (a plain
-    file path, a list, an ndarray, ...); callers fall back to their own handling in that case.
-    """
+    """Expand a glob pattern or an existing directory into a natural-sorted list of
+    per-frame image file paths (".tif"/".tiff"/".png"/".jpg"/".jpeg"/".bmp"), mirroring
+    `LEEMReader.list_files`. Returns `[]` for anything else (a plain file path, a list,
+    an ndarray, ...); callers fall back to their own handling in that case."""
     if not isinstance(source, str):
         return []
     if _has_glob_magic(source):
@@ -94,15 +89,10 @@ class Image(_ArithmeticMixin, DataObject):
         return return_val
 
     def save(self, fname: str, **kwargs) -> Image:
-        # Dispatches on an explicit extension whitelist rather than trying imageio first and
-        # falling back on failure -- imageio doesn't reliably raise for an extension it can't
-        # place. Empirically (imageio 2.37.2): `imageio.imwrite("x.hdf5"/"x.nxs"/"x.pickle"/
-        # "x.json"/"x.notarealformat", arr)` all silently succeed, brute-forcing the first
-        # plugin willing to write, and produce a mislabelled TIFF -- so a `try/except
-        # ValueError: super().save(...)` fallback (the previous approach here) never actually
-        # ran for those extensions; `Image.save("foo.pickle")` silently wrote TIFF bytes
-        # instead of a real pickle. Checked first and unconditionally: an HDF5-shaped
-        # extension, since imageio doesn't recognize those either.
+        # Dispatches on an explicit extension whitelist rather than trying imageio first:
+        # imageio (2.37.2) silently brute-forces an unrecognized extension (e.g. ".pickle",
+        # ".json") through its TIFF plugin instead of raising, so a try/except fallback
+        # would never trigger and would silently write the wrong format.
         from uspy.hdf5 import is_hdf5_path
 
         if is_hdf5_path(fname):
@@ -112,10 +102,8 @@ class Image(_ArithmeticMixin, DataObject):
         elif self._is_serialize_path(fname):
             super().save(fname, **kwargs)
         elif _IMAGEIO_KNOWN_EXTENSIONS is None or _ext(fname) in _IMAGEIO_KNOWN_EXTENSIONS:
-            # kwargs are forwarded (mirroring the tifffile branch above) so e.g. PNG
-            # compress_level=/JPEG quality= can be passed through -- note imageio does not
-            # validate kwargs itself, so a typo'd one is silently ignored rather than raising,
-            # unlike the tifffile/HDF5 branches.
+            # kwargs forwarded (e.g. PNG compress_level=/JPEG quality=); unlike the
+            # tifffile/HDF5 branches, imageio silently ignores a typo'd kwarg.
             imageio.imwrite(fname, np.uint16(self.image), **kwargs)
         else:
             raise ValueError(
@@ -262,14 +250,10 @@ class ImageStack(DataObjectStack):
                 raise ValueError(f"{source} is not a stack")
             return [images[i, :, :] for i in range(images.shape[0])]
 
-        # A glob pattern or an existing directory expands to one or more per-frame image
-        # files -- returned directly (as file paths, not pixel arrays) when it matches more
-        # than one file, so per-frame construction keeps each element's own shape and
-        # `source`. Previously any such string was handed straight to `tifffile.imread`,
-        # whose FileSequence machinery silently force-reshapes every matched file into frame
-        # 0's shape (corrupting mismatched frames instead of raising) and discards each
-        # frame's path. A single matched/contained file still needs the probe below, since it
-        # might itself be one 3D multi-frame TIFF rather than a lone 2D image.
+        # A glob/directory matching more than one file returns file paths directly, so
+        # per-frame construction keeps each element's own shape/source -- tifffile's
+        # FileSequence machinery would otherwise force-reshape mismatched frames instead
+        # of raising. A single matched file still needs the probe below (may be one 3D TIFF).
         fnames = list_image_files(source)
         if len(fnames) > 1:
             return fnames
@@ -326,10 +310,8 @@ class ImageStack(DataObjectStack):
 
         """
         if avg < 1:
-            # `avg <= 0` slips through the modulo check below (e.g. 10 % -2 == 0) and then
-            # either divides by zero (avg == 0) or iterates range(0, negative) zero times,
-            # silently returning an empty stack -- a bad `avg`, not a bad (non-empty) stack, is
-            # what's actually wrong here, so this must be caught before that check.
+            # Caught before the modulo check below: `avg <= 0` would slip through it
+            # (e.g. 10 % -2 == 0) and then divide by zero or silently return an empty stack.
             raise ValueError(f"avg must be a positive integer, got {avg}")
         if len(self) % avg != 0:
             raise ValueError(
@@ -358,11 +340,8 @@ class ImageStack(DataObjectStack):
             # empty-stack refusal for the HDF5 target.
             raise ValueError(f"Cannot export an empty stack to TIFF ({fname!r}).")
 
-        # Streamed frame-by-frame instead of `np.stack([image.image for image in
-        # self])` (which builds a second full (N, H, W) copy of the whole stack,
-        # alongside the already-resident per-frame arrays) -- bounds memory to one
-        # frame at a time. Still matches `np.stack`'s dtype promotion across frames
-        # of differing dtype, so the written file is identical either way.
+        # Streamed frame-by-frame instead of `np.stack(...)`, which would build a second
+        # full (N, H, W) copy alongside the already-resident per-frame arrays.
         first = self[0]
         dtype = first.image.dtype
         for image in self[1:]:
@@ -373,10 +352,8 @@ class ImageStack(DataObjectStack):
             for image in self:
                 yield image.image.astype(dtype, copy=False)
 
-        # Passing a generator + explicit shape/dtype (rather than building one big
-        # array) keeps this streamed. photometric="minisblack" avoids tifffile
-        # misreading a 3-frame single-channel stack as RGB (its shape-guessing
-        # heuristic is ambiguous for exactly 3 frames) -- see LazyImageStack.save.
+        # Generator + explicit shape/dtype keeps this streamed; photometric="minisblack"
+        # avoids tifffile misreading a 3-frame stack as RGB.
         tifffile.imwrite(
             fname,
             frames(),

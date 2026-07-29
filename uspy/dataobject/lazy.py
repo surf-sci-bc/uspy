@@ -1,28 +1,20 @@
 """
 Out-of-core image stacks for data too large to hold in memory.
 
-`DataObjectStack`'s existing ``virtual=True`` mode (see `uspy.dataobject.base`) is lazy but
-uncached: every single access re-reads its source file from disk, and all arithmetic/metadata
-gathering either raises or forces a full eager load. That's fine for peeking at a slice of a
-stack, but useless for actually processing a stack that doesn't fit in RAM.
+`LazyImageStack` (and its LEEM counterpart, `uspy.leem.base.LazyLEEMStack`) builds one lazy
+`dask.array` task graph over all frames' pixel data up front, unlike `DataObjectStack`'s
+uncached ``virtual=True`` mode. Slicing, `+ - * /`, and `.normalize()` stay lazy/chunked, so
+a stack far larger than RAM can be sliced, aggregated, or streamed with bounded memory.
+Per-frame metadata is read once at construction and kept fully resident as a plain list of
+dicts, so ``stack.energy`` etc. is instant and pixel-I/O-free.
 
-`LazyImageStack` (and its LEEM counterpart, `uspy.leem.base.LazyLEEMStack`) instead builds one
-lazy `dask.array` task graph over all frames' pixel data up front. Slicing, `+ - * /`, and
-`.normalize()` stay lazy/chunked -- dask only ever materializes the chunks a given operation
-touches, so a stack far larger than RAM can be sliced, aggregated, or streamed to a new on-disk
-store with bounded memory. Per-frame metadata (energy, temperature, timestamps, ...) is cheap
-compared to pixel data, so it's read once at construction time and kept fully resident as a
-plain list of dicts -- this is what makes ``stack.energy`` etc. instant and pixel-I/O-free.
+This is an additional backend alongside the eager and ``virtual=True`` ones; it doesn't
+change their behavior. Only indexing/slicing, per-frame metadata, `average()`, elementwise
+arithmetic, and `.normalize()` are supported -- anything needing every element's pixels at
+once (`.align()`, `.filter()`, item assignment) raises; call `.materialize()` first.
 
-This is an *additional* backend alongside the eager and ``virtual=True`` ones -- it does not
-change their behavior. Only a bounded set of operations is supported (indexing/slicing,
-per-frame metadata, ``average()``, elementwise arithmetic, ``.normalize()``); anything that
-would require materializing pixel data on every element (e.g. ``.align()``, ``.filter()``,
-item assignment) raises a clear error instead of silently doing something slow or wrong --
-call `.materialize()` first for those.
-
-Requires the optional ``dask``/``zarr`` dependencies: ``pip install uspy[bigdata]``. Importing
-this module never fails without them; only actually building/using a lazy stack does.
+Requires the optional ``dask``/``zarr`` dependencies (``pip install uspy[bigdata]``); only
+actually building/using a lazy stack needs them, not importing this module.
 """
 
 # pylint: disable=protected-access
@@ -65,28 +57,22 @@ _MATERIALIZE_WARN_BYTES = 4 * 1024**3  # 4 GiB
 
 
 class LazyImageStack(ImageStack):
-    """Out-of-core `ImageStack` backed by a lazy `dask.array` of pixel data.
+    """Out-of-core `ImageStack` backed by a lazy `dask.array` of pixel data. See the module
+    docstring for the overall design. State:
 
-    See the module docstring for the overall design. State:
+    - ``self._dask``: lazy ``dask.array`` of shape ``(N, H, W)``, chunked along frames.
+    - ``self._meta_list``: plain list of N per-frame metadata dicts (fully resident).
+    - ``self._sources``: per-frame source paths if built from files, else ``None``.
 
-    - ``self._dask``: a lazy ``dask.array`` of shape ``(N, H, W)``, chunked along the frame
-      axis (one frame per chunk by default).
-    - ``self._meta_list``: a plain list of N per-frame metadata dicts (fully resident).
-    - ``self._sources``: the list of per-frame source paths if built from files, else ``None``
-      (e.g. when built from a single 3D TIFF).
-
-    Uses dask's default (local, in-process, threaded) scheduler -- no distributed cluster
-    setup is required or assumed.
+    Uses dask's default local, in-process, threaded scheduler.
     """
 
     _type = Image
     _materialized_type = ImageStack
 
     def __new__(cls, *args, **kwargs):
-        # Unlike ImageStack.__new__, a Lazy* class never re-dispatches on a `lazy=` kwarg --
-        # it already IS the lazy backend. Overriding this (rather than inheriting
-        # ImageStack.__new__) avoids it ever constructing the wrong concrete class if `lazy=`
-        # reaches here (e.g. a direct, redundant `LazyImageStack(source, lazy=True)` call).
+        # A Lazy* class already IS the lazy backend, so it never re-dispatches on `lazy=`
+        # like ImageStack.__new__ does.
         return object.__new__(cls)
 
     def __init__(self, source: Union[str, list], chunks: int = 1, lazy: bool = True) -> None:
@@ -97,14 +83,10 @@ class LazyImageStack(ImageStack):
             Either a path to a single 3D TIFF stack, or a list of per-frame image file paths.
         chunks
             Number of frames per dask chunk along the stack axis, by default 1 (bounds memory
-            most tightly; increase for fewer, larger tasks if that's a better tradeoff for a
-            given stack).
+            most tightly; increase for fewer, larger tasks if that's a better tradeoff).
         lazy
-            Accepted and ignored. Since `LazyImageStack` is itself an `ImageStack`,
-            `ImageStack(source, lazy=True)` (see `ImageStack.__new__`) causes Python's normal
-            `isinstance(obj, ImageStack)` check to invoke this `__init__` a second time, with
-            the original `lazy=True` still in the arguments -- the guard below no-ops that
-            redundant call instead of rebuilding (or raising on the unexpected kwarg).
+            Accepted and ignored -- a re-entry guard for `ImageStack(source, lazy=True)`,
+            which invokes this `__init__` a second time via `isinstance` dispatch.
         """
         if "_dask" in self.__dict__:
             return
@@ -119,13 +101,8 @@ class LazyImageStack(ImageStack):
         if isinstance(source, list) and source and isinstance(source[0], str):
             return self._build_from_files(source, chunks)
 
-        # A glob pattern or an existing directory expands to one or more per-frame image
-        # files -- tried before treating a ".tif"/".tiff"-suffixed string as a single 3D TIFF
-        # stack path below, mirroring the eager ImageStack._split_source's own precedence
-        # (see there for why: tifffile's FileSequence machinery would otherwise silently
-        # force-reshape mismatched frames into frame 0's shape instead of raising, and lose
-        # each frame's own source path). A single matched/contained file still needs the
-        # probe below, since it might itself be one 3D multi-frame TIFF.
+        # A glob/directory expands to per-frame files before falling through to a single 3D
+        # TIFF path below (mirrors ImageStack._split_source's precedence).
         fnames = list_image_files(source)
         if len(fnames) > 1:
             return self._build_from_files(fnames, chunks)
@@ -173,11 +150,8 @@ class LazyImageStack(ImageStack):
         frames = [da.from_array(first_pixels, chunks=shape)]
         for fname in fnames[1:]:
             meta = self._read_metadata(fname)
-            # `_read_metadata` is already called for every frame here (pixel-I/O-free, see
-            # its docstring), so a shape mismatch can be caught for free at construction time
-            # instead of only surfacing once that frame's chunk is actually computed -- or,
-            # worse, silently declaring every frame the same shape as frame 0 for the whole
-            # dask graph (mirrors the eager backend's DataObjectStack._construct check).
+            # Catch a shape mismatch now, at construction, rather than once that frame's
+            # chunk is computed (mirrors DataObjectStack._construct's check).
             frame_shape = self._shape_from_meta(meta)
             if frame_shape is not None and frame_shape != shape:
                 raise ValueError(
@@ -195,27 +169,22 @@ class LazyImageStack(ImageStack):
 
     @staticmethod
     def _shape_from_meta(meta: dict) -> Optional[tuple]:
-        """Pixel shape implied by a `_read_metadata` dict's "height"/"width" keys (as
-        `Image.parse` always populates them), or `None` if either is missing -- e.g. a
-        reader's metadata that doesn't carry them, in which case the mismatch check in
-        `_build_from_files` is simply skipped for that frame rather than raising."""
+        """Pixel shape implied by a `_read_metadata` dict's "height"/"width" keys, or `None`
+        if either is missing (the mismatch check in `_build_from_files` is then skipped)."""
         height, width = meta.get("height"), meta.get("width")
         if height is None or width is None:
             return None
         return (height, width)
 
     def _read_pixels(self, fname: str) -> np.ndarray:
-        """Read just the pixel array of one frame. Base implementation has no cheap
-        format-specific path, so it does a full parse via `self._type`; subclasses with a
-        pluggable reader (e.g. `LazyLEEMStack`) should override this."""
+        """Read just the pixel array of one frame; a full parse via `self._type` here,
+        overridden by subclasses with a cheaper pluggable-reader path (e.g. `LazyLEEMStack`)."""
         return np.asarray(self._type(fname).image, dtype=np.float32)
 
     def _read_metadata(self, fname: str) -> dict:
-        """Read just the metadata of one frame as a flat dict (meta keys plus '<key>_unit'
-        keys), mirroring what `DataObject.__init__` would route into `_meta`/`_units`. Base
-        implementation has no cheap metadata-only path for generic images, so it does a full
-        parse and discards the pixel array; `LazyLEEMStack` overrides this with the reader's
-        real metadata-only parse (no pixel I/O)."""
+        """Read one frame's metadata as a flat dict (meta keys plus '<key>_unit' keys). Base
+        implementation does a full parse and discards pixels; `LazyLEEMStack` overrides this
+        with a real metadata-only parse (no pixel I/O)."""
         obj = self._type(fname)
         result = dict(obj.meta)
         for key, value in obj.unit.items():
@@ -278,15 +247,10 @@ class LazyImageStack(ImageStack):
         if attr.startswith("_") or attr in self.__dict__:
             raise AttributeError(attr)
         if isinstance(getattr(self._type, attr, None), property):
-            # A computed per-element property (e.g. LEEMImg.rel_time = timestamp -
-            # time_origin, or binding_energy/kinetic_energy/pressure) isn't a plain
-            # _meta_list key, so it can't be read out of the dict gather below -- mirror
-            # DataObjectStack.__getattr__ (which calls getattr() on each real element) by
-            # resolving the property on a lightweight, metadata-only element per frame
-            # instead. Checked *before* the dict gather since some names (e.g. 'pressure')
-            # are both a stored meta default AND a property -- the property must win to
-            # match eager. All of these properties are metadata-derived, not pixel-derived,
-            # so placeholder pixels keep this pixel-I/O-free.
+            # A computed per-element property (e.g. LEEMImg.rel_time) isn't a plain
+            # _meta_list key; resolve it on a lightweight, metadata-only element per frame
+            # instead, checked before the dict gather since it must win over a same-named
+            # stored meta default. Placeholder pixels keep this pixel-I/O-free.
             placeholder = np.zeros(self._dask.shape[1:], dtype=np.float32)
             return np.array(
                 [
@@ -313,10 +277,8 @@ class LazyImageStack(ImageStack):
         # toggled) need their own setter to run rather than being masked by this override.
         if isinstance(getattr(type(self), attr, None), property):
             return super().__setattr__(attr, value)
-        # A read-only property on the *element* class (e.g. LEEMImg.binding_energy, derived
-        # from energy_offset) can't be broadcast into per-frame metadata -- mirror
-        # DataObject.__setattr__ (fixed to honor property setters) by refusing it the same
-        # way instead of silently writing a dict entry the property getter would ignore.
+        # A read-only property on the *element* class can't be broadcast into per-frame
+        # metadata; refuse it rather than silently writing a dict entry the getter ignores.
         element_prop = getattr(self._type, attr, None)
         if isinstance(element_prop, property) and element_prop.fset is None:
             raise AttributeError(f"can't set attribute '{attr}'")
@@ -339,10 +301,8 @@ class LazyImageStack(ImageStack):
                 )
             self._stack_meta[attr] = value
             return None
-        # Scalar (including a plain string -- not split character-wise): a lazy stack has no
-        # metadata of its own besides `_stack_meta`, and a per-frame field set on the stack
-        # means setting it on every frame -- mirrors DataObjectStack.__setattr__ for eager
-        # stacks, where the same scalar is set as metadata on every element.
+        # Scalar (incl. plain string, not split character-wise): broadcast to every frame,
+        # mirroring DataObjectStack.__setattr__ for eager stacks.
         if not self._meta_list:
             raise ValueError(
                 f"Can't set attribute '{attr}' on an empty stack: there are no elements to "
@@ -546,11 +506,9 @@ class LazyImageStack(ImageStack):
                 for i in range(len(self)):
                     yield np.asarray(self._dask[i].compute())
 
-            # Passing a generator + explicit shape/dtype (rather than writer.write() in a
-            # loop, which would create separate single-page series instead of one stack)
-            # keeps this streamed: only one frame is ever materialized at a time.
-            # photometric="minisblack" avoids tifffile misreading a 3-frame single-channel
-            # stack as RGB (its shape-guessing heuristic is ambiguous for exactly 3 frames).
+            # Generator + explicit shape/dtype keeps writing streamed (one frame at a time)
+            # as a single stack; photometric="minisblack" avoids tifffile misreading a
+            # 3-frame stack as RGB.
             tifffile.imwrite(
                 fname,
                 frames(),

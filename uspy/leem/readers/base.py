@@ -1,12 +1,10 @@
 """
 Base class and registry for pluggable LEEM data readers.
 
-A "reader" encapsulates everything that is specific to a data format or endstation: how
-to recognize a file, how to parse a single image, how to discover the files that belong
-to a stack, and how to fill in metadata that can only be determined once a whole stack is
-known (e.g. a beamline "tracefile" shared by all images of a stack). New endstations are
-added by writing a small, self-contained `LEEMReader` subclass -- no subclassing of
-`LEEMImg`/`LEEMStack` is necessary.
+A reader encapsulates everything specific to a data format/endstation: recognizing a
+file, parsing a single image, discovering a stack's files, and filling in metadata only
+known once a whole stack exists. New endstations are added by writing a `LEEMReader`
+subclass -- no subclassing of `LEEMImg`/`LEEMStack` needed.
 
 See `uspy.leem.readers.resolve_reader` for how a reader is selected for a given source.
 """
@@ -17,19 +15,15 @@ from typing import Any, Iterable, Union
 
 
 class LEEMReader:
-    """
-    Base class for pluggable LEEM data readers.
-
-    Subclasses must set a unique `name`; that automatically registers the subclass so it
-    can be selected by that name (via the `reader=` argument of `LEEMImg`/`LEEMStack`, a
-    `set_reader(...)` session override, or a `uspy.toml` config file found via the config
-    search path -- see `resolve_reader`).
+    """Base class for pluggable LEEM data readers. Subclasses must set a unique `name`,
+    which auto-registers them for selection via `reader=`, `set_reader(...)`, or a
+    `uspy.toml` file (see `resolve_reader`).
 
     Parameters
     ----------
     **options
-        Reader-specific options (e.g. from a config file's `[uspy.options]` table). Stored
-        on `self.options`; subclasses that need options should read them from there.
+        Reader-specific options (e.g. from a config file's `[uspy.options]` table),
+        stored on `self.options`.
     """
 
     name: str = None
@@ -60,13 +54,9 @@ class LEEMReader:
         raise NotImplementedError(f"{type(self).__name__} cannot parse single images")
 
     def parse_metadata(self, source: str) -> dict[str, Any]:
-        """
-        Parse just the metadata of a single file source, without necessarily loading pixel
-        data -- used by the lazy/out-of-core stack backend (`uspy.dataobject.lazy`) to build
-        per-frame metadata cheaply. The default falls back to `parse_image` and discards the
-        "image" data key; readers that can skip the pixel block entirely (e.g. `ElmitecReader`)
-        should override this for a real speedup.
-        """
+        """Parse just the metadata of a single file source, without necessarily loading pixel
+        data -- used by the lazy stack backend (`uspy.dataobject.lazy`). Default falls back to
+        `parse_image` and discards "image"; override for a real speedup."""
         idict = dict(self.parse_image(source))
         idict.pop("image", None)
         return idict

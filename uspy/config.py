@@ -1,25 +1,20 @@
 """
-Shared `uspy.toml` config machinery.
-
-`uspy` can be configured per-site/per-project through one or more `uspy.toml` files.
-This module implements the generic parts (locating and parsing those files) plus the
-`[uspy.paths]` table, which supplies `uspy.DATADIR`/`uspy.LEEMDIR` (see `uspy.__init__`)
-and any other named data-root a site wants to declare. The reader-selection tables
-(`[uspy]`/`[uspy.options]`/`[uspy.plotting]`) are documented and resolved in
-`uspy.leem.readers`, which builds on the search/parse primitives here.
+Shared `uspy.toml` config machinery: locating/parsing config files, plus the
+`[uspy.paths]` table that supplies `uspy.DATADIR`/`uspy.LEEMDIR` (see `uspy.__init__`) and
+any other named data-root. The reader-selection tables (`[uspy]`/`[uspy.options]`/
+`[uspy.plotting]`) are documented and resolved in `uspy.leem.readers`, which builds on the
+search/parse primitives here.
 
 Config files are searched for at multiple locations, most specific first:
 
-1. the data folder a given `source` points into (only when resolving something that
-   has a `source`, e.g. a reader for `LEEMImg(source)` -- see `uspy.leem.readers`)
+1. the data folder a given `source` points into (only when resolving something with a
+   `source`, e.g. a reader for `LEEMImg(source)` -- see `uspy.leem.readers`)
 2. that folder's parent
 3. the current working directory
 4. a global config directory: `$XDG_CONFIG_HOME/uspy/uspy.toml`, or
    `~/.config/uspy/uspy.toml` if `XDG_CONFIG_HOME` is unset
 
-`[uspy.paths]` has no `source` to anchor to (the data folder is precisely what it
-resolves), so only steps 3 and 4 apply -- current working directory, then the global
-config directory.
+`[uspy.paths]` has no `source` to anchor to, so only steps 3 and 4 apply.
 
 ## `[uspy.paths]`
 
@@ -30,25 +25,20 @@ leemdir = "/mnt/surfer/data/LEEM"   # optional; defaults to "<datadir>/LEEM"
 xps     = "~/data/XPS"              # arbitrary extra keys are allowed
 ```
 
-Values may use `~` (expanded to the user's home directory) and `$VAR`/`${VAR}`
-environment variable references; a relative value is anchored to the folder of the
-`uspy.toml` that declared it. Every resolved path is a `str` ending in a path
-separator, e.g. `"/mnt/surfer/data/"`, matching the historical `uspy.DATADIR` format.
+Values may use `~` and `$VAR`/`${VAR}`; a relative value is anchored to the folder of the
+`uspy.toml` that declared it. Every resolved path is a `str` ending in a path separator,
+e.g. `"/mnt/surfer/data/"`, matching the historical `uspy.DATADIR` format.
 
-Multiple `uspy.toml` files are layered, most specific first (cwd, then the global
-config dir): for a given key, the *first layer that mentions it* (either directly, or
-via its `_DERIVED` parent -- see `_layer_value`) wins, in its entirety. This is
-deliberately not a flat per-key merge: if a project-local file sets only `datadir`, its
-`leemdir` must move with it (default to `<that datadir>/LEEM`) even if a less-specific
-file also declared `leemdir` explicitly -- otherwise `LEEMDIR` could silently point into
-an unrelated tree.
+Multiple `uspy.toml` files are layered, most specific first: for a given key, the first
+layer that mentions it (directly, or via its `_DERIVED` parent -- see `_layer_value`)
+wins, in its entirety -- not a flat per-key merge, so an explicit `leemdir` from a
+less-specific file can't silently override a more-specific file's `datadir`-derived one.
 
 A session override, set via `set_path`/`set_datadir`/`set_leemdir`, ranks above every
-`uspy.toml` layer -- useful for one-off notebook work without writing a config file::
+`uspy.toml` layer -- useful for one-off notebook work::
 
     from uspy.config import set_datadir, reset_paths
-    set_datadir("/mnt/surfer/data")   # every uspy.DATADIR access for the rest of the
-                                       # session uses this, regardless of any uspy.toml
+    set_datadir("/mnt/surfer/data")   # overrides uspy.DATADIR for the rest of the session
     reset_paths()                     # clears all session path overrides again
 """
 
@@ -110,23 +100,15 @@ def config_folder(source: Any) -> Optional[Path]:
 
 
 def global_config_dir() -> Path:
-    """The global config directory: `$XDG_CONFIG_HOME/uspy`, or `~/.config/uspy` if
-    `XDG_CONFIG_HOME` is unset -- for a `uspy.toml` that applies machine-/user-wide
-    (e.g. a measurement machine that only ever produces one file format, or a site-wide
-    `[uspy.paths]`)."""
+    """The global config directory: `$XDG_CONFIG_HOME/uspy`, or `~/.config/uspy` if unset."""
     xdg_config_home = os.environ.get("XDG_CONFIG_HOME")
     base = Path(xdg_config_home) if xdg_config_home else Path.home() / ".config"
     return base / "uspy"
 
 
 def config_search_paths(source: Any) -> list:
-    """
-    Ordered list of folders to look for a `uspy.toml` in, most specific first (see the
-    module docstring): the data folder (if `source` is given), its parent, the current
-    working directory, and the global config directory. Entries are de-duplicated by
-    resolved path (e.g. when the data folder IS the current working directory) while
-    preserving the first, most-specific occurrence.
-    """
+    """Ordered list of folders to look for a `uspy.toml` in, most specific first (see the
+    module docstring). De-duplicated by resolved path, keeping the first occurrence."""
     candidates = []
     data_folder = config_folder(source)
     if data_folder is not None:
@@ -156,11 +138,8 @@ def _parse_toml_cached(config_path_str: str, mtime_ns: int) -> dict:  # pylint: 
 
 
 def _uspy_tables_located(source: Any) -> list:
-    """Returns `(uspy_table, containing_folder)` pairs for every `uspy.toml` found
-    along `source`'s config search path (see `config_search_paths`), most specific
-    first. Folders without a `uspy.toml` are silently skipped. `containing_folder` is
-    the resolved folder the config file lives in, used to anchor relative path values
-    (see `_normalize_path_value`)."""
+    """(uspy_table, containing_folder) pairs for every `uspy.toml` found along `source`'s
+    config search path, most specific first; folders without one are skipped."""
     located = []
     for folder in config_search_paths(source):
         config_path = folder / CONFIG_FILENAME
@@ -229,16 +208,10 @@ def _default_datadir() -> Path:
 
 
 def get_path(name: str, default: Optional[str] = None) -> Optional[str]:
-    """
-    Resolve a named data path (e.g. `"datadir"`, `"leemdir"`, or any site-specific key
-    declared under `[uspy.paths]`), most-specific layer first: a session override set
-    via `set_path`/`set_datadir`/`set_leemdir`, then each `uspy.toml`'s `[uspy.paths]`
-    table found on the search path (cwd, then the global config dir) -- see the module
-    docstring for why this is layered rather than merged per-key.
-
-    Falls back to `~/data/` for `"datadir"`, `<datadir>/LEEM/` for `"leemdir"`, and
-    `default` (normalized the same way as a config value, if given) for anything else.
-    """
+    """Resolve a named data path (`"datadir"`, `"leemdir"`, or any `[uspy.paths]` key),
+    most-specific layer first: a session override, then each `uspy.toml` on the search
+    path. Falls back to `~/data/` for `"datadir"`, `<datadir>/LEEM/` for `"leemdir"`, and
+    `default` otherwise."""
     if name in _session_paths:
         return _normalize_path_value(_session_paths[name], None, name, "session override")
 
@@ -276,14 +249,8 @@ def resolve_paths() -> dict:
 
 
 def set_path(name: str, value: Union[str, "os.PathLike", None]) -> None:
-    """
-    Set a session-wide override for a named data path (e.g. `"datadir"`), used by
-    `get_path` for every subsequent access -- taking precedence over any `uspy.toml`.
-    Mirrors `uspy.leem.readers.set_reader`.
-
-    `value` may be a `str`, a `os.PathLike`, or `None` to clear just this key
-    (equivalent to not having set it).
-    """
+    """Set a session-wide override for a named data path, taking precedence over any
+    `uspy.toml` for every subsequent `get_path` call. `value=None` clears the override."""
     if value is None:
         _session_paths.pop(name, None)
         return

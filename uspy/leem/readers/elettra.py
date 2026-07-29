@@ -46,11 +46,9 @@ class ElettraReader(LEEMReader):
     unit_defaults = {"photon_energy": "eV"}
 
     def _parse(self, source: str, read_image: bool) -> dict[str, Any]:
-        """Shared implementation of `parse_image`/`parse_metadata`: all of Elettra's per-image
-        metadata (camera/microscope/beamline sidecars, or the ".dat" header, including width/
-        height) is stored independently of the pixel block, so `read_image=False` skips every
-        actual pixel read (`tifffile.imread` / the ".dat" pixel block) while returning the
-        exact same metadata `parse_image` would."""
+        """Shared implementation of `parse_image`/`parse_metadata`. Elettra's per-image
+        metadata is stored independently of the pixel block, so `read_image=False` skips
+        the actual pixel read while returning the same metadata `parse_image` would."""
         folder = Path(source).parent
 
         if source.endswith(".tif"):
@@ -84,14 +82,10 @@ class ElettraReader(LEEMReader):
         if needs_rename:
             for new, old in ATTR_NAMES.items():
                 idict[new] = idict.pop(old, np.nan)
-            # .tif files don't save a timestamp themselves. If a ".dat" sidecar with the
-            # same basename exists (Elettra commonly saves both formats for the same
-            # acquisition), its header has a real embedded timestamp -- use that (this is
-            # also why list_files() above prefers .dat over .tif). Otherwise fall back to
-            # the file's modification date, which only approximates the acquisition time
-            # and can be badly wrong if the files were copied/extracted after the fact
-            # (take care). For stacks with a tracefile that has a "time" column, this
-            # per-image value is overwritten in post_process_stack().
+            # .tif files carry no timestamp; prefer a same-basename ".dat" sidecar's real
+            # embedded one, else fall back to file mtime (only approximate -- can be wrong
+            # if files were copied/extracted after the fact). Overwritten later by a
+            # tracefile's "time" column, if present, in post_process_stack().
             dat_source = str(Path(source).with_suffix(".dat"))
             if os.path.exists(dat_source):
                 idict["timestamp"] = parse_dat(dat_source, read_image=False)["timestamp"]
@@ -104,21 +98,16 @@ class ElettraReader(LEEMReader):
         return self._parse(source, read_image=True)
 
     def parse_metadata(self, source: str) -> dict[str, Any]:
-        """Metadata-only counterpart to `parse_image`, for the lazy/out-of-core stack backend
-        (`uspy.dataobject.lazy`) -- without this override, the base `LEEMReader.parse_metadata`
-        falls back to `parse_image` and discards the "image" key, which would read every
-        frame's full pixel array just to build a lazy stack's metadata, defeating out-of-core
-        loading."""
+        """Metadata-only counterpart to `parse_image`, for the lazy stack backend
+        (`uspy.dataobject.lazy`); avoids reading every frame's pixels just for metadata."""
         return self._parse(source, read_image=False)
 
     def list_files(self, source: Union[str, Iterable]) -> list:
         if not isinstance(source, str):
             return []
 
-        # Elettra data is only saved with 3 digits (2 leading zeros at start), so when
-        # more than 999 files are saved, alphanumeric sorting fails. So natsort is
-        # necessary here. .dat files are preferred over .tif because they save the data
-        # in a more robust way, e.g. timestamp.
+        # Elettra numbers files with 3 digits, so alphanumeric sorting fails past 999
+        # files -- natsort is needed. .dat is preferred over .tif (more robust, e.g. timestamp).
         fnames = []
         if source.endswith(".dat"):  # .../path/*.dat
             fnames = natsort.natsorted(glob.glob(f"{source}"))
@@ -166,11 +155,8 @@ class ElettraReader(LEEMReader):
             # the tracefile's own timestamps are logged in ms; per-image timestamps
             # from parse_image() (real epoch seconds) are left untouched otherwise.
             stack.timestamp = [x / 1000.0 for x in stack.timestamp]
-        # time_origin is seeded by the caller (LEEMStack.__init__ / LazyLEEMStack.__init__)
-        # from stack[0].timestamp *after* post_process_stack runs, but only if no explicit
-        # time_origin was passed in -- so nothing needs to be (re-)set here. Doing it
-        # unconditionally used to clobber a caller-supplied time_origin (e.g. via
-        # LEEMStack.to_lazy(), which reuses the source stack's TimeOrigin by reference).
+        # time_origin is seeded by the caller after post_process_stack runs, unless an
+        # explicit one was passed in -- nothing to (re-)set here.
 
 
 def read_camera_metadata(fname: str) -> dict:

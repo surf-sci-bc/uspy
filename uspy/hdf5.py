@@ -1,51 +1,26 @@
 """
 NeXus-flavoured HDF5 export/import -- an archivable, open-format alternative to pickle/JSON.
 
-At publication time, data needs to be deposited in a format other researchers can open
-*without* uspy: `.pickle` is self-contained but Python-version-fragile and unsafe to
-distribute; `.json` only stores a source path and re-reads the original file on load; `.tif`/
-`.zarr` store pixels but drop all metadata. `obj.save("deposit.h5")` (any `DataObject` or
-`DataObjectStack`) instead writes one self-contained HDF5 file with pixels, every metadata
-value (with its Python type preserved), and every unit -- readable by bare `h5py`, MATLAB, silx
-and DAWN, and by `Cls.load("deposit.h5")` losslessly.
+`.pickle` is Python-version-fragile and unsafe to distribute; `.json` only stores a source
+path and re-reads the original file on load; `.tif`/`.zarr` store pixels but drop metadata.
+`obj.save("deposit.h5")` (any `DataObject`/`DataObjectStack`) instead writes one self-contained
+HDF5 file with pixels, every metadata value (Python type preserved), and every unit -- readable
+by bare `h5py`, MATLAB, silx and DAWN, and by `Cls.load("deposit.h5")` losslessly.
 
-Design principles
------------------
-- **One generic writer/reader.** Every uspy data type is built on `_data`/`_meta`/`_units`
-  (see `uspy.dataobject.base`), so a single code path here serves `Image`, `Line`, `Waterfall`,
-  `ImageStack`, `LEEMStack`, and the lazy out-of-core stacks -- no per-class format code.
-- **Derived types export as their parent.** An archive is the *data*, not the analysis object
-  graph: `IntensityLine`/`StitchedLine`/`ProfileLine`/`IVCurve` all export as a plain `Line`;
-  `Waterfall` exports as a plain `Image`; the lazy stacks export as their eager equivalent.
-  Whatever can't be represented this way (an upstream `ImageStack`/`ROI`/`Profile` reference)
-  is simply not written -- there is no recursive embedding, and nothing DataObject-like is ever
-  nested inside an entry.
-- **The archive is deliberately uspy-agnostic.** A file holds exactly two content groups,
-  `/entry/data` (the science) and `/entry/metadata` (everything else), plus standard NeXus
-  scaffolding (`NX_class`, `signal`, `axes`, `program_name`, `instrument`, ...). The *only*
-  uspy-specific attributes anywhere in the file are three, on the root/entry groups:
-  `uspy_version`, `uspy_format_version`, `uspy_class`. There is no per-dataset type tag --
-  the Python type of a metadata value is inferred from the HDF5 dtype itself (see
-  `_encode_value`/`_decode_value`): scalar float/int/bool/string datatypes decode to the
-  matching Python scalar, anything non-scalar decodes to an `np.ndarray` with its stored dtype.
-  Even `uspy_class` is optional: if it's missing (or names a class this version doesn't know),
-  the reader falls back to structural inference (2-D signal -> `Image`, 3-D -> `ImageStack`,
-  a `y`-over-`x` signal -> `Line`), with a warning -- so a hand-written, uspy-unaware HDF5 file
-  following this layout is loadable too.
-- **Nothing is silently dropped or coerced (project rule 3).** A metadata value that can't be
-  represented (an upstream `DataObject`/`ROI`/`Profile`/callable/dict) is omitted with a
-  `DroppedFieldWarning` naming it, at write time. A stack column with a key missing on some
-  frames is filled (nan/''/False) with a `MissingFieldWarning` naming the frames -- so a
-  round-tripped stack reads back a fabricated value where the original would have raised
-  `AttributeError`; that's a deliberate, loudly-announced trade-off for keeping the file
-  free of "was this frame missing or not" bookkeeping columns. A stack column whose per-frame
-  *unit* differs is written with the single most common unit (NeXus only allows one `units`
-  string) plus a `UnitMismatchWarning` naming every unit seen. Genuinely mixed-type stack
-  columns (e.g. int on one frame, float on another) are coerced to a uniform column (numeric
-  promotion, or stringified as a last resort) with a plain warning.
-- **Never touches source data (rule 1).** `write()`/`save()` only ever creates a *new* file;
-  nothing about the object being exported, or any file it was originally read from, is
-  modified.
+One generic writer/reader serves every type built on `_data`/`_meta`/`_units` (see
+`uspy.dataobject.base`). Derived types export as their parent (`IntensityLine`/`StitchedLine`/
+`ProfileLine`/`IVCurve` -> `Line`, `Waterfall` -> `Image`, lazy stacks -> their eager
+equivalent); anything that can't be represented that way (an upstream `ImageStack`/`ROI`/
+`Profile` reference) is simply not written, with a `DroppedFieldWarning` naming it. A stack
+column missing on some frames is filled (nan/''/False) with a `MissingFieldWarning`; a column
+whose per-frame unit differs is written under its single most common unit with a
+`UnitMismatchWarning`; genuinely mixed-type columns are coerced to a uniform dtype with a plain
+warning. The file itself is deliberately uspy-agnostic: two content groups (`/entry/data`,
+`/entry/metadata`) plus standard NeXus scaffolding, and exactly three `uspy_*` attributes in
+the whole file -- no per-field type tag; a value's Python type is inferred from its HDF5 dtype
+on read, and a missing/unrecognized `uspy_class` falls back to structural inference (2-D
+signal -> `Image`, 3-D -> `ImageStack`, `y`-over-`x` -> `Line`) with a warning. `write()`/
+`save()` only ever creates a new file; the exported object and its source are never touched.
 
 File layout
 -----------
@@ -103,10 +78,8 @@ from typing import Any, Optional
 import numpy as np
 import h5py
 
-# NOTE: deliberately no module-level import of anything under uspy.dataobject/uspy.leem --
-# see the module docstring. Every function below that needs a concrete uspy class imports it
-# locally, so `import uspy.hdf5` never drags in the whole data model, and a stale environment
-# missing h5py can still `import uspy` fine (it only breaks on an actual .h5 path).
+# uspy.dataobject/uspy.leem classes are imported locally inside functions, not at module level,
+# so `import uspy` still works in an environment missing h5py until an actual .h5 path is hit.
 
 HDF5_EXTENSIONS = (".h5", ".hdf5", ".nxs")
 FORMAT_VERSION = "1.0"
@@ -119,23 +92,19 @@ _CHUNK_MAX_BYTES = 32 * 1024**2
 
 
 class DroppedFieldWarning(UserWarning):
-    """A metadata value could not be represented in an HDF5 export (or was not present in one
-    being read back) -- e.g. an upstream ImageStack/ROI/Profile reference on a derived Line/
-    Image type such as IntensityLine or Waterfall. The value is simply omitted; nothing is
-    written in its place, and the archive itself carries no record that it ever existed."""
+    """A metadata value (e.g. an upstream ImageStack/ROI/Profile reference) can't be
+    represented in HDF5 and was omitted, with no record left in the archive."""
 
 
 class UnitMismatchWarning(UserWarning):
-    """A stack's per-frame metadata field has different units across frames. NeXus only
-    allows a single 'units' string per dataset, so the most common unit is used for it; the
-    column's own per-frame *values* are still written exactly as given."""
+    """A stack's per-frame metadata field has different units across frames; the most
+    common unit is written as the single NeXus 'units' string, values are untouched."""
 
 
 class MissingFieldWarning(UserWarning):
-    """A stack's per-frame metadata field is absent (or None) for some frames but present for
-    others. The gap is filled (nan/''/False) in the written column -- an HDF5 round-tripped
-    stack will therefore read back a fabricated value on those frames where the original
-    object would have raised AttributeError. A deliberate, loudly-announced trade-off."""
+    """A stack's per-frame metadata field is missing on some frames; the gap is filled
+    (nan/''/False) rather than raising, so a round-tripped stack reads a fabricated value
+    where the original would have raised AttributeError."""
 
 
 def is_hdf5_path(fname: Any) -> bool:
@@ -180,9 +149,8 @@ def _classify(value: Any) -> str:
 
 def _encode_value(group: h5py.Group, name: str, value: Any) -> bool:
     """Write `value` as a dataset named `name` under `group`. Returns False (writes nothing)
-    for `None` and for anything not representable as a plain scalar/string/numeric-or-string
-    ndarray -- callers are responsible for warning about the latter; `None` is not a loss (see
-    module docstring) and never warns."""
+    for `None` or anything not representable as a scalar/string/numeric ndarray; the caller
+    warns about the latter, not `None`."""
     if value is None:
         return False
     if isinstance(value, (bool, np.bool_)):
@@ -219,11 +187,8 @@ def _encode_value(group: h5py.Group, name: str, value: Any) -> bool:
 
 
 def _decode_value(dataset: h5py.Dataset) -> Any:
-    """Inverse of `_encode_value` for a whole dataset (single-object metadata, or a value that
-    happens to itself be an array such as `warp_matrix`). A scalar (0-d) dataset decodes to the
-    matching native Python scalar; anything else decodes to an `np.ndarray` with its stored
-    dtype (strings via `.asstr()`, to avoid h5py 3.x's bytes-vs-str dataset/attribute
-    asymmetry)."""
+    """Inverse of `_encode_value`. A scalar (0-d) dataset decodes to the matching native
+    Python scalar; anything else to an `np.ndarray` with its stored dtype."""
     if h5py.check_string_dtype(dataset.dtype) is not None:
         decoded = dataset.asstr("utf-8")[()]
         if dataset.shape == ():
@@ -259,10 +224,8 @@ def _decode_column(dataset: h5py.Dataset) -> list:
 
 
 def _sanitize_key(key: str) -> tuple:
-    """HDF5 names can't contain '/', but an arbitrary uspy metadata key can (`setattr(img,
-    "a/b", 1)` is legal). `urllib.parse.quote` is a systematic, bijective escape -- ordinary
-    snake_case keys (letters/digits/`_.-~`) pass through unchanged, and only exotic ones are
-    escaped, so callers only need to warn when the name actually changed."""
+    """Escape `key` for use as an HDF5 name (which can't contain '/') via `urllib.parse.quote`;
+    ordinary snake_case keys pass through unchanged. Returns (safe_key, was_changed)."""
     safe = urllib.parse.quote(key, safe="")
     return safe, safe != key
 
@@ -279,13 +242,9 @@ def _qualname(cls: type) -> str:
 
 
 def _target_class(obj: Any) -> tuple:
-    """The (target_class, kind) an object should be archived as: `kind` is "object" or "stack".
-    Derived types collapse onto their parent (`IntensityLine`/`Waterfall`/... -> `Line`/`Image`)
-    because an archive holds data, not the analysis object graph -- see module docstring. A
-    stack's element type is read off its own `_type` class attribute, which is what correctly
-    routes a `LazyImageStack`/`LazyLEEMStack` to `ImageStack`/`LEEMStack` (they subclass
-    `ImageStack`, not `LEEMStack`, so `isinstance` alone can't tell a lazy LEEM stack apart from
-    a lazy plain-image stack)."""
+    """(target_class, kind) an object should be archived as; kind is "object" or "stack".
+    A stack's element type is read off its own `_type` attribute rather than `isinstance`,
+    since `LazyLEEMStack` subclasses `ImageStack`, not `LEEMStack`."""
     from uspy.dataobject.base import DataObjectStack
     from uspy.dataobject.image import Image, ImageStack
     from uspy.dataobject.line import Line
@@ -348,11 +307,9 @@ def _structural_fallback(entry: h5py.Group) -> tuple:
 
 
 def _resolve_target(entry: h5py.Group) -> tuple:
-    """(target_class, kind) for a file being read: honours 'uspy_class' when it names one of
-    the five supported base types, refuses (raises) a non-'uspy.'-prefixed class outright since
-    that would otherwise import arbitrary code, and falls back to structural inference (with a
-    warning) for anything else recoverable -- a missing attribute, or a 'uspy.'-prefixed class
-    this version doesn't recognize (e.g. an archive from a newer uspy)."""
+    """(target_class, kind) for a file being read, from its 'uspy_class' attribute. Raises on
+    a non-'uspy.'-prefixed class name (would otherwise import arbitrary code); falls back to
+    structural inference, with a warning, if the attribute is missing or unrecognized."""
     qualname = entry.attrs.get("uspy_class")
     if qualname is None:
         warnings.warn(
@@ -624,10 +581,8 @@ def _write_image_data(data_grp: h5py.Group, obj: Any, opts: dict) -> h5py.Datase
 
 
 def _maybe_link_waterfall_axes(data_grp: h5py.Group, meta_grp: h5py.Group, obj: Any) -> None:
-    """A `Waterfall` (exported as a plain `Image`) keeps its x/y axis arrays as ordinary meta
-    -- hard-link them into `/entry/data` as NeXus axes too, for a nicer third-party plot. Keyed
-    off the concrete class name (not e.g. matching array lengths against the image shape,
-    which would be exactly the kind of accidental-coincidence magic rule 2 forbids)."""
+    """A `Waterfall` (exported as a plain `Image`) keeps its x/y axes as ordinary meta;
+    hard-link them into `/entry/data` as NeXus axes too, for a nicer third-party plot."""
     if type(obj).__name__ != "Waterfall":
         return
     height, width = obj._data["image"].shape
@@ -648,11 +603,8 @@ def _maybe_link_waterfall_axes(data_grp: h5py.Group, meta_grp: h5py.Group, obj: 
 
 def _iter_frame_meta(stack: Any):
     """Yield (meta_dict, units_dict) per frame, uniformly for eager, virtual, and lazy stacks.
-    A lazy stack's `_meta_list` stores units inline as '<key>_unit' siblings (mirroring
-    `LazyImageStack._read_metadata`/`_apply_meta`); an eager/virtual stack's elements already
-    keep them in separate `_meta`/`_units` dicts, so `for element in stack` (which re-parses a
-    throwaway element per index for a virtual stack, but never materializes a lazy stack's
-    pixels) is used directly."""
+    A lazy stack's `_meta_list` stores units inline as '<key>_unit' siblings; other stacks
+    keep separate `_meta`/`_units` dicts per element."""
     meta_list = getattr(stack, "_meta_list", None)
     if meta_list is not None:
         for flat in meta_list:
@@ -810,11 +762,9 @@ def _write_stack_meta(meta_grp: h5py.Group, frames: list, n: int) -> tuple:
 
 
 def _coerce_column(kinds: set, values: list, present: list):
-    """(column_ndarray_or_None, warn_mixed). `kinds` is the set of `_classify` results across
-    only the *present* frames of this key. `None` means the whole column is dropped (used only
-    when at least one present value is fundamentally unrepresentable -- an ROI/DataObject/dict/
-    callable -- never for a merely-mixed-but-representable combination, which is coerced
-    instead)."""
+    """(column_ndarray_or_None, warn_mixed) for a stack metadata column. `kinds` is the set of
+    `_classify` results across present frames; `None` means the whole column is dropped because
+    at least one value is fundamentally unrepresentable (ROI/DataObject/dict/callable)."""
     if "other" in kinds:
         return None, False
     if kinds == {"bool"}:
@@ -931,10 +881,9 @@ def _pick_frame_axis(key_order: list, frames: list, requested) -> Optional[str]:
 
 
 def read(fname: str) -> Any:
-    """Read an HDF5 file written by `write()` (or a compatible hand-written one) back into a
-    uspy object. Always returns one of the five supported base types (`Image`, `LEEMImg`,
-    `Line`, `ImageStack`, `LEEMStack`) -- a derived type such as `IntensityLine` or `Waterfall`
-    reloads as its parent, since that's what was actually written (see module docstring)."""
+    """Read an HDF5 file written by `write()` (or a compatible one) back into a uspy object.
+    Always returns one of the five base types (`Image`, `LEEMImg`, `Line`, `ImageStack`,
+    `LEEMStack`); a derived type such as `Waterfall` reloads as its parent."""
     with h5py.File(fname, "r") as f:
         entry = f["entry"]
         target_cls, kind = _resolve_target(entry)
@@ -988,11 +937,7 @@ def _read_stack(entry: h5py.Group, target_cls: type) -> Any:
     images = np.asarray(data_grp[signal_name][()])
     n = images.shape[0]
     if n == 0:
-        # write() (and _write_stack) both refuse to export a 0-frame stack, so a 0-frame signal
-        # here means this file is foreign or truncated, not a legitimately empty archive --
-        # symmetric with the write-side refusal, and avoids surfacing the stack constructor's
-        # "cannot create an empty stack" error (or a bare IndexError) for what is really a
-        # corrupt-file problem.
+        # uspy never writes an empty stack, so this means a foreign or truncated file.
         raise ValueError(
             f"{entry.name}/data/{signal_name} contains 0 frames -- this file holds no stack "
             "data (uspy never writes an empty stack; a foreign or truncated file?)."
@@ -1021,12 +966,8 @@ def _read_stack(entry: h5py.Group, target_cls: type) -> Any:
 
     stack = target_cls(elements)
 
-    # Reconstructed elements each got their own private per-object state (e.g. LEEMImg's
-    # TimeOrigin) from their own __init__ -- LEEMStack.__init__ only ever shares that *by
-    # reference* when elements already share it going in (see uspy.leem.base.TimeOrigin), which
-    # freshly-built elements don't. Re-point every element at the stack's own shared instance
-    # (if it has one -- ImageStack has no such attribute, so this is a no-op there) so e.g.
-    # LEEMImg.rel_time behaves the same as for a stack built the usual way.
+    # Each element got its own private TimeOrigin from __init__; re-point them at the stack's
+    # shared instance (no-op for ImageStack, which has none) so rel_time behaves normally.
     shared_origin = getattr(stack, "_time_origin", None)
     if shared_origin is not None:
         for element in stack:

@@ -340,13 +340,10 @@ class Profile(StyledObject):
         all_codes.append(MplPath.CLOSEPOLY)
 
     def _band_path(self) -> Optional[MplPath]:
-        """Build a single compound Path for the whole profile band: one rectangle
-        per segment (width `self.width`, matching the region `apply()` averages
-        over via `profile_line`) plus a disk at each interior vertex to round the
-        join between segments. Rendering this as one Path/patch (rather than one
-        polygon per segment) avoids gaps on the outer side of a corner and, since
-        alpha is applied once, avoids a darker double-blended seam on the inner
-        side. Returns None if there is no well-defined segment to draw."""
+        """Build a single compound Path for the whole profile band: one rectangle per
+        segment (width `self.width`) plus a disk at each interior vertex to round the
+        join. One Path avoids gaps at corners and double-blended alpha seams that one
+        polygon per segment would produce. Returns None if there's no segment to draw."""
         points = [np.asarray(p, dtype=float) for p in self.points]
         # drop consecutive duplicates: zero-length segments have no direction
         deduped = points[:1]
@@ -375,13 +372,10 @@ class Profile(StyledObject):
         return MplPath(all_verts, all_codes)
 
     def plot(self, ax):
-        """Plot the profile true-to-size in data coordinates: a single filled band
-        `self.width` pixels wide (matching the region `apply()` averages over via
-        `profile_line`), with rounded joins where a multi-segment profile changes
-        direction, plus a thin centerline marking the sampled path. Unlike a plain
-        `ax.plot(..., linewidth=self.width)`, this band's thickness is in
-        data/pixel units, not typographic points, so it stays true-to-size across
-        zoom levels and figure sizes."""
+        """Plot the profile true-to-size in data coordinates: a filled band `self.width`
+        pixels wide with rounded joins, plus a thin centerline. Unlike a plain
+        `ax.plot(..., linewidth=self.width)`, thickness is in data/pixel units, so it
+        stays true-to-size across zoom levels and figure sizes."""
         alpha = self.style.get("alpha", 0.5)
         band_path = self._band_path()
         if band_path is not None:

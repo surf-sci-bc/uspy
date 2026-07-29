@@ -1,20 +1,17 @@
 """
 Pluggable LEEM data readers.
 
-`uspy` loads LEEM data through `LEEMImg`/`LEEMStack` (see `uspy.leem.base`), which delegate
-all format/endstation-specific parsing to a `LEEMReader`. A reader is chosen for a given
-source, in order:
+`LEEMImg`/`LEEMStack` (see `uspy.leem.base`) delegate all format/endstation-specific
+parsing to a `LEEMReader`. A reader is chosen for a given source, in order:
 
-1. An explicit `reader=` argument to `LEEMImg`/`LEEMStack` -- either a `LEEMReader`
-   instance, or the registered name of one (e.g. `reader="elettra"`).
-2. A programmatic session-wide override set via `set_reader(...)`, e.g. in a notebook::
+1. An explicit `reader=` argument to `LEEMImg`/`LEEMStack` -- a `LEEMReader` instance,
+   or the registered name of one (e.g. `reader="elettra"`).
+2. A programmatic session-wide override::
 
        from uspy.leem.readers import set_reader
        set_reader("smart")          # every load for the rest of the session uses this
        set_reader(None)             # or reset_reader() -- clears the override
 
-   Useful for a machine/beamline that only ever produces one file format, without
-   needing a `uspy.toml` at all.
 3. `uspy.toml` config file(s), e.g.::
 
        [uspy]
@@ -28,37 +25,24 @@ source, in order:
        meta_fields = ["temperature"]                                  # plot_meta
        print_fields = ["energy", "temperature", "fov"]                # print_meta
 
-   Config files are searched for at multiple locations, most specific first:
-
-   a. the data folder (the folder `source` points into, or `source` itself if it's
-      already a folder)
-   b. that folder's parent
-   c. the current working directory
-   d. a global config directory: `$XDG_CONFIG_HOME/uspy/uspy.toml`, or
-      `~/.config/uspy/uspy.toml` if `XDG_CONFIG_HOME` is unset
-
-   The `reader`/`[uspy.options]` pair is taken as a unit from the first (most specific)
-   file that declares a `reader`. `[uspy.plotting]` fields are merged across all found
-   files on a per-key basis, with more specific files winning -- so, for example, a
-   global `uspy.toml` can fix the reader for a whole machine while a per-folder
-   `uspy.toml` only overrides plotting fields for one measurement.
+   searched most-specific first (data folder, its parent, cwd, global config dir --
+   see `uspy.config` for the full search/parse machinery, shared via that module). The
+   `reader`/`[uspy.options]` pair is taken as a unit from the first file that declares a
+   `reader`; `[uspy.plotting]` fields are merged per-key across all found files, more
+   specific files winning.
 
 4. The default `ElmitecReader` (Elmitec UKSOFT2001 ".dat" files).
 
-Ready-to-copy baseline `uspy.toml` files for each built-in reader (with sensible
-default plotting fields for that endstation's metadata) live under
+Ready-to-copy baseline `uspy.toml` files for each built-in reader live under
 `examples/uspy_toml/<reader name>/uspy.toml`.
 
-There is no automatic content-based format detection -- a non-default reader must be
-requested explicitly or declared via `set_reader`/a `uspy.toml` file. To support a new
-endstation, write a `LEEMReader` subclass (see `uspy.leem.readers.base.LEEMReader`) and
-give it a unique `name`; it registers itself automatically and can then be selected by
-that name.
+There is no content-based format detection -- a non-default reader must be requested
+explicitly or declared via `set_reader`/a `uspy.toml` file. To support a new endstation,
+write a `LEEMReader` subclass (see `uspy.leem.readers.base.LEEMReader`) with a unique
+`name`; it registers itself automatically.
 
-The same `uspy.toml` files also carry a `[uspy.paths]` table (`datadir`, `leemdir`,
-...), which supplies `uspy.DATADIR`/`uspy.LEEMDIR` -- see `uspy.config` for that part of
-the config format; the search/parse primitives here (`_config_search_paths`,
-`_uspy_tables`, ...) are shared with it via `uspy.config`.
+The same `uspy.toml` files also carry the `[uspy.paths]` table (`datadir`, `leemdir`,
+...) documented in `uspy.config`.
 """
 
 from __future__ import annotations
@@ -94,16 +78,10 @@ _session_reader: dict = {"reader": None, "options": {}}
 
 
 def set_reader(reader: Union[str, LEEMReader, None], **options: Any) -> None:
-    """
-    Set a session-wide reader override (e.g. from a notebook), used by `resolve_reader`
-    for every subsequent `LEEMImg`/`LEEMStack` load that doesn't pass an explicit
-    `reader=` argument -- taking precedence over any `uspy.toml`.
-
-    `reader` may be a registered reader name, a `LEEMReader` instance, or `None` to clear
-    the override (equivalent to `reset_reader()`). `**options` are stored alongside a
-    name and passed as keyword arguments when the reader is instantiated; they're
-    ignored if `reader` is already a `LEEMReader` instance.
-    """
+    """Set a session-wide reader override, taking precedence over any `uspy.toml` for
+    every subsequent load without an explicit `reader=`. `reader=None` clears it
+    (equivalent to `reset_reader()`). `**options` are passed to the reader on
+    instantiation; ignored if `reader` is already a `LEEMReader` instance."""
     if reader is None:
         reset_reader()
         return
@@ -134,12 +112,9 @@ def _load_config(source: Any) -> tuple:
 
 
 def resolve_plotting_fields(source: Any, defaults: dict[str, tuple]) -> dict[str, tuple]:
-    """
-    Resolve default plotting field-name tuples from the `[uspy.plotting]` tables of
-    every `uspy.toml` on `source`'s config search path (see the module docstring),
-    merged per-key with more specific files winning, falling back per-key to `defaults`
-    if no file sets that key.
-    """
+    """Resolve default plotting field-name tuples from `[uspy.plotting]` across every
+    `uspy.toml` on `source`'s search path, merged per-key (more specific wins),
+    falling back to `defaults` for keys no file sets."""
     merged: dict = {}
     for section in reversed(_uspy_tables(source)):
         merged.update(section.get("plotting", {}))

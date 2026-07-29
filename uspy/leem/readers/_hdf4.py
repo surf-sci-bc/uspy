@@ -1,24 +1,22 @@
 """
 Minimal, dependency-free HDF4 reader for SMART/BESSY `.hdf` files.
 
-This is a *fallback* used by `uspy.leem.readers.smart` when the optional `pyhdf` package
-(which wraps the native HDF4 C library and is painful to install on macOS/Windows) is not
-available. It implements just the sliver of the HDF4 format that SMART files actually use --
-it is **not** a general-purpose HDF4 library:
+Fallback used by `uspy.leem.readers.smart` when the optional `pyhdf` package (native HDF4
+C library, painful to install on macOS/Windows) is unavailable. Not a general-purpose HDF4
+library -- only the sliver SMART files actually use:
 
-* the file-description / file-label annotations (`DFTAG_FD` / `DFTAG_FID`), which SMART uses
-  to store all acquisition metadata as free-text "KEY = VALUE;" pairs, and
-* the single Scientific Data Set (a `DFTAG_NDG` group named "Range0", int16, shape
-  ``(n_frames, height, width)``), whose pixel data is stored either contiguously or -- as in
-  every real SMART file -- as an HDF4 *linked-block* special element.
+* the file-description/file-label annotations (`DFTAG_FD`/`DFTAG_FID`), storing metadata as
+  free-text "KEY = VALUE;" pairs, and
+* the single Scientific Data Set (`DFTAG_NDG` group "Range0", int16, shape
+  ``(n_frames, height, width)``), stored contiguously or -- as in every real SMART file --
+  as an HDF4 *linked-block* special element.
 
-Compressed (`SPECIAL_COMP`) or chunked (`SPECIAL_CHUNKED`) storage is deliberately **not**
-supported; such a file raises a clear error asking the user to install `pyhdf`. SMART does not
-write those, so this covers all real data.
+Compressed/chunked storage is not supported and raises, asking to install `pyhdf`; SMART
+never writes those.
 
 An HDF4 file is a magic number followed by a linked list of *data descriptor* (DD) blocks;
-each DD is ``tag(2) ref(2) offset(4) length(4)`` (all big-endian) and points at a raw byte
-range elsewhere in the file. See the HDF4 specification for the tag meanings referenced below.
+each DD is ``tag(2) ref(2) offset(4) length(4)`` (big-endian), pointing at a raw byte range
+elsewhere in the file. See the HDF4 specification for tag meanings referenced below.
 """
 # pylint: disable=invalid-name
 
@@ -67,14 +65,10 @@ class Hdf4Error(RuntimeError):
 
 
 class Hdf4File:
-    """
-    Read SMART's metadata and image frames from an HDF4 file without `pyhdf`.
-
-    Parsing the (small) file structure -- DD table, annotations, dataset dimensions/type and
-    the linked-block layout -- happens once, up front; the (potentially huge) pixel data is
-    not read until `read_frame`, which touches only the blocks overlapping the requested frame
-    so a single frame of a multi-hundred-MB stack file loads without reading the whole file.
-    """
+    """Read SMART's metadata and image frames from an HDF4 file without `pyhdf`. File
+    structure (DD table, annotations, dimensions/type, block layout) is parsed once up
+    front; pixel data isn't read until `read_frame`, which touches only the blocks for the
+    requested frame."""
 
     def __init__(self, path: Union[str, os.PathLike]) -> None:
         self._path = os.fspath(path)
@@ -91,9 +85,8 @@ class Hdf4File:
             _sdd_frames, height, width = self._read_dims(f, dd, sdd_ref)
             self._blocks, data_length = self._read_sd_layout(f, dd, sd_ref)
 
-        # The frame count is derived from the actual data length, not from the SD dimension
-        # record: a stack's first dimension is an *unlimited* (appendable) SD dimension, which
-        # HDF4 records as 1 in the SDD regardless of how many frames were written.
+        # Frame count comes from the actual data length, not the SDD record: HDF4 records
+        # an unlimited/appendable first dimension as 1 regardless of frames written.
         frame_nbytes = height * width * self._dtype.itemsize
         if frame_nbytes == 0 or data_length % frame_nbytes != 0:
             raise Hdf4Error(

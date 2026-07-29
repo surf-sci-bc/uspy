@@ -28,10 +28,8 @@ class Loadable:
         )
 
     def _dump_pickle(self, fileobj) -> None:
-        """Pickle straight into an already-open file object, instead of building the
-        whole pickled bytestring in memory first (as `dumps()` does) and then writing
-        it -- avoids holding both the live object graph and its full byte serialization
-        in RAM at once, which matters for large stacks."""
+        """Pickle straight into an already-open file object instead of building the whole
+        bytestring in memory first (as `dumps()` does) -- matters for large stacks."""
         try:
             pickle.dump(self, fileobj, protocol=4)
         except RecursionError:
@@ -58,17 +56,12 @@ class Loadable:
             return json_tricks.dumps(self, allow_nan=True).encode("utf-8")
 
     def save(self, fname: str, **kwargs) -> Loadable:
-        """Save the object to a file depending on the filename extension.
-
-        `**kwargs` are only meaningful for an HDF5 target (`.h5`/`.hdf5`/`.nxs`; see
-        `uspy.hdf5.write` for the accepted options) and raise `TypeError` for any other
-        extension -- silently swallowing e.g. a typo'd `compresion=9` on a `.pickle` save
-        would otherwise be exactly the kind of silent behavior change this project avoids.
-        """
-        # Deferred import: uspy.hdf5 is data-model-aware (it inspects _data/_meta/_units), so
-        # importing it here rather than at module level keeps this module -- explicitly
-        # "independent of the data model" per its own docstring -- free of that dependency,
-        # and means a stale environment missing h5py only breaks on an actual .h5 save/load.
+        """Save the object to a file depending on the filename extension. `**kwargs` are
+        only meaningful for an HDF5 target (`.h5`/`.hdf5`/`.nxs`; see `uspy.hdf5.write`)
+        and raise `TypeError` for any other extension, rather than silently ignoring a
+        typo'd kwarg on a `.pickle` save."""
+        # Deferred import keeps this module free of the uspy.hdf5 dependency (and a stale
+        # environment missing h5py breaks only on an actual .h5 save/load).
         from uspy.hdf5 import is_hdf5_path
 
         if is_hdf5_path(fname):
