@@ -172,6 +172,23 @@ def parse_dat(fname: str, debug: bool = False, read_image: bool = True) -> dict[
     return data
 
 
+def parse_dat_pixels(fname: str) -> np.ndarray:
+    """Read ONLY the pixel block of a UKSOFT2001 file, without `parse_dat`'s variable-length
+    metadata walk: width/height sit at fixed offsets (40/42) in the first 104-byte header, and
+    the pixel block itself is located *relative to EOF* (see `parse_dat`'s
+    `seek(-2*width*height, 2)`) rather than after the header -- so this needs only that first
+    104-byte header plus one seek-from-end, not a full parse."""
+    with Path(fname).open("rb") as uk_file:
+        header = uk_file.read(104)
+        width = parse_bytes(header, 40, "short")
+        height = parse_bytes(header, 42, "short")
+        size = width * height
+        uk_file.seek(-2 * size, 2)
+        image = np.fromfile(uk_file, dtype=np.uint16, sep="", count=size)
+        image = np.flipud(image.reshape((height, width)))
+        return np.array(image, dtype=np.float32)
+
+
 class ElmitecReader(LEEMReader):
     """Reads the Elmitec UKSOFT2001 ".dat" binary format used by UView. This is the
     default reader used when no other reader is selected."""
@@ -184,6 +201,9 @@ class ElmitecReader(LEEMReader):
 
     def parse_metadata(self, source: str) -> dict[str, Any]:
         return parse_dat(source, read_image=False)
+
+    def parse_pixels(self, source: str) -> np.ndarray:
+        return parse_dat_pixels(source)
 
     def list_files(self, source: Union[str, Iterable]) -> list:
         if not isinstance(source, str):

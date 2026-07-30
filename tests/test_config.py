@@ -295,6 +295,51 @@ def test_cache_picks_up_rewritten_file_with_new_mtime(isolated_env):
     assert uspy.DATADIR == "/mnt/second/"
 
 
+def test_search_paths_candidate_computation_is_cached_per_folder(isolated_env, monkeypatch):
+    """The resolve()-based de-duplication in config_search_paths is the expensive part of
+    resolving a uspy.toml (repeated .resolve() calls for the same folder); it has no
+    freshness requirement of its own (unlike file content/mtimes) and should only be
+    recomputed once per distinct (data folder, cwd, global config dir) combination --
+    e.g. once per stack, not once per frame."""
+    calls = []
+    original = Path.resolve
+
+    def counting_resolve(self, *args, **kwargs):
+        calls.append(self)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", counting_resolve)
+
+    folder = isolated_env["cwd"]
+    _write_toml(folder, '[uspy.paths]\ndatadir = "/mnt/first"\n')
+
+    config.config_search_paths(str(folder / "frame_000.dat"))
+    calls.clear()  # only interested in repeat calls from here on
+
+    for i in range(1, 20):
+        config.config_search_paths(str(folder / f"frame_{i:03d}.dat"))
+
+    assert calls == []
+
+
+def test_search_paths_cache_still_picks_up_content_changes(isolated_env):
+    """The candidate-*path* computation being cached must not make file *content* changes
+    (a rewritten uspy.toml) go stale -- that freshness still lives in the per-file
+    is_file()/stat()/mtime-keyed parse, which config_search_paths' cache doesn't touch."""
+    folder = isolated_env["cwd"]
+    path = _write_toml(folder, '[uspy.paths]\ndatadir = "/mnt/first"\n')
+
+    config.config_search_paths(str(folder / "frame_000.dat"))  # warm the path-list cache
+    assert uspy.DATADIR == "/mnt/first/"
+
+    path.write_text('[uspy.paths]\ndatadir = "/mnt/second"\n')
+    stat = path.stat()
+    new_ns = stat.st_mtime_ns + 10**9
+    os.utime(path, ns=(new_ns, new_ns))
+
+    assert uspy.DATADIR == "/mnt/second/"
+
+
 def test_chdir_after_first_read_changes_datadir(tmp_path, monkeypatch, isolated_env):
     assert uspy.DATADIR == str(isolated_env["home"] / "data") + "/"
 

@@ -55,11 +55,21 @@ class LEEMReader:
 
     def parse_metadata(self, source: str) -> dict[str, Any]:
         """Parse just the metadata of a single file source, without necessarily loading pixel
-        data -- used by the lazy stack backend (`uspy.dataobject.lazy`). Default falls back to
-        `parse_image` and discards "image"; override for a real speedup."""
+        data -- used to populate a virtual (`defer=True`) `LEEMImg`'s metadata on first touch
+        (see `uspy.dataobject.deferred.ReaderMeta`). Default falls back to `parse_image` and
+        discards "image"; override for a real speedup."""
         idict = dict(self.parse_image(source))
         idict.pop("image", None)
         return idict
+
+    def parse_pixels(self, source: str) -> Any:
+        """Read just the pixel data of a single file source -- used to build a virtual
+        (`defer=True`) `LEEMImg`'s deferred `image` handle (see
+        `uspy.dataobject.deferred.ReaderPixels`), so this runs on every access and should stay
+        cheap. Default falls back to `parse_image` and discards everything else; override for
+        a real speedup (e.g. `ElmitecReader.parse_pixels` skips the metadata header walk
+        entirely)."""
+        return self.parse_image(source)["image"]
 
     def list_files(self, source: Union[str, Iterable]) -> list:
         """

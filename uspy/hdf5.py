@@ -9,8 +9,8 @@ by bare `h5py`, MATLAB, silx and DAWN, and by `Cls.load("deposit.h5")` losslessl
 
 One generic writer/reader serves every type built on `_data`/`_meta`/`_units` (see
 `uspy.dataobject.base`). Derived types export as their parent (`IntensityLine`/`StitchedLine`/
-`ProfileLine`/`IVCurve` -> `Line`, `Waterfall` -> `Image`, lazy stacks -> their eager
-equivalent); anything that can't be represented that way (an upstream `ImageStack`/`ROI`/
+`ProfileLine`/`IVCurve` -> `Line`, `Waterfall` -> `Image`); anything that can't be represented
+that way (an upstream `ImageStack`/`ROI`/
 `Profile` reference) is simply not written, with a `DroppedFieldWarning` naming it. A stack
 column missing on some frames is filled (nan/''/False) with a `MissingFieldWarning`; a column
 whose per-frame unit differs is written under its single most common unit with a
@@ -63,7 +63,7 @@ Two escape hatches worth knowing about:
 - Compression defaults (gzip level 4, shuffle, fletcher32 checksums) favour archival
   readability over write speed or ratio -- gzip is the only compressor guaranteed to be
   readable by *any* HDF5 install with no optional plugin. Pass ``compression=None`` to
-  `save()`/`write()` for large lazy stacks where write time matters more.
+  `save()`/`write()` for large virtual stacks where write time matters more.
 """
 
 from __future__ import annotations
@@ -243,8 +243,8 @@ def _qualname(cls: type) -> str:
 
 def _target_class(obj: Any) -> tuple:
     """(target_class, kind) an object should be archived as; kind is "object" or "stack".
-    A stack's element type is read off its own `_type` attribute rather than `isinstance`,
-    since `LazyLEEMStack` subclasses `ImageStack`, not `LEEMStack`."""
+    A stack's element type is read off its own `_type` attribute to decide between
+    `LEEMStack`/`ImageStack`."""
     from uspy.dataobject.base import DataObjectStack
     from uspy.dataobject.image import Image, ImageStack
     from uspy.dataobject.line import Line
@@ -602,24 +602,11 @@ def _maybe_link_waterfall_axes(data_grp: h5py.Group, meta_grp: h5py.Group, obj: 
 
 
 def _iter_frame_meta(stack: Any):
-    """Yield (meta_dict, units_dict) per frame, uniformly for eager, virtual, and lazy stacks.
-    A lazy stack's `_meta_list` stores units inline as '<key>_unit' siblings; other stacks
-    keep separate `_meta`/`_units` dicts per element."""
-    meta_list = getattr(stack, "_meta_list", None)
-    if meta_list is not None:
-        for flat in meta_list:
-            meta, units = {}, {}
-            for key, value in flat.items():
-                if key.startswith("_"):
-                    continue
-                if "_unit" in key:
-                    units[key.replace("_unit", "")] = value
-                else:
-                    meta[key] = value
-            yield meta, units
-    else:
-        for element in stack:
-            yield dict(element._meta), dict(element._units)
+    """Yield (meta_dict, units_dict) per frame -- uniformly for eager and virtual stacks,
+    since a virtual stack's elements are real DataObjects with their own `_meta`/`_units`
+    (resolving metadata, not pixels, on first touch if not already cached)."""
+    for element in stack:
+        yield dict(element._meta), dict(element._units)
 
 
 def _write_stack(f: h5py.File, stack: Any, target_cls: type, opts: dict) -> None:
@@ -673,15 +660,14 @@ def _write_stack(f: h5py.File, stack: Any, target_cls: type, opts: dict) -> None
 
 
 def _write_stack_images(data_grp: h5py.Group, stack: Any, n: int, opts: dict) -> None:
-    first = np.asarray(stack[0].image)
-    height, width = first.shape
-    dask_arr = getattr(stack, "_dask", None)
-    if dask_arr is not None:
-        dtype = dask_arr.dtype
-    else:
-        dtype = first.dtype
-        for i in range(1, n):
-            dtype = np.promote_types(dtype, np.asarray(stack[i].image).dtype)
+    # stack[i].shape/._dtype resolve as cheaply as each element allows (header metadata for a
+    # still-deferred frame, no pixel read) -- getting the dtype promoted across all n frames
+    # this way costs no more than the write loop below already will, instead of reading every
+    # frame's pixels here just to learn its dtype and then again to write it.
+    height, width = stack[0].shape
+    dtype = stack[0]._dtype  # pylint: disable=protected-access
+    for i in range(1, n):
+        dtype = np.promote_types(dtype, stack[i]._dtype)  # pylint: disable=protected-access
 
     chunks = _stack_chunks(n, height, width, np.dtype(dtype).itemsize, opts.get("chunks"))
     kwargs = _compression_kwargs(opts)

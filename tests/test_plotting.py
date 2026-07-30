@@ -12,13 +12,62 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+import numpy as np
+
 import uspy.plotting as base_plotting
 from uspy.leem import base
 from uspy.leem import plotting as leem_plotting
+from uspy.roi import ROI
 
 from .conftest import TESTDATA_DIR
 
 ELETTRA_DAT = TESTDATA_DIR + "elettra.dat"
+
+
+class _FakeWriter:
+    """Records frames instead of invoking ffmpeg, so make_video()'s masking/contrast logic
+    can be exercised for real without needing ffmpeg installed."""
+
+    def __init__(self, *args, **kwargs):
+        self.frames = []
+
+    def writeFrame(self, data):
+        self.frames.append(data.copy())
+
+    def close(self):
+        pass
+
+
+def test_make_video_mask_is_actually_applied_for_a_path_source(tmp_path, monkeypatch, capsys):
+    """Regression test: make_video() builds its stack via `stackify(stack, virtual=True)`
+    and then writes `img.image = np.ma.array(img.image, mask=~mask_array)` per frame to
+    apply the ROI mask before computing contrast. On the old virtual-stack backend, `stack[i]`
+    (and the `img` bound by the loop) were freshly re-parsed throwaway objects, so that write
+    was silently lost and the mask never actually affected the "maximum" contrast computed
+    right after it -- only reachable via a path/glob source (an already-eager LEEMStack
+    bypasses stackify() and never hit this). Confirmed fixed: contrast is now computed only
+    over the masked (in-ROI) region."""
+    fake_writer = _FakeWriter()
+    monkeypatch.setattr(base_plotting.skvideo.io, "FFmpegWriter", lambda *a, **kw: fake_writer)
+    monkeypatch.setattr(base_plotting, "Video", lambda ofile: ofile)
+
+    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_RuO2", virtual=True)
+    height, width = stack[0].height, stack[0].width
+    mask = ROI.circle(x0=width // 4, y0=height // 4, radius=min(height, width) // 8)
+    mask_array = mask.pad_to(height, width)
+
+    # Ground truth: the masked min/max across the (still eager, untouched) source stack.
+    eager = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_RuO2")
+    expected_c0 = min(np.ma.min(np.ma.array(img.image, mask=~mask_array)) for img in eager)
+    expected_c1 = max(np.ma.max(np.ma.array(img.image, mask=~mask_array)) for img in eager)
+
+    base_plotting.make_video(
+        stack, str(tmp_path / "out.mp4"), mask=mask, contrast="maximum", fields=None
+    )
+
+    printed = capsys.readouterr().out
+    assert f"Set contrast to [{expected_c0}, {expected_c1}]" in printed
+    assert len(fake_writer.frames) == len(stack)
 
 
 ### plot_img / make_video (uspy/leem/plotting.py wrappers)

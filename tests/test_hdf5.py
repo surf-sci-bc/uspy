@@ -892,40 +892,37 @@ class TestLEEMSpecifics:
         np.testing.assert_allclose(reloaded.energy, leem_stack.energy)
 
 
-######### Section I: lazy stacks #################################################################
+######### Section I: virtual stacks ###############################################################
 
 
-pytest.importorskip("dask")
-from uspy.dataobject.lazy import LazyImageStack  # noqa: E402
-
-
-class TestLazy:
-    def test_lazy_imagestack_roundtrip_keeps_metadata(self, tmp_path, tiff_frame_stack):
-        lazy = LazyImageStack(tiff_frame_stack["paths"])
+class TestVirtual:
+    def test_virtual_imagestack_roundtrip_keeps_metadata(self, tmp_path, tiff_frame_stack):
+        virtual = ImageStack(tiff_frame_stack["paths"], virtual=True)
         target = tmp_path / "x.h5"
-        lazy.save(str(target))
+        virtual.save(str(target))
         reloaded = ImageStack.load(str(target))
         assert type(reloaded) is ImageStack
         assert len(reloaded) == len(tiff_frame_stack["paths"])
         for i, arr in enumerate(tiff_frame_stack["arrays"]):
             np.testing.assert_array_equal(reloaded[i].image, arr)
 
-    def test_lazy_leemstack_roundtrip_matches_eager(self, tmp_path):
+    def test_virtual_leemstack_roundtrip_matches_eager(self, tmp_path):
         eager = make_leem_stack(n=3)
         target = tmp_path / "x.h5"
         eager.save(str(target))
         reloaded = LEEMStack.load(str(target))
         np.testing.assert_allclose(reloaded.energy, eager.energy)
 
-    def test_lazy_save_never_materializes(self, tmp_path, tiff_frame_stack, monkeypatch):
-        lazy = LazyImageStack(tiff_frame_stack["paths"])
+    def test_virtual_save_never_materializes_pixels(self, tmp_path, tiff_frame_stack, monkeypatch):
+        virtual = ImageStack(tiff_frame_stack["paths"], virtual=True)
 
         def boom(self):
             raise AssertionError("materialize() should never be called by save()")
 
-        monkeypatch.setattr(LazyImageStack, "materialize", boom)
+        monkeypatch.setattr(Image, "materialize", boom)
         target = tmp_path / "x.h5"
-        lazy.save(str(target))  # must not raise
+        virtual.save(str(target))  # must not raise
+        assert all(element.is_virtual for element in virtual.elements)
 
 
 ######### Section J: real-data regression (submodule-dependent, slow) ###########################

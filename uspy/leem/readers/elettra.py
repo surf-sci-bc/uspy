@@ -98,8 +98,9 @@ class ElettraReader(LEEMReader):
         return self._parse(source, read_image=True)
 
     def parse_metadata(self, source: str) -> dict[str, Any]:
-        """Metadata-only counterpart to `parse_image`, for the lazy stack backend
-        (`uspy.dataobject.lazy`); avoids reading every frame's pixels just for metadata."""
+        """Metadata-only counterpart to `parse_image`, used to populate a virtual
+        (`defer=True`) `LEEMImg`'s metadata; avoids reading every frame's pixels just for
+        metadata."""
         return self._parse(source, read_image=False)
 
     def list_files(self, source: Union[str, Iterable]) -> list:

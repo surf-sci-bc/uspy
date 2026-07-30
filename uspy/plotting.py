@@ -266,24 +266,25 @@ def make_video(
     else:
         mask_array = np.ones_like(stack[0].image, dtype=bool)
 
-    ## apply mask to stack so the contrast is correctly extracted
+    ## apply mask to stack so the contrast is correctly extracted -- `img` and `stack[index]`
+    ## are the same (stable) element, so this write persists rather than being silently lost;
+    ## written through `img` directly (not `stack[index]`) so that's unambiguous.
 
-    for index, img in enumerate(stack):
-        stack[index].image = np.ma.array(img.image, mask=~mask_array)
+    for img in stack:
+        img.image = np.ma.array(img.image, mask=~mask_array)
 
     # find the contrast values
     if contrast in ("auto", "inner"):
         contrast_type = contrast
         print("WARNING: The video is on auto contrast.")
     elif contrast == "maximum":
-        # c0, c1 = 2e16, 0
-        # for img in stack:
-        #    c0 = min(c0, np.nanmin(img.image))
-        #    c1 = max(c1, np.nanmax(img.image))
-        # contrast = sorted((c0, c1))
-
-        c0 = np.ma.min(stack.image)
-        c1 = np.ma.max(stack.image)
+        # Streamed frame-by-frame rather than `np.ma.min/max(stack.image)`, which would
+        # gather every frame into one full (N, H, W) array (twice) -- defeating a virtual
+        # stack's whole point for a data-heavy stack.
+        c0, c1 = 2e16, 0
+        for img in stack:
+            c0 = min(c0, np.ma.min(img.image))
+            c1 = max(c1, np.ma.max(img.image))
         contrast = sorted((c0, c1))
         print(f"Set contrast to {contrast}")
         contrast_type = "static"

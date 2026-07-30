@@ -110,22 +110,29 @@ Domain-specific subpackages build on these bases rather than replacing them:
   used by `IntensityLine`, `Waterfall`, `.align()` masking, etc. `StyledObject` is the shared base for
   matplotlib style dicts (auto-cycles through the color cycle when no color is given).
 
-### Memory: large stacks and the lazy backend
+### Memory: large stacks and `virtual=True`
 
 The default `ImageStack`/`LEEMStack` holds every frame in memory as a list of independent objects.
 Out-of-place operations (arithmetic without `+=`/`-=`, `.copy()`, `.align()` with the default
 `inplace=False`) deep-copy the whole stack, so peak memory briefly doubles; some `processing.py`
 helpers additionally materialize a full `(N, H, W)` array via `stack.image`
-(`DataObjectStack.__getattr__` rebuilds this on every access — never cache it yourself without
-being sure it's still fresh).
+(`DataObjectStack.__getattr__` rebuilds this on every access, with a `UserWarning` on a virtual
+stack since it materializes every element at once — never cache it yourself without being sure
+it's still fresh).
 
-For a stack near or over available RAM, use the out-of-core backend instead:
-`ImageStack(path, lazy=True)` / `LEEMStack(path, lazy=True)`, or `.to_lazy()` on an existing stack —
-see `uspy/dataobject/lazy.py` (`LazyImageStack`/`LazyLEEMStack`). It's backed by a chunked
-`dask.array` and keeps loading, slicing, `+ - * /`, `.average()`, and `.normalize()` streamed
-instead of materializing every frame at once; call `.materialize()` to get back a regular in-memory
-stack once it's small enough (e.g. after slicing). `.align()` and anything touching `stack.image`
-still need the eager backend.
+For a stack near or over available RAM, use `ImageStack(path, virtual=True)` /
+`LEEMStack(path, virtual=True)` (or flip an existing stack's `.virtual` property) instead. This is
+not a separate backend: elements are ordinary, stable `DataObject`s whose data (`_data`, see
+`uspy/dataobject/deferred.py`'s `DeferredArray`) is read from `source` on first access instead of
+at construction, and is **never cached** — reading `img.image` twice reads the file twice, so
+iterate once rather than indexing repeatedly if that matters. Metadata *is* resolved once per
+element and cached permanently, so gathers like `stack.energy` cost one header read per frame, not
+one per field per frame. Every stack operation (indexing, arithmetic, `.normalize()`, `.average()`,
+`.align()`, `.save()`) works the same as on a resident stack and stays out-of-core where the
+operation allows it (arithmetic and `.normalize()` compose into a new deferred expression rather
+than materializing); `stack.virtual = False` (or `.copy(virtual=False)`) materializes everything at
+once. A virtual stack skips the pairwise element-compatibility check at construction to stay
+zero-I/O; call `stack.check_compatible()` to fail early instead of at first bulk use.
 
 ### Data flow pattern
 

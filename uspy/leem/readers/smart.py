@@ -274,8 +274,8 @@ class SmartReader(LEEMReader):
         return idict
 
     def parse_metadata(self, source: Union[str, tuple]) -> dict[str, Any]:
-        """Metadata-only counterpart to `parse_image`, for the lazy stack backend
-        (`uspy.dataobject.lazy`): sources frame dimensions from the file header
+        """Metadata-only counterpart to `parse_image`, used to populate a virtual
+        (`defer=True`) `LEEMImg`'s metadata: sources frame dimensions from the file header
         (`_read_smart_dims`) instead of reading pixel data."""
         path, index = (source, 0) if isinstance(source, str) else source
         fd = _read_smart_metadata(path)

@@ -141,18 +141,15 @@ def test_leemstack_glob_folder_and_explicit_list_agree(tiff_frame_stack):
         assert_array_equal(a.image, b.image)
 
 
-def test_leemstack_glob_can_virtualize_and_go_lazy(tiff_frame_stack):
-    # Before the fix, a glob-built stack lost every element's `source`, so virtualizing or
-    # calling .to_lazy() raised "Can't virtualize/build a lazy stack without source
-    # information."
+def test_leemstack_glob_can_virtualize(tiff_frame_stack):
+    # Before the fix, a glob-built stack lost every element's `source`, so virtualizing
+    # raised "Can't virtualize stack without source information."
     stack = LEEMStack(tiff_frame_stack["glob"])
     stack.virtual = True
     assert stack.virtual
+    assert len(stack) == len(tiff_frame_stack["paths"])
     stack.virtual = False
     assert not stack.virtual
-
-    lazy = stack.to_lazy()
-    assert len(lazy) == len(tiff_frame_stack["paths"])
 
 
 def test_leemstack_mixed_shape_tiff_glob_raises(tiff_stack_glob):
@@ -813,6 +810,22 @@ def test_img_normalize_division_by_zero_becomes_zero():
     assert (result.image == 0).all()
 
 
+def test_img_normalize_division_by_zero_becomes_zero_when_deferred():
+    """Regression test: `normalize`'s nan_to_num cleanup used to run on `result.image`, which
+    for a deferred (composed) image is a *freshly materialized copy* -- mutating that copy
+    with `copy=False` fixed nothing on the object actually returned, so the correction was
+    silently lost whenever the image was still virtual at normalize() time."""
+    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_RuO2", virtual=True)
+    img = stack[0]
+    assert img.is_virtual
+    zero_mcp = base.LEEMImg(np.zeros_like(img.image))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        result = img.normalize(mcp=zero_mcp, dark_counts=0)
+    assert not np.isnan(result.image).any()
+    assert not np.isinf(result.image).any()
+    assert (result.image == 0).all()
+
+
 def test_img_normalize_stores_mcp_source_and_dark_counts():
     img = base.LEEMImg(TESTDATA_DIR + "bremen.dat")
     mcp = base.LEEMImg(MCP_IMG_FNAME)
@@ -876,26 +889,17 @@ def test_stack_getitem_slice_shares_time_origin_identity(virtual):
     stack.time_origin = 123.0
     sliced = stack[1:4]
     assert sliced._time_origin is stack._time_origin
-    if not virtual:
-        assert sliced[0]._time_origin is sliced._time_origin
+    # A virtual stack's elements are real, stable LEEMImgs too now -- built with the stack's
+    # own TimeOrigin at construction, so this identity holds regardless of virtuality.
+    assert sliced[0]._time_origin is sliced._time_origin
 
     # mutating the *sliced* stack's time origin after the fact must propagate back to the
     # parent and to the (shared-identity) elements -- proving real identity, not a value
     # copied once at slice time.
     sliced.time_origin = 456.0
     assert stack.time_origin == 456.0
-    if not virtual:
-        assert stack[1].time_origin == 456.0
-        assert sliced[0].time_origin == 456.0
-
-
-def test_stack_to_lazy_shares_time_origin_identity():
-    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")
-    stack.time_origin = 789.0
-    lazy = stack.to_lazy()
-    assert lazy._time_origin is stack._time_origin
-    lazy.time_origin = 111.0
-    assert stack.time_origin == 111.0
+    assert stack[1].time_origin == 456.0
+    assert sliced[0].time_origin == 456.0
 
 
 ### Combining stacks (extend / + / +=) and TimeOrigin reconciliation

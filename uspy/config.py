@@ -108,14 +108,37 @@ def global_config_dir() -> Path:
 
 def config_search_paths(source: Any) -> list:
     """Ordered list of folders to look for a `uspy.toml` in, most specific first (see the
-    module docstring). De-duplicated by resolved path, keeping the first occurrence."""
-    candidates = []
+    module docstring). De-duplicated by resolved path, keeping the first occurrence.
+
+    The de-duplication itself (repeated `.resolve()` calls) is the expensive part of this
+    and has no freshness requirement of its own -- unlike a `uspy.toml`'s *content*, which
+    can change mtime-to-mtime (see `_parse_toml_cached`/`_uspy_tables_located`), the set of
+    candidate folders for a given data folder/cwd/global-config-dir combination doesn't
+    change without one of those three changing. So it's cached on exactly those three,
+    letting a caller that asks for the same folder repeatedly (e.g. once per frame while
+    constructing a stack) skip repeating the resolve() walk every time.
+    """
     data_folder = config_folder(source)
-    if data_folder is not None:
+    return list(
+        _config_search_paths_cached(
+            str(data_folder) if data_folder is not None else None,
+            str(Path.cwd()),
+            str(global_config_dir()),
+        )
+    )
+
+
+@functools.lru_cache(maxsize=256)
+def _config_search_paths_cached(
+    data_folder_str: Optional[str], cwd_str: str, global_dir_str: str
+) -> tuple:
+    candidates = []
+    if data_folder_str is not None:
+        data_folder = Path(data_folder_str)
         candidates.append(data_folder)
         candidates.append(data_folder.parent)
-    candidates.append(Path.cwd())
-    candidates.append(global_config_dir())
+    candidates.append(Path(cwd_str))
+    candidates.append(Path(global_dir_str))
 
     seen = set()
     paths = []
@@ -125,7 +148,7 @@ def config_search_paths(source: Any) -> list:
             continue
         seen.add(resolved)
         paths.append(folder)
-    return paths
+    return tuple(paths)
 
 
 @functools.lru_cache(maxsize=64)

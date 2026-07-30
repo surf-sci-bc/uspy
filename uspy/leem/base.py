@@ -12,6 +12,7 @@ uspy.leem.readers) -- the Elmitec UKSOFT2001 ".dat" format is the default.
 from __future__ import annotations
 from typing import Any, Union, Optional
 from collections.abc import Iterable
+from dataclasses import dataclass
 from numbers import Number
 from datetime import datetime
 import os
@@ -27,7 +28,7 @@ from tifffile.tifffile import TiffFileError
 
 from uspy.dataobject import Image, ImageStack
 from uspy.dataobject.image import list_image_files
-from uspy.dataobject.lazy import LazyImageStack, da as _da
+from uspy.dataobject.deferred import DeferredArray, ReaderPixels, is_deferred
 from uspy.derived import StitchedLine
 from uspy.leem.utility import imgify
 from uspy.roi import ROI
@@ -42,6 +43,28 @@ from uspy.leem.readers.elmitec import (  # noqa: F401  pylint: disable=unused-im
     VARIABLE_HEADER,
     UNIT_CODES,
 )
+
+
+def _nan_to_num_zeroed(arr: np.ndarray) -> np.ndarray:
+    """`np.nan_to_num(arr, posinf=0, neginf=0)`, as a module-level (picklable) function so it
+    can be used with `DeferredArray.map` -- see `LEEMImg.normalize`."""
+    return np.nan_to_num(arr, posinf=0, neginf=0)
+
+
+@dataclass(frozen=True)
+class _LEEMMetaLoader:
+    """Metadata loader for a deferred `LEEMImg`: `reader.parse_metadata(source)`, plus the
+    same temperature sanitization `LEEMImg.parse` applies for the eager path -- so a deferred
+    and an eager LEEMImg built from the same source resolve to identical metadata."""
+
+    reader: Any
+    source: Any
+
+    def __call__(self) -> dict:
+        idict = dict(self.reader.parse_metadata(self.source))
+        if idict.get("temperature", 0) > 3000:
+            idict["temperature"] = np.nan
+        return idict
 
 
 class TimeOrigin:
@@ -112,6 +135,7 @@ class LEEMImg(Image):
         *args,
         reader: Union[str, LEEMReader, None] = None,
         time_origin: Union[TimeOrigin, Number] = None,
+        defer: bool = False,
         **kwargs,
     ) -> None:
         source = args[0] if args else kwargs.get("source")
@@ -119,6 +143,13 @@ class LEEMImg(Image):
         # object.__setattr__ needed: default_fields/meta_fields/print_fields are class
         # attributes, and a normal `self.x = ...` would route through DataObject.__setattr__
         # into self._meta instead of overriding the class attribute.
+        #
+        # resolve_plotting_fields does a uspy.toml search-path walk, but the expensive part
+        # of that (the resolve()-based candidate-folder computation) is cached at the
+        # uspy.config layer (see config.config_search_paths) keyed on the data folder/cwd/
+        # global config dir -- so calling it unconditionally, once per LEEMImg, stays cheap
+        # for repeat frames from the same folder without LEEMImg/LEEMStack needing to know
+        # anything about plotting fields themselves.
         plotting_fields = resolve_plotting_fields(
             source,
             {
@@ -130,18 +161,43 @@ class LEEMImg(Image):
         for key, value in plotting_fields.items():
             object.__setattr__(self, key, value)
         # gap-fill any reader-specific defaults (e.g. a beamline reader's photon_energy)
-        # that aren't already covered by this class' own _meta_defaults/_unit_defaults
+        # that aren't already covered by this class' own _meta_defaults/_unit_defaults.
+        # Writes the stores directly, not through the _meta/_units properties: at this point
+        # in construction no loader has been installed yet either way (DataObject.__new__
+        # always runs first and seeds it to None), so this is equivalent either way -- but
+        # spelling it this way keeps this gap-fill correct regardless of ordering.
         for key, value in self._reader.meta_defaults.items():
-            self._meta.setdefault(key, value)
+            self._meta_store.setdefault(key, value)
         for key, value in self._reader.unit_defaults.items():
-            self._units.setdefault(key, value)
+            self._units_store.setdefault(key, value)
         if not isinstance(time_origin, TimeOrigin):
             time_origin = TimeOrigin(time_origin)
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, defer=defer, **kwargs)
         self._time_origin = time_origin  # is a list so it can be mutable
-        self.default_mask = None  # ROI.circle(
+        # Writes the store directly, not `self.default_mask = None` (which would go through
+        # the _meta property and immediately resolve/consume the metadata loader installed
+        # just above by a deferred construction -- defeating the entire point of deferring).
+        self._meta_store["default_mask"] = None  # ROI.circle(
         #     x0=self.width // 2, y0=self.height // 2, radius=self.width // 2
         # )
+
+    def parse_deferred(self, source: Any) -> dict[str, Any]:
+        """Deferred (`defer=True`) counterpart of `parse`: builds a cheap, reader-backed
+        `image` handle and metadata loader when this reader recognizes `source` (the common
+        case), falling back to the generic re-parse machinery (`Image`/`DataObject`'s
+        `parse_deferred`) for anything it doesn't -- e.g. a plain TIFF/PNG opened without a
+        LEEM-specific reader. Mirrors the `reader.handles(source)` gate `parse` itself uses,
+        so the same sources route to the same reader either way."""
+        if self._reader.handles(source):
+            self._source = source
+            reader = self._reader
+            return {
+                # All current readers convert pixels to float32 -- hinting the dtype here
+                # means Image._dtype never needs to force a load just to learn it.
+                "image": DeferredArray(ReaderPixels(reader, source), dtype=np.float32),
+                "_meta_loader": _LEEMMetaLoader(reader, source),
+            }
+        return super().parse_deferred(source)
 
     def get_field_string(self, field: str, fmt: Optional[str] = None) -> str:
         """Get a string that contains the value and its unit. Some LEEM-specific fields
@@ -208,7 +264,14 @@ class LEEMImg(Image):
         # allocations here -- this loop runs once per image in `LEEMStack.normalize`.
         result = self - dark_counts
         result /= mcp - dark_counts
-        np.nan_to_num(result.image, copy=False, posinf=0, neginf=0)
+        result_image = result._data["image"]  # pylint: disable=protected-access
+        if is_deferred(result_image):
+            # `result.image` would materialize a *fresh copy* here -- mutating it with
+            # nan_to_num(copy=False) would fix nothing on the object actually returned.
+            # Compose the cleanup into the deferred value instead, so it survives.
+            result._data["image"] = result_image.map(_nan_to_num_zeroed)  # pylint: disable=protected-access
+        else:
+            np.nan_to_num(result_image, copy=False, posinf=0, neginf=0)
 
         if inplace:
             self.image = result.image
@@ -348,37 +411,22 @@ class LEEMImg(Image):
 
 
 class LEEMStack(ImageStack):
-    """Stack of `LEEMImg`s, held fully in memory as a list of independent per-frame objects
-    (see `uspy.dataobject.base.DataObjectStack`). For a stack close to or larger than
-    available RAM, prefer building it lazily instead: ``LEEMStack(path, lazy=True)`` (or
-    ``.to_lazy()``) returns a `LazyLEEMStack`. `.align()` and anything touching
-    `stack.image` still require this eager backend -- call `.materialize()` on a lazy
-    stack (or a small enough slice of one) for those.
+    """Stack of `LEEMImg`s. `virtual=True` builds elements with deferred pixel data (see
+    `uspy.dataobject.base.DataObjectStack`) -- construction is then bounded by a directory
+    listing plus one frame's metadata (to seed `time_origin`), and every operation (indexing,
+    metadata gathers, arithmetic, `.normalize()`, `.align()`) works the same as on a fully
+    resident stack, reading pixel data only where it's actually needed.
     """
 
     _type = LEEMImg
-
-    def __new__(cls, *args, lazy: bool = False, **kwargs):
-        if lazy:
-            # Deferred to call time: LazyLEEMStack is defined later in this module, but that's
-            # fine since this body only runs when LEEMStack(..., lazy=True) is actually called.
-            kwargs.pop("virtual", None)
-            return LazyLEEMStack(*args, **kwargs)
-        return super().__new__(cls)
 
     def __init__(
         self,
         *args,
         reader: Union[str, LEEMReader, None] = None,
         time_origin: Optional[Union[TimeOrigin, Number]] = None,
-        lazy: bool = False,
         **kwargs,
     ) -> None:
-        if lazy:
-            # __new__ already built and returned a standalone LazyLEEMStack above; since it
-            # isn't a LEEMStack subclass, Python won't actually call this __init__ on it --
-            # this branch only guards against __init__ being invoked directly.
-            return
         source = args[0] if args else kwargs.get("source")
         # If built directly from a list of already-built LEEMImgs (as slicing, mask
         # filtering, and .average() all do internally), inherit their reader instead of
@@ -394,8 +442,8 @@ class LEEMStack(ImageStack):
         except (TypeError, IndexError):
             pass
         self._reader = resolve_reader(source, reader)
-        # An already-built TimeOrigin (e.g. from __getitem__/to_lazy()) is reused by
-        # reference so the new stack shares its source's mutable origin.
+        # An already-built TimeOrigin (e.g. from __getitem__) is reused by reference so the
+        # new stack shares its source's mutable origin.
         if isinstance(time_origin, TimeOrigin):
             self._time_origin = time_origin
         else:
@@ -417,9 +465,9 @@ class LEEMStack(ImageStack):
         except ValueError:
             raise ValueError(f"No files were found at path {source}")
 
-    def _single_construct(self, source: Any) -> LEEMImg:
-        """Construct a single DataObject."""
-        return LEEMImg(source, reader=self._reader, time_origin=self._time_origin)
+    def _single_construct(self, source: Any, defer: bool = False) -> LEEMImg:
+        """Construct a single DataObject, resident or deferred."""
+        return LEEMImg(source, reader=self._reader, time_origin=self._time_origin, defer=defer)
 
     @property
     def time_origin(self) -> Number:
@@ -436,10 +484,7 @@ class LEEMStack(ImageStack):
             elements = self._elements[index]
 
         if isinstance(index, int):
-            if (
-                self.virtual
-            ):  # if virtual elements contains just sources not DataObjects
-                return self._single_construct(elements)
+            # _elements always holds real LEEMImgs now (virtual or not) -- no re-parsing.
             return elements
         return type(self)(
             elements,
@@ -451,9 +496,10 @@ class LEEMStack(ImageStack):
     def extend(self, other: Union[LEEMImg, LEEMStack]) -> None:
         """Add new LEEMImg(s) to the end of the stack, reconciling `time_origin`: if `other`
         has a different one (e.g. two halves of a split/resumed measurement), a warning
-        names the mismatch and (for non-virtual stacks) the appended elements are rebound
-        to this stack's `_time_origin` so `rel_time` shares one origin. `timestamp` itself
-        is never touched."""
+        names the mismatch and the appended elements are rebound to this stack's
+        `_time_origin` (whether this stack is virtual or not -- elements are real, stable
+        DataObjects either way now) so `rel_time` shares one origin. `timestamp` itself is
+        never touched."""
         if isinstance(other, (LEEMImg, LEEMStack)):
             self_origin, other_origin = self.time_origin, other.time_origin
             if not (np.isnan(self_origin) or np.isnan(other_origin)) and (
@@ -468,9 +514,8 @@ class LEEMStack(ImageStack):
                 )
         n_before = len(self._elements)
         super().extend(other)
-        if not self.virtual:
-            for element in self._elements[n_before:]:
-                element._time_origin = self._time_origin
+        for element in self._elements[n_before:]:
+            element._time_origin = self._time_origin
 
     def align(
         self,
@@ -678,199 +723,6 @@ class LEEMStack(ImageStack):
                 stack[index] = img.normalize(mcp=mcp, **kwargs)
 
         return stack
-
-    def to_lazy(self, chunks: int = 1) -> LazyLEEMStack:
-        """Rebuild this stack as an out-of-core `LazyLEEMStack` over the same per-element
-        sources. See `ImageStack.to_lazy`."""
-        sources = self.sources
-        if None in sources:
-            raise ValueError("Can't build a lazy stack without source information.")
-        return LazyLEEMStack(
-            sources, reader=self._reader, time_origin=self._time_origin, chunks=chunks
-        )
-
-
-class LazyLEEMStack(LazyImageStack):
-    """Out-of-core counterpart to `LEEMStack`, backed by a lazy `dask.array` of pixel data.
-    See `uspy.dataobject.lazy.LazyImageStack` for the general design.
-
-    Only a subset of `LEEMStack`'s API is supported: construction from a `.dat` folder/glob
-    or a 3D TIFF, indexing/slicing, per-frame metadata, `average()`, elementwise arithmetic,
-    and `.normalize()`. `.align()` is not provided -- ECC registration doesn't parallelize
-    onto dask cleanly; call `.materialize()` and use the regular `.align()` there.
-
-    Requires the optional 'dask'/'zarr' dependencies: ``pip install uspy[bigdata]``.
-    """
-
-    _type = LEEMImg
-    _materialized_type = LEEMStack
-
-    def __init__(
-        self,
-        source: Union[str, Iterable],
-        reader: Union[str, LEEMReader, None] = None,
-        time_origin: Optional[Union[TimeOrigin, Number]] = None,
-        chunks: int = 1,
-        lazy: bool = True,  # accepted and ignored, see LazyImageStack.__init__
-    ) -> None:
-        self._reader = resolve_reader(source, reader)
-        # Reuse an already-built TimeOrigin by reference (e.g. passed in by
-        # LEEMStack.to_lazy()) instead of rewrapping it, so the lazy stack keeps sharing
-        # the same mutable origin as its source stack -- mirrors LEEMImg.__init__.
-        if isinstance(time_origin, TimeOrigin):
-            self._time_origin = time_origin
-        else:
-            self._time_origin = TimeOrigin(time_origin)
-        super().__init__(source, chunks=chunks)
-        # Mirrors LEEMStack.__init__: readers that need a whole-stack pass to fill in
-        # metadata only known once every frame exists (e.g. ElettraReader distributing a
-        # shared tracefile's per-frame columns) get that chance before time_origin is seeded.
-        self._reader.post_process_stack(self)
-        if time_origin is None:
-            self._time_origin.value = self._meta_list[0].get("timestamp", np.nan)
-
-    def _build(self, source: Union[str, Iterable], chunks: int) -> tuple:
-        # Mirrors LEEMStack._split_source: try the reader's own file discovery first (a
-        # folder, glob, or explicit list of per-frame files -- including ".tif"/".tiff",
-        # e.g. Elettra's per-frame TIFFs with a shared tracefile). Only a source the reader
-        # doesn't recognize *and* that is itself an actual single 3D TIFF file falls back to
-        # being read as one multi-frame TIFF stack -- previously any ".tif"/".tiff"-suffixed
-        # string (a bare glob pattern, or a folder holding both .dat and .tif per frame) was
-        # unconditionally routed here, which either crashed or silently loaded the wrong
-        # (whole-file, single-frame-metadata) data instead of raising or reading per-frame.
-        fnames = self._reader.list_files(source)
-        if fnames:
-            return self._build_from_files(fnames, chunks)
-        if isinstance(source, list) and source:
-            return self._build_from_files(source, chunks)
-
-        # No reader recognized `source` as a stack -- also try the generic glob/directory
-        # expansion (`list_image_files`) that the eager ImageStack._split_source falls back to.
-        glob_fnames = list_image_files(source)
-        if len(glob_fnames) > 1:
-            return self._build_from_files(glob_fnames, chunks)
-        if len(glob_fnames) == 1:
-            single = glob_fnames[0]
-            try:
-                probe = tifffile.imread(single)
-            except (FileNotFoundError, TypeError, TiffFileError, ValueError, IsADirectoryError):
-                return self._build_from_files(glob_fnames, chunks)
-            if probe.ndim == 3:
-                return self._build_from_tiff_stack(single, chunks)
-            return self._build_from_files(glob_fnames, chunks)
-
-        if (
-            isinstance(source, str)
-            and source.lower().endswith((".tif", ".tiff"))
-            and os.path.isfile(source)
-        ):
-            return self._build_from_tiff_stack(source, chunks)
-        raise ValueError(f"No files were found at path {source}")
-
-    def _read_pixels(self, fname: str) -> np.ndarray:
-        if self._reader.handles(fname):
-            return np.asarray(self._reader.parse_image(fname)["image"], dtype=np.float32)
-        # Reader doesn't recognize this file (e.g. a ".tiff" frame with an Elmitec reader);
-        # fall back to the generic Image reader, mirroring LEEMImg.parse's own fallback.
-        return np.asarray(LEEMImg(fname, reader=self._reader).image, dtype=np.float32)
-
-    def _read_metadata(self, fname: str) -> dict:
-        """Per-frame metadata dict, built the same way a real `LEEMImg(fname, reader=...)`
-        would populate its `_meta`/`_units`: class defaults gap-filled by the reader's own
-        defaults, then overwritten by parsed values, with the same
-        `temperature > 3000 -> nan` sentinel rule `LEEMImg.parse` applies."""
-        meta = dict(self._type._meta_defaults)  # pylint: disable=protected-access
-        units = dict(self._type._unit_defaults)  # pylint: disable=protected-access
-
-        if self._reader.handles(fname):
-            for key, value in self._reader.meta_defaults.items():
-                meta.setdefault(key, value)
-            for key, value in self._reader.unit_defaults.items():
-                units.setdefault(key, value)
-            parsed = dict(self._reader.parse_metadata(fname))
-        elif fname.lower().endswith((".tif", ".tiff")):
-            # Reader doesn't recognize this file; read only the TIFF header, pixel-free.
-            with tifffile.TiffFile(fname) as tif:
-                height, width = tif.pages[0].shape
-            parsed = {"width": width, "height": height}
-        else:
-            # No cheap metadata-only path for other generic formats -- falls back to a full parse.
-            parsed = super()._read_metadata(fname)
-
-        if parsed.get("temperature", 0) > 3000:
-            parsed["temperature"] = np.nan
-        for key, value in parsed.items():
-            if key.startswith("_"):
-                continue
-            if "_unit" in key:
-                units[key.replace("_unit", "")] = value
-            else:
-                meta[key] = value
-
-        # Every metadata key must have a unit entry (default ""), mirroring DataObject.__init__.
-        for key in meta:
-            units.setdefault(key, "")
-
-        result = meta
-        for key, value in units.items():
-            result[f"{key}_unit"] = value
-        return result
-
-    def _make_element(self, pixels: np.ndarray, meta: dict, index: int) -> LEEMImg:
-        element = LEEMImg(pixels, reader=self._reader, time_origin=self._time_origin)
-        self._apply_meta(element, meta)
-        if self._sources is not None:
-            element._source = self._sources[index]
-        return element
-
-    def _wrap(self, dask_array, meta_list: list, sources) -> "LazyLEEMStack":
-        new = super()._wrap(dask_array, meta_list, sources)
-        new._reader = self._reader
-        new._time_origin = self._time_origin
-        return new
-
-    @property
-    def time_origin(self) -> Number:
-        return self._time_origin.value
-
-    @time_origin.setter
-    def time_origin(self, value: Number) -> None:
-        self._time_origin.value = value
-
-    def normalize(
-        self, mcp: Union[Image, str, None] = None, dark_counts: Union[int, float, Image] = 0
-    ) -> LazyLEEMStack:
-        """Lazy counterpart to `LEEMStack.normalize`: computes ``(img - dark_counts) /
-        (mcp - dark_counts)`` as a dask expression, so it stays chunked/streamed instead of
-        materializing the whole stack. Unlike `LEEMStack.normalize`, `mcp` must be given
-        explicitly -- falling back to each frame's stored '.mcp' metadata would require
-        resolving it per frame, which isn't meaningfully cheaper than materializing."""
-        if mcp is None:
-            raise ValueError(
-                "LazyLEEMStack.normalize() requires an explicit 'mcp' image (unlike "
-                "LEEMStack.normalize, it can't fall back to each frame's stored '.mcp' "
-                "metadata)."
-            )
-        mcp_img = imgify(mcp)
-        mcp_arr = np.asarray(mcp_img.image, dtype=np.float32)
-        if isinstance(dark_counts, (int, float, complex)):
-            dark_value, dark_arr = dark_counts, dark_counts
-        else:
-            dark_img = imgify(dark_counts)
-            dark_value, dark_arr = dark_img, np.asarray(dark_img.image, dtype=np.float32)
-
-        result = (self._dask - dark_arr) / (mcp_arr - dark_arr)
-        # Match np.nan_to_num(result, posinf=0, neginf=0) (default nan=0 too) -- the installed
-        # dask version's nan_to_num doesn't accept posinf/neginf kwargs.
-        result = _da.where(_da.isfinite(result), result, 0).astype(np.float32)
-
-        meta_list = []
-        for meta in self._meta_list:
-            new_meta = dict(meta)
-            new_meta["mcp"] = mcp_img.source
-            new_meta["dark_counts"] = dark_value
-            meta_list.append(new_meta)
-        return self._wrap(result, meta_list, self._sources)
 
 
 class IVCurve(StitchedLine):

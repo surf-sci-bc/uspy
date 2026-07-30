@@ -271,8 +271,8 @@ def test_smart_parse_image_dict_directly():
 
 
 def test_smart_parse_metadata_matches_parse_image():
-    # parse_metadata is the lazy/out-of-core stack backend's (uspy.dataobject.lazy) per-frame
-    # metadata source -- it must return exactly what parse_image does, minus "image" itself,
+    # parse_metadata is a virtual (defer=True) LEEMImg's per-frame metadata source -- it must
+    # return exactly what parse_image does, minus "image" itself,
     # for both a single-frame file and one frame of a multi-frame scan. nan-aware since e.g.
     # 'photon_energy' is nan for these fixtures (no monochromator energy).
     for source in (SMART_IMG, (SMART_STACK, 0), (SMART_STACK, 42)):

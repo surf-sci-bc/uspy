@@ -9,6 +9,7 @@ import pandas as pd
 from numpy.testing import assert_almost_equal, assert_array_equal
 import pytest
 from uspy.dataobject import DataObject, DataObjectStack, Image, ImageStack, Line
+from uspy.dataobject.deferred import DeferredArray
 from deepdiff.diff import DeepDiff
 import os
 
@@ -251,63 +252,81 @@ def test_stack_virtual(list1darrays):
     virt_stack = MinimalObjectStack(sources, virtual=True)
     real_stack = MinimalObjectStack(sources, virtual=False)
 
-    # For Virtual stacks the elements are sources
-    assert (virt_stack.elements == np.asarray(sources)).all()
+    # A virtual stack's elements are real, stable DataObjects -- not bare sources. `.sources`
+    # is where the underlying source list lives (see test_stack_sources_vs_elements below).
+    assert all(isinstance(element, MinimalObject) for element in virt_stack.elements)
+    assert all(element.is_virtual for element in virt_stack.elements)
+    # stable identity: repeated access returns the *same* element, not a fresh re-parse
+    assert virt_stack[0] is virt_stack[0]
     for elv, elr in zip(virt_stack, real_stack):
         assert elv == elr
-    # reifiy
+
+    # reify
     virt_stack.virtual = False
     assert not virt_stack.virtual
-    assert virt_stack.elements == real_stack.elements
+    assert not any(element.is_virtual for element in virt_stack.elements)
+    for elv, elr in zip(virt_stack, real_stack):
+        assert elv == elr
 
     # virtualization
     virt_stack.virtual = True
     assert virt_stack.virtual
-    assert (virt_stack.elements == np.asarray(sources)).all()
+    assert all(element.is_virtual for element in virt_stack.elements)
+    for elv, elr in zip(virt_stack, real_stack):
+        assert elv == elr
+
+
+def test_stack_sources_vs_elements(list1darrays):
+    sources = list1darrays
+    virt_stack = MinimalObjectStack(sources, virtual=True)
+    assert list(virt_stack.sources) == list(sources)
+    assert all(isinstance(element, MinimalObject) for element in virt_stack.elements)
+
+
+def test_stack_copy_of_virtual_stack_does_not_share_metadata_dicts(list1darrays):
+    """Regression guard for the bug the old lazy backend had: copying (or slicing) a virtual
+    stack must give each copy independent metadata storage, not dicts shared by reference --
+    mutating one copy's metadata must not leak into the original or into other copies."""
+    stack = MinimalObjectStack(list1darrays, virtual=True)
+    other = stack.copy()
+
+    other[0].some_meta = "changed-on-copy"
+
+    assert stack[0].some_meta != "changed-on-copy"
 
 
 @pytest.mark.parametrize("virtual", [False, True])
 def test_stack_setattr(list1darrays, virtual):
+    """A stack has no metadata of its own: a scalar set on the stack means "this value, for
+    every element" (whether or not the name already exists as a per-element field); only a
+    length-matched sequence distributes one value per element; anything else (a mismatched-
+    length sequence for a genuinely new name) attaches to the stack object itself. Elements of
+    a virtual stack are real, stable DataObjects now (not re-parsed per access), so a write
+    persists exactly like it does on an eager stack."""
     sources = list1darrays
     stack = MinimalObjectStack(sources, virtual=virtual)
 
-    # A stack has no metadata of its own: a scalar set on the stack means "this value, for
-    # every element" (whether or not the name already exists as a per-element field); only a
-    # length-matched sequence distributes one value per element; anything else (a mismatched-
-    # length sequence for a genuinely new name) attaches to the stack object itself.
-
     energy = np.linspace(0, 20, len(sources))
+    stack.energy = energy
+    assert (stack.energy == energy).all()
+
+    # A string scalar is never split character-wise (regardless of whether len(string)
+    # happens to equal len(stack)) -- it broadcasts like any other scalar.
+    stack.bogus = "Bogus"
+    assert (stack.bogus == "Bogus").all()
+    assert len(stack.bogus) == len(sources)
+
+    stack.number = 1
+    assert (stack.number == 1).all()
+    assert len(stack.number) == len(sources)
+
+    # A mismatched-length sequence for a name that collides with nothing on the elements
+    # attaches to the stack itself.
+    stack.array = [1, 2]
+    assert stack.array == [1, 2]
+
     if virtual:
-        # Elements are re-parsed from source on every access, so no per-element write can
-        # survive -- both the length-matched sequence and the scalar are refused.
-        with pytest.raises(ValueError):
-            stack.energy = energy
-        with pytest.raises(ValueError):
-            stack.bogus = "Bogus"
-        with pytest.raises(ValueError):
-            stack.number = 1
-        # A mismatched-length sequence for a name that isn't a per-element field doesn't
-        # touch the elements at all, so it's unaffected by virtual mode.
-        stack.array = [1, 2]
-        assert stack.array == [1, 2]
-    else:
-        stack.energy = energy
-        assert (stack.energy == energy).all()
-
-        # A string scalar is never split character-wise (regardless of whether len(string)
-        # happens to equal len(stack)) -- it broadcasts like any other scalar.
-        stack.bogus = "Bogus"
-        assert (stack.bogus == "Bogus").all()
-        assert len(stack.bogus) == len(sources)
-
-        stack.number = 1
-        assert (stack.number == 1).all()
-        assert len(stack.number) == len(sources)
-
-        # A mismatched-length sequence for a name that collides with nothing on the elements
-        # attaches to the stack itself.
-        stack.array = [1, 2]
-        assert stack.array == [1, 2]
+        assert all(element.is_virtual for element in stack.elements)
 
 
 def test_stack_setattr_scalar_broadcasts_to_elements(list1darrays):
@@ -493,13 +512,13 @@ def test_stack_set_unit(list1darrays):
     assert all(element.unit["some_meta"] == "eV" for element in stack)
 
 
-def test_stack_set_unit_virtual_raises(list1darrays):
-    """Iterating a virtual stack yields freshly-constructed, throwaway elements (see
-    __getitem__) -- writing to their _units used to silently vanish instead of persisting
-    anywhere. Must raise instead, mirroring the __setattr__ virtual guard."""
+def test_stack_set_unit_virtual_persists(list1darrays):
+    """A virtual stack's elements are real, stable DataObjects, so `set_unit` persists on them
+    exactly like it does for an eager stack (it used to raise, back when iterating a virtual
+    stack yielded freshly re-parsed throwaway elements that any write would be lost on)."""
     stack = MinimalObjectStack(list1darrays, virtual=True)
-    with pytest.raises(ValueError):
-        stack.set_unit("some_meta", "eV")
+    stack.set_unit("some_meta", "eV")
+    assert all(element.unit["some_meta"] == "eV" for element in stack)
 
 
 @pytest.mark.parametrize("virtual", [False])
@@ -600,6 +619,60 @@ def test_image_generation_from_numpy_array(source):
     assert (img.image == array).all()
     assert img.width, img.height == source.shape
     assert img.source is None
+
+
+### Image.shape/dtype without materializing pixel data
+
+
+class _RaisingLoader:
+    """Loader that fails the test if it's ever called -- used to prove `Image.shape`/`dtype`
+    don't force a pixel read when the shape/dtype are already knowable some cheaper way."""
+
+    def __call__(self):
+        raise AssertionError("pixel loader was called -- shape/dtype should not materialize")
+
+
+def test_image_shape_dtype_resident_array():
+    img = Image(np.zeros((5, 7), dtype=np.float32))
+    assert img.shape == (5, 7)
+    assert img._dtype == np.float32
+
+
+def test_image_shape_dtype_from_deferred_handle_without_loading():
+    img = Image(np.zeros((2, 2), dtype=np.float32))
+    img._data["image"] = DeferredArray(_RaisingLoader(), shape=(5, 7), dtype=np.float32)
+    assert img.shape == (5, 7)
+    assert img._dtype == np.float32  # must not raise -- loader is never called
+
+
+def test_image_shape_falls_back_to_meta_without_loading():
+    """When the DeferredArray doesn't know its own shape yet, but height/width metadata is
+    already available (e.g. from a reader's cheap header-only parse), shape must come from
+    metadata rather than forcing a pixel load."""
+    img = Image(np.zeros((2, 2), dtype=np.float32))
+    img._data["image"] = DeferredArray(_RaisingLoader())
+    img._meta["height"] = 5
+    img._meta["width"] = 7
+    assert img.shape == (5, 7)
+
+
+def test_image_shape_resident_wins_over_stale_meta():
+    """After `img.image = smaller_array`, width/height metadata may be stale (still
+    describing the old array) -- the resident array must win."""
+    img = Image(np.zeros((5, 7), dtype=np.float32))
+    img.image = np.zeros((2, 3), dtype=np.float32)
+    assert img.shape == (2, 3)
+
+
+def test_image_incompatibility_reason_names_both_shapes_without_loading():
+    a = Image(np.zeros((2, 2), dtype=np.float32))
+    a._data["image"] = DeferredArray(_RaisingLoader(), shape=(5, 7), dtype=np.float32)
+    b = Image(np.zeros((2, 2), dtype=np.float32))
+    b._data["image"] = DeferredArray(_RaisingLoader(), shape=(3, 3), dtype=np.float32)
+    assert not a.is_compatible(b)
+    reason = a.incompatibility_reason(b)
+    assert "(3, 3)" in reason
+    assert "(5, 7)" in reason
 
 
 # Integer Calculation Tests
@@ -985,18 +1058,16 @@ def test_imagestack_glob_folder_and_explicit_list_agree(tiff_frame_stack):
         np.testing.assert_array_equal(a.image, b.image)
 
 
-def test_imagestack_glob_can_virtualize_and_go_lazy(tiff_frame_stack):
+def test_imagestack_glob_can_virtualize(tiff_frame_stack):
     # Before the fix, a glob-built stack lost every element's `source` (parsed straight out
-    # of a 3D array returned by tifffile), so virtualizing/relazifying raised "Can't
-    # virtualize stack without source information."
+    # of a 3D array returned by tifffile), so virtualizing raised "Can't virtualize stack
+    # without source information."
     stack = ImageStack(tiff_frame_stack["glob"])
     stack.virtual = True
     assert stack.virtual
+    assert len(stack) == len(tiff_frame_stack["paths"])
     stack.virtual = False
     assert not stack.virtual
-
-    lazy = stack.to_lazy()
-    assert len(lazy) == len(tiff_frame_stack["paths"])
 
 
 @pytest.mark.parametrize("source", ARRAY_2D)

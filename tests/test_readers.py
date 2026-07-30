@@ -439,8 +439,8 @@ def test_xpeem_single_tif_image_without_tracefile():
 
 
 def test_xpeem_parse_metadata_matches_parse_image():
-    # parse_metadata is the lazy/out-of-core stack backend's (uspy.dataobject.lazy) per-frame
-    # metadata source -- it must return exactly what parse_image does, minus "image" itself,
+    # parse_metadata is a virtual (defer=True) LEEMImg's per-frame metadata source -- it must
+    # return exactly what parse_image does, minus "image" itself,
     # for both the ".dat" and ".tif" source formats, without ever reading pixel data (all of
     # Elettra's metadata, including width/height, comes from sidecars/the ".dat" header).
     for source in (XPEEM_DAT_000, XPEEM_TIF_000):
@@ -507,8 +507,8 @@ def test_xpeem_default_reader_still_loads_dat_without_beamline_metadata():
 
 
 def test_xpeem_virtual_stack_preserves_reader(tmp_path):
-    # virtual=True with a tracefile-having folder is not supported (see
-    # test_xpeem_virtual_stack_with_tracefile_raises below), so use a copy without one
+    # A folder without a tracefile, so the reader/metadata parity check here stays independent
+    # of the tracefile-broadcast mechanism (see test_xpeem_virtual_stack_with_tracefile_applies).
     for i in range(2):
         name = f"2024_09_26_004_{i:03d}"
         shutil.copy(f"{XPEEM_FOLDER}/{name}.dat", tmp_path / f"{name}.dat")
@@ -524,14 +524,16 @@ def test_xpeem_virtual_stack_preserves_reader(tmp_path):
     assert img.photon_energy == pytest.approx(249.989686773)
 
 
-def test_xpeem_virtual_stack_with_tracefile_raises():
-    # Known limitation (pre-existing, not introduced by the reader refactor): the
-    # tracefile mechanism distributes metadata by broadcasting setattr() across all
-    # stack elements, which DataObjectStack explicitly disallows for virtual stacks.
-    # Documented here so this doesn't silently change; not fixed as part of this change
-    # since it would require reworking lazy per-image construction for virtual mode.
-    with pytest.raises(ValueError):
-        base.LEEMStack(XPEEM_FOLDER, reader="elettra", virtual=True)
+def test_xpeem_virtual_stack_with_tracefile_applies():
+    # Formerly a known limitation: the tracefile mechanism distributes metadata by
+    # broadcasting setattr() across all stack elements, which used to be disallowed for
+    # virtual stacks (elements were throwaway, re-parsed per access -- a write would be
+    # lost immediately). Now that a virtual stack's elements are real, stable DataObjects,
+    # the broadcast persists exactly like it does on an eager stack.
+    stack = base.LEEMStack(XPEEM_FOLDER, reader="elettra", virtual=True)
+    eager = base.LEEMStack(XPEEM_FOLDER, reader="elettra", virtual=False)
+    np.testing.assert_allclose(stack.energy, eager.energy)
+    np.testing.assert_allclose(stack.temperature, eager.temperature)
 
 
 def test_xpeem_stack_slice_preserves_reader(xpeem_dat_stack):

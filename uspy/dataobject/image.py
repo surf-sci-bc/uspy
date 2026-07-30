@@ -17,6 +17,7 @@ from tifffile.tifffile import TiffFileError
 import cv2 as cv
 
 from uspy.dataobject.base import DataObject, DataObjectStack, _ArithmeticMixin
+from uspy.dataobject.deferred import DeferredArray, materialize
 
 try:
     # Extensions imageio itself knows how to write, keyed lowercase-with-dot (e.g. ".png").
@@ -87,6 +88,18 @@ class Image(_ArithmeticMixin, DataObject):
 
         return_val = {"image": image, "width": image.shape[1], "height": image.shape[0]}
         return return_val
+
+    def parse_deferred(self, source: Any) -> dict[str, Any]:
+        if isinstance(source, np.ndarray):
+            # No file to defer from -- there's nothing cheaper than the array already in
+            # hand, and (mirroring `parse`'s ndarray branch) no source to record either.
+            # width/height are already known, so seed them directly rather than through a
+            # (redundant) metadata loader.
+            self._source = None
+            self._meta_store["width"] = source.shape[1]
+            self._meta_store["height"] = source.shape[0]
+            return {"image": source}
+        return super().parse_deferred(source)
 
     def save(self, fname: str, **kwargs) -> Image:
         # Dispatches on an explicit extension whitelist rather than trying imageio first:
@@ -197,11 +210,44 @@ class Image(_ArithmeticMixin, DataObject):
 
         return self._with_data(image=adjusted)
 
+    @property
+    def shape(self) -> tuple:
+        """`(height, width)` of the image, resolved as cheaply as possible: a resident array's
+        own shape; else a deferred handle's already-known shape (no load); else `height`/
+        `width` metadata (a bounded, cheap resolve -- e.g. one file header -- for a deferred
+        element, never a pixel read); only as a last resort, load the pixels to find out.
+        A resident array always wins even if metadata is stale (e.g. after `img.image =
+        smaller_array`, before anything re-derives width/height)."""
+        data = self._data.get("image")
+        if isinstance(data, np.ndarray):
+            return data.shape
+        if isinstance(data, DeferredArray) and data._shape is not None:  # pylint: disable=protected-access
+            return data._shape  # pylint: disable=protected-access
+        height, width = self._meta.get("height"), self._meta.get("width")
+        if height is not None and width is not None:
+            return (int(height), int(width))
+        return materialize(data).shape
+
+    @property
+    def _dtype(self):
+        """dtype of the image, with the same cheap-first precedence as `shape`. Deliberately
+        *not* a public `dtype` property: numpy's internal `np.mean`/`np.sum` reduction over an
+        object array of `Image`s (see `ImageStack.average`, `test_stack_img_meansum`) checks
+        `hasattr(reduced_value, "dtype")` to decide whether the reduced value is a bare numpy
+        scalar that needs unwrapping -- a *public* `Image.dtype` makes that check misfire and
+        numpy tries (and fails) to call `float_dtype.type(some_image)`."""
+        data = self._data.get("image")
+        if isinstance(data, np.ndarray):
+            return data.dtype
+        if isinstance(data, DeferredArray) and data._dtype is not None:  # pylint: disable=protected-access
+            return data._dtype  # pylint: disable=protected-access
+        return materialize(data).dtype
+
     def is_compatible(self, other: DataObject) -> bool:
         if not super().is_compatible(other):
             return False
         try:
-            return self.image.shape == other.image.shape
+            return self.shape == other.shape
         except AttributeError:
             return False
 
@@ -209,10 +255,10 @@ class Image(_ArithmeticMixin, DataObject):
         if not isinstance(other, Image):
             return super().incompatibility_reason(other)
         try:
-            other_shape = other.image.shape
+            other_shape = other.shape
         except AttributeError:
             return "the other element has no image data"
-        return f"image shape {other_shape} != {self.image.shape}"
+        return f"image shape {other_shape} != {self.shape}"
 
 
 class ImageStack(DataObjectStack):
@@ -220,24 +266,6 @@ class ImageStack(DataObjectStack):
     common image formats like png or tiff."""
 
     _type = Image
-
-    def __new__(cls, *args, lazy: bool = False, **kwargs):
-        if lazy:
-            # Deferred import: uspy.dataobject.lazy imports Image/ImageStack from this module,
-            # so importing it at module level here would be circular.
-            from uspy.dataobject.lazy import LazyImageStack
-
-            kwargs.pop("virtual", None)
-            return LazyImageStack(*args, **kwargs)
-        return super().__new__(cls)
-
-    def __init__(self, *args, lazy: bool = False, **kwargs) -> None:
-        if lazy:
-            # __new__ already built and returned a standalone LazyImageStack above; since it
-            # isn't an ImageStack subclass, Python won't actually call this __init__ on it --
-            # this branch only guards against __init__ being invoked directly.
-            return
-        super().__init__(*args, **kwargs)
 
     def _split_source(self, source: Union[str, Iterable]) -> list:
         if isinstance(source, list):
@@ -366,16 +394,3 @@ class ImageStack(DataObjectStack):
 
     def filter(self, *args, **kwargs):
         return type(self)([img.filter(*args, **kwargs) for img in self])
-
-    def to_lazy(self, chunks: int = 1):
-        """Rebuild this stack as an out-of-core `LazyImageStack` (a lazy dask.array of pixel
-        data) over the same per-element sources, instead of the fully in-memory objects this
-        stack already holds. Requires every element to have a source (e.g. built from files,
-        not from raw in-memory arrays) -- this doesn't retroactively free the memory already
-        held by `self`, it's for handing sources off to the lazy backend."""
-        from uspy.dataobject.lazy import LazyImageStack
-
-        sources = self.sources
-        if None in sources:
-            raise ValueError("Can't build a lazy stack without source information.")
-        return LazyImageStack(sources, chunks=chunks)

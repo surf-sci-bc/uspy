@@ -13,6 +13,7 @@ import scipy.integrate
 import pandas as pd
 
 from uspy.dataobject.base import DataObject, _ArithmeticMixin
+from uspy.dataobject.deferred import materialize
 
 
 class Line(_ArithmeticMixin, DataObject):
@@ -83,19 +84,24 @@ class Line(_ArithmeticMixin, DataObject):
         super().__init__(source)
 
     def __getattr__(self, attr: str) -> Any:
-        # _data and _meta have to be handled by super() to avoid recursion
-        if attr in ("_data", "_meta"):
+        # Any private name (not just the literal "_data"/"_meta") has to be handled by
+        # super() to avoid recursion: `self._meta` below is itself a property that reads
+        # `_meta_store` out of __dict__, and during __new__/unpickling that key may not
+        # exist yet -- routing every private-name miss straight to the base class (which
+        # raises AttributeError immediately for those) avoids ever touching `_meta_store`
+        # before it's there.
+        if attr.startswith("_"):
             return super().__getattr__(attr)
         if attr == self._meta["xdim"]:
-            return self._data["x"]
+            return materialize(self._data["x"])
         if attr == self._meta["ydim"]:
-            return self._data["y"]
+            return materialize(self._data["y"])
 
         return super().__getattr__(attr)
 
     def __setattr__(self, attr: str, value: Any) -> None:
-        # _data and _meta have to be handled by super() to avoid recursion
-        if attr in ("_data", "_meta"):
+        # See __getattr__ above: every private name, not just "_data"/"_meta" themselves.
+        if attr.startswith("_"):
             return super().__setattr__(attr, value)
 
         if attr == self._meta["xdim"]:

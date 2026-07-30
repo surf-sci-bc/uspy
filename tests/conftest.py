@@ -63,20 +63,20 @@ STACK_INCOMPATIBLE_IMG_FNAME = TESTDATA_DIR + "elettra.dat"
 # An Elettra beamline stack whose per-frame energy/temperature/timestamp are NOT in the
 # per-image ".tif" sidecars but distributed from a single shared "*trace.txt" tracefile by
 # ElettraReader.post_process_stack -- exercises a metadata path the plain per-file Elmitec
-# ".dat" fixtures above (STACK_FNAMES) never touch. See tests/test_lazy.py.
+# ".dat" fixtures above (STACK_FNAMES) never touch. See tests/test_virtual.py.
 ELETTRA_TIF_DIR = TESTDATA_DIR + "elettra/2024_09_26_004_XPS/"
 
 # Per-frame ".tiff" fixtures (one 2D image per file, as opposed to a single 3D-TIFF stack)
 # reproducing a reported bug: frames here deliberately have TWO DIFFERENT pixel shapes
 # ((600, 624) and (624, 600)), so a correct loader must reject the whole glob/folder rather
 # than silently reshaping frames into a single, wrong shape (see tests/test_leembase.py,
-# tests/test_lazy.py).
+# tests/test_virtual.py).
 TIFF_STACK_DIR = TESTDATA_DIR + "tiff_stack/"
 TIFF_STACK_GLOB = TIFF_STACK_DIR + "*.tiff"
 
 # A SMART/BESSY multi-frame HDF4 scan file (an I(V) energy series, 161 points in one file --
 # see uspy.leem.readers.smart) -- exercises the "(path, frame_index)" tuple-source path and
-# properties (e.g. rel_time) that have no per-frame '_meta_list' entry.
+# computed properties (e.g. rel_time) that aren't themselves stored metadata.
 BESSY_SCAN_FNAME = TESTDATA_DIR + "bessy/0409aa.hdf"
 
 IMG_FNAMES = [
