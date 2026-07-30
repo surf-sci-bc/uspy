@@ -145,10 +145,10 @@ def test_leemstack_glob_can_virtualize(tiff_frame_stack):
     # Before the fix, a glob-built stack lost every element's `source`, so virtualizing
     # raised "Can't virtualize stack without source information."
     stack = LEEMStack(tiff_frame_stack["glob"])
-    stack.virtual = True
+    stack.defer()
     assert stack.virtual
     assert len(stack) == len(tiff_frame_stack["paths"])
-    stack.virtual = False
+    stack.materialize()
     assert not stack.virtual
 
 
@@ -962,7 +962,7 @@ def test_stack_add_and_iadd_operators_rebind_time_origin(op):
 def test_stack_extend_virtual_self_nonvirtual_other_no_crash():
     """Regression test: DataObjectStack.extend previously left `elements` unassigned (an
     UnboundLocalError) when self was virtual and other was not; it should fall back to
-    other's element sources, same as _deconstruct() does."""
+    other's element sources, same as defer() does."""
     stack_a = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu", virtual=True)
     stack_b = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu", virtual=False)
     n_a = len(stack_a)

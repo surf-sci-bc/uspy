@@ -79,9 +79,9 @@ Nearly everything in this codebase is built on a small set of base classes defin
 - **`DataObjectStack`**: an ordered collection of `DataObject`s of one `_type` (e.g. `ImageStack` of
   `Image`s). Supports slicing (`__getitem__`/`__setitem__` return more stacks or single elements),
   arithmetic (`+`, `-`, `*`, `/` broadcast elementwise across the stack), and a **virtual mode**
-  (`virtual=True`): elements are stored as un-loaded sources (file paths) and only constructed into
-  full objects on access, via `_split_source`/`_construct`/`_deconstruct`/`_single_construct`. This
-  matters for large stacks of images that don't all fit in memory.
+  (`virtual=True`): elements are built via `_construct_virtual`/`_single_construct(defer=True)`
+  with deferred (not-yet-loaded) data and only read from `source` on access. This matters for
+  large stacks of images that don't all fit in memory.
 - Concrete `DataObject` types: **`Image`** (2D array, arithmetic ops, `.filter()`, `.contrast()`),
   **`ImageStack`** (stack of `Image`, `.average()`), **`Line`** (x/y data, `.interpolate()`,
   `.integral()`, `.derivative()`, `.smooth()`, CSV/TSF-file save/load), plus derived line types
@@ -125,7 +125,7 @@ stack since it materializes every element at once — never cache it yourself wi
 it's still fresh).
 
 For a stack near or over available RAM, use `ImageStack(path, virtual=True)` /
-`LEEMStack(path, virtual=True)` (or flip an existing stack's `.virtual` property) instead. This is
+`LEEMStack(path, virtual=True)` (or convert an existing stack — see below) instead. This is
 not a separate backend: elements are ordinary, stable `DataObject`s whose data (`_data`, see
 `uspy/dataobject/deferred.py`'s `DeferredArray`) is read from `source` on first access instead of
 at construction, and is **never cached** — reading `img.image` twice reads the file twice, so
@@ -139,21 +139,27 @@ stack and stays out-of-core where the operation allows it: arithmetic, `.normali
 anything parameterized — a lambda/closure isn't picklable and would defeat a pickled virtual
 stack's whole point) rather than loading and materializing; `.average()`/`.filter()` then pass
 `virtual=self.virtual` through so the *stack* built from those composed elements stays virtual
-too. `stack.virtual = False` (or `.copy(virtual=False)`) materializes everything at once. A
-virtual stack skips the pairwise element-compatibility check at construction to stay zero-I/O;
-call `stack.check_compatible()` to fail early instead of at first bulk use.
+too. A virtual stack skips the pairwise element-compatibility check at construction to stay
+zero-I/O; call `stack.check_compatible()` to fail early instead of at first bulk use.
 
-`stack.virtual` is *derived* from its elements (`all(element.is_virtual for element in
-stack.elements)`), not a stored flag — it can't misreport. Slicing (`stack[a:b]`) is a view: the
-slice shares the same element objects as the parent, same as it always has (so does a `LEEMStack`'s
-shared `TimeOrigin`). What changed is that flipping `.virtual` on either the parent or a slice no
-longer *mutates* those shared elements in place — it rebinds `self._elements` to freshly
+**Converting between resident and deferred** uses the same four-verb vocabulary as
+`DataObject` (`materialize`/`defer`/`materialized`/`deferred`, see `base.py:237-278`), now
+mirrored on `DataObjectStack` itself: `stack.materialize()`/`stack.defer()` convert in place and
+return `self` (chainable); `stack.materialized()`/`stack.deferred()` return a *new* stack,
+leaving `stack` untouched — the non-mutating pair is a no-op (`is stack`) when already in the
+target state. `stack.virtual` stays a read-only, *derived* report (`all(element.is_virtual for
+element in stack.elements)`, not a stored flag — it can't misreport); assigning to it
+(`stack.virtual = False`) still works as a deprecated alias for the verbs, but warns.
+
+Slicing (`stack[a:b]`) is a view: the slice shares the same element objects as the parent, same
+as it always has (so does a `LEEMStack`'s shared `TimeOrigin`). Converting either the parent or a
+slice never *mutates* those shared elements in place — it rebinds `self._elements` to freshly
 materialized/deferred copies (`DataObject.materialized()`/`.deferred()`), leaving whichever stack
-you didn't touch (and its elements) untouched. So `sub = stack[:5]; sub.virtual = False` no longer
+you didn't touch (and its elements) untouched. So `sub = stack[:5]; sub.materialize()` no longer
 silently pins the first five frames of `stack` in memory behind its back, but it does mean a
-reference held from *before* the transition (`img = stack[0]` taken before `stack.virtual =
-False`) is now a detached, stale copy — re-fetch `stack[0]` after a transition rather than reusing
-an old handle.
+reference held from *before* the transition (`img = stack[0]` taken before `stack.materialize()`)
+is now a detached, stale copy — re-fetch `stack[0]` after a transition rather than reusing an old
+handle.
 
 Assigning a *resident* array onto a still-deferred element's data key (`img.image = some_array`)
 still permanently pins that one element in memory (`DataObject.__setattr__` warns, `UserWarning`,
@@ -162,11 +168,11 @@ correctly flips to `virtual=False` as soon as it's checked, rather than silently
 its own elements. Treat the warning as a sign an operation needs the compose-via-`.map()`
 treatment above instead of a materializing read/modify/write-back.
 
-Re-deferring (`stack.virtual = True`, or a single element's `.defer()`/`.deferred()`) always
-re-derives data from `source` from scratch — any in-memory edit *or composed processing chain*
-not yet reflected at `source` (a `.normalize()`/`.align()`/`.filter()` result that was never
-`.save()`d, for instance) is discarded, not preserved. This is a deliberate, documented contract,
-not a bug: don't round-trip `virtual = False` → `virtual = True` expecting composed results to
+Re-deferring (`stack.defer()`/`.deferred()`, or a single element's `.defer()`/`.deferred()`)
+always re-derives data from `source` from scratch — any in-memory edit *or composed processing
+chain* not yet reflected at `source` (a `.normalize()`/`.align()`/`.filter()` result that was
+never `.save()`d, for instance) is discarded, not preserved. This is a deliberate, documented
+contract, not a bug: don't round-trip `materialize()` → `defer()` expecting composed results to
 survive.
 
 ### Data flow pattern

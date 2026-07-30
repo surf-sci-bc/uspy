@@ -262,14 +262,14 @@ def test_stack_virtual(list1darrays):
         assert elv == elr
 
     # reify
-    virt_stack.virtual = False
+    virt_stack.materialize()
     assert not virt_stack.virtual
     assert not any(element.is_virtual for element in virt_stack.elements)
     for elv, elr in zip(virt_stack, real_stack):
         assert elv == elr
 
     # virtualization
-    virt_stack.virtual = True
+    virt_stack.defer()
     assert virt_stack.virtual
     assert all(element.is_virtual for element in virt_stack.elements)
     for elv, elr in zip(virt_stack, real_stack):
@@ -299,7 +299,7 @@ def test_stack_slice_virtual_transition_does_not_affect_parent(list1darrays):
     """Regression guard: a slice shares element objects with its parent (Python list-slice
     semantics), but materializing the *slice* must not mutate -- and thus must not pin into
     memory -- the parent's (still meant to be virtual) elements. Before this fix,
-    `_materialize_elements`/`_deconstruct` mutated shared elements in place, so a materialized
+    `materialize()`/`defer()` mutated shared elements in place, so a materialized
     slice silently un-virtualized the parent's frames while `parent.virtual` kept reporting
     `True`."""
     parent = MinimalObjectStack(list1darrays, virtual=True)
@@ -308,7 +308,7 @@ def test_stack_slice_virtual_transition_does_not_affect_parent(list1darrays):
     assert sub[0] is parent[0]  # slicing is still a view, sharing elements
     assert sub.virtual is True
 
-    sub.virtual = False
+    sub.materialize()
 
     # The parent must stay fully virtual: neither its `virtual` flag nor its elements were
     # touched by materializing the slice.
@@ -330,7 +330,7 @@ def test_stack_slice_defer_transition_does_not_affect_parent(list1darrays):
     assert sub[0] is parent[0]
     assert sub.virtual is False
 
-    sub.virtual = True
+    sub.defer()
 
     assert parent.virtual is False
     assert not any(element.is_virtual for element in parent.elements)
@@ -1194,10 +1194,10 @@ def test_imagestack_glob_can_virtualize(tiff_frame_stack):
     # of a 3D array returned by tifffile), so virtualizing raised "Can't virtualize stack
     # without source information."
     stack = ImageStack(tiff_frame_stack["glob"])
-    stack.virtual = True
+    stack.defer()
     assert stack.virtual
     assert len(stack) == len(tiff_frame_stack["paths"])
-    stack.virtual = False
+    stack.materialize()
     assert not stack.virtual
 
 

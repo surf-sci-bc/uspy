@@ -211,7 +211,7 @@ def test_virtual_leemstack_mixed_shape_tiff_glob_raises_at_first_bulk_use(tiff_s
     with pytest.raises(ValueError, match=r"(?i)shape|compatible"):
         virtual.check_compatible()
     with pytest.raises(ValueError, match=r"(?i)shape|compatible"):
-        virtual.virtual = False
+        virtual.materialize()
 
 
 def test_virtual_preserves_explicit_time_origin(elettra_tif_fnames):
@@ -512,7 +512,7 @@ def test_virtual_average_bad_divisor_raises(stack_folder):
 def test_virtual_materialize_roundtrip(stack_folder):
     eager = LEEMStack(stack_folder)
     virtual = LEEMStack(stack_folder, virtual=True)
-    virtual.virtual = False
+    virtual.materialize()
     assert not virtual.virtual
     assert len(virtual) == len(eager)
     for i in (0, len(eager) - 1):
@@ -521,29 +521,29 @@ def test_virtual_materialize_roundtrip(stack_folder):
 
 def test_eager_stack_can_go_virtual(stack_folder):
     eager = LEEMStack(stack_folder)
-    eager.virtual = True
+    eager.defer()
     assert eager.virtual
     assert all(element.is_virtual for element in eager.elements)
 
 
 def test_materialize_then_defer_discards_composed_processing(stack_folder):
-    """Documents a deliberate, *accepted* contract, not a bug: `defer()`/`.virtual = True`
-    always re-derives data from `source` from scratch (see `DataObject.defer`'s docstring), so
-    a materialize -> defer round trip on a stack holding *composed, unsaved* processing (e.g. a
-    `.normalize()` result) discards that processing and comes back as the raw source data --
-    exactly as if the intermediate result had never been computed. This is intentional: saving
-    (`.save()`) before re-deferring is the way to keep composed results."""
+    """Documents a deliberate, *accepted* contract, not a bug: `defer()` always re-derives
+    data from `source` from scratch (see `DataObject.defer`'s docstring), so a materialize ->
+    defer round trip on a stack holding *composed, unsaved* processing (e.g. a `.normalize()`
+    result) discards that processing and comes back as the raw source data -- exactly as if the
+    intermediate result had never been computed. This is intentional: saving (`.save()`) before
+    re-deferring is the way to keep composed results."""
     mcp = imgify(MCP_IMG_FNAME)
     raw = LEEMStack(stack_folder, virtual=True)
 
     v_norm = raw.normalize(mcp=mcp)  # composes onto the DeferredArray, still virtual
     assert v_norm.virtual is True
 
-    v_norm.virtual = False  # materializes the *normalized* pixels
+    v_norm.materialize()  # materializes the *normalized* pixels
     normalized_pixels = v_norm[0].image.copy()
     assert not np.allclose(normalized_pixels, raw[0].image)
 
-    v_norm.virtual = True  # re-derives from `source` -- the normalization is gone
+    v_norm.defer()  # re-derives from `source` -- the normalization is gone
     np.testing.assert_array_equal(v_norm[0].image, raw[0].image)
 
 
@@ -564,7 +564,7 @@ def test_virtual_stack_slice_materialize_does_not_affect_parent(stack_folder):
     sub = virt[:2]
 
     assert sub[0] is virt[0]  # slicing shares element objects with the parent
-    sub.virtual = False
+    sub.materialize()
 
     assert virt.virtual is True
     assert all(element.is_virtual for element in virt.elements)
@@ -577,7 +577,7 @@ def test_eager_stack_slice_defer_does_not_affect_parent(stack_folder):
     sub = eager[:2]
 
     assert sub[0] is eager[0]
-    sub.virtual = True
+    sub.defer()
 
     assert eager.virtual is False
     assert not any(element.is_virtual for element in eager.elements)
@@ -597,7 +597,7 @@ def test_virtual_stack_normalize_inplace_after_slice_materialization(stack_folde
 
     virt = LEEMStack(stack_folder, virtual=True)
     sub = virt[:2]
-    sub.virtual = False  # used to pin virt's first frames in place
+    sub.materialize()  # used to pin virt's first frames in place
 
     virt.normalize(mcp=mcp, inplace=True)
 
@@ -702,13 +702,88 @@ def test_virtual_setitem_delitem_extend_filter_work(stack_folder):
     assert len(filtered) == len(virtual)
 
 
-def test_virtual_setter_now_works_in_both_directions(stack_folder):
+def test_virtual_setter_still_works_but_deprecated(stack_folder):
+    """`.virtual = ...` is kept as a working alias of `materialize()`/`defer()` for backward
+    compatibility, but now warns pointing at the verbs."""
     virtual = LEEMStack(stack_folder, virtual=True)
     assert virtual.virtual is True
-    virtual.virtual = False
+    with pytest.deprecated_call():
+        virtual.virtual = False
     assert virtual.virtual is False
-    virtual.virtual = True
+    with pytest.deprecated_call():
+        virtual.virtual = True
     assert virtual.virtual is True
+
+
+### materialize()/defer() (in place) and materialized()/deferred() (new stack) verbs
+
+
+def test_materialized_returns_new_stack_leaves_parent_virtual(stack_folder):
+    virtual = LEEMStack(stack_folder, virtual=True)
+    resident = virtual.materialized()
+
+    assert resident is not virtual
+    assert resident.virtual is False
+    assert virtual.virtual is True  # parent untouched
+    assert resident[0] is not virtual[0]  # no shared elements either
+    np.testing.assert_array_equal(resident[0].image, virtual[0].image)
+
+
+def test_deferred_returns_new_stack_leaves_parent_resident(stack_folder):
+    eager = LEEMStack(stack_folder)
+    lazy = eager.deferred()
+
+    assert lazy is not eager
+    assert lazy.virtual is True
+    assert eager.virtual is False  # parent untouched
+    assert lazy[0] is not eager[0]
+    np.testing.assert_array_equal(lazy[0].image, eager[0].image)
+
+
+def test_materialize_and_defer_return_self_for_chaining(stack_folder):
+    virtual = LEEMStack(stack_folder, virtual=True)
+    assert virtual.materialize() is virtual
+    assert virtual.virtual is False
+    assert virtual.defer() is virtual
+    assert virtual.virtual is True
+
+
+def test_materialized_and_deferred_are_noop_identity_when_already_in_target_state(stack_folder):
+    eager = LEEMStack(stack_folder)
+    assert eager.materialized() is eager
+
+    virtual = LEEMStack(stack_folder, virtual=True)
+    assert virtual.deferred() is virtual
+
+
+def test_materialized_and_deferred_preserve_subclass_state(stack_folder):
+    virtual = LEEMStack(stack_folder, virtual=True, time_origin=12345.0)
+    resident = virtual.materialized()
+    assert resident.time_origin == 12345.0
+    assert resident._reader is virtual._reader
+
+    lazy = resident.deferred()
+    assert lazy.time_origin == 12345.0
+    assert lazy._reader is resident._reader
+
+
+def test_materialized_raises_on_incompatible_virtual_stack(tiff_stack_glob):
+    virtual = LEEMStack(tiff_stack_glob, virtual=True)
+    with pytest.raises(ValueError, match=r"(?i)shape|compatible"):
+        virtual.materialized()
+
+
+def test_deferred_raises_without_source():
+    from .test_base import MinimalObject, MinimalObjectStack
+
+    objs = [MinimalObject(np.eye(2)) for _ in range(2)]
+    for obj in objs:
+        obj._source = None
+    stack = MinimalObjectStack(objs, virtual=False)
+    with pytest.raises(ValueError, match="source"):
+        stack.deferred()
+    with pytest.raises(ValueError, match="source"):
+        stack.defer()
 
 
 def test_virtual_bulk_metadata_assignment(stack_folder):

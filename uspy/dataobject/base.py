@@ -258,9 +258,9 @@ class DataObject(Loadable):
     def materialized(self) -> DataObject:
         """Non-mutating counterpart of `materialize()`: returns `self` unchanged if nothing is
         deferred, otherwise a *new* object with every deferred `_data` value loaded, built via
-        `_with_data` (no array deep-copy). Used by `DataObjectStack`'s `virtual` setter so a
+        `_with_data` (no array deep-copy). Used by `DataObjectStack.materialize()` so a
         virtual->eager transition never mutates an element that another stack (e.g. a slice)
-        might still be holding a reference to -- see `_materialize_elements`."""
+        might still be holding a reference to."""
         if not self.is_virtual:
             return self
         return self._with_data(**{k: materialize(v) for k, v in self._data.items()})
@@ -269,7 +269,7 @@ class DataObject(Loadable):
         """Non-mutating counterpart of `defer()`: returns `self` unchanged if already fully
         deferred, otherwise a *new* object whose `_data` values are deferred handles re-derived
         from `source` (via `parse_deferred`), same discard-on-reload caveat as `defer()`. Used by
-        `DataObjectStack`'s `virtual` setter for the same reason as `materialized()`."""
+        `DataObjectStack.defer()` for the same reason as `materialized()`."""
         if self.is_virtual:
             return self
         if self._source is None:
@@ -569,29 +569,68 @@ class DataObjectStack(Loadable):
             raise ValueError("Empty source for DataObjectStack (wrong file path?)")
         return [self._single_construct(source, defer=True) for source in sources]
 
-    def _materialize_elements(self) -> None:
-        """Reification path for the `virtual` setter: rebind `self._elements` to freshly
-        materialized copies (`DataObject.materialized()`), after checking they're actually
-        compatible -- a virtual stack never checked this at construction (see
-        `_construct_virtual`). Rebinding rather than mutating each element in place matters
-        because elements may be shared with another stack (e.g. a slice, see `__getitem__`):
-        mutating them here would silently pin that other stack's data in memory too, behind
-        its back."""
+    def materialize(self) -> DataObjectStack:
+        """Load every element's deferred data in place. Returns self, so calls can be chained.
+
+        Rebinds `self._elements` to freshly materialized copies (`DataObject.materialized()`),
+        after checking they're actually compatible -- a virtual stack never checked this at
+        construction (see `_construct_virtual`). Rebinding rather than mutating each element in
+        place matters because elements may be shared with another stack (e.g. a slice, see
+        `__getitem__`): mutating them here would silently pin that other stack's data in memory
+        too, behind its back. No-op (returns immediately) if already resident."""
+        if not self.virtual:
+            return self
         self.check_compatible()
         self._elements = [element.materialized() for element in self._elements]
+        return self
 
-    def _deconstruct(self) -> None:
-        """Defer path for the `virtual` setter: rebind `self._elements` to freshly deferred
-        copies (`DataObject.deferred()`), so data is re-derived from `source` on next access
-        instead of staying resident. Note: any in-memory edit to an element's data that isn't
-        reflected at `source` is discarded by this -- the same thing that happened when a
-        virtual stack's elements were discarded outright and replaced by bare sources. As in
-        `_materialize_elements`, rebinding (not mutating in place) keeps this from reaching
-        into another stack that happens to share these elements."""
-        sources = [element.source for element in self._elements]
-        if None in sources:
-            raise ValueError("Can't virtualize stack without source information.")
+    def defer(self) -> DataObjectStack:
+        """Drop every element's data back to deferred handles, in place. Returns self, so calls
+        can be chained.
+
+        Rebinds `self._elements` to freshly deferred copies (`DataObject.deferred()`), so data
+        is re-derived from `source` on next access instead of staying resident. Note: any
+        in-memory edit to an element's data that isn't reflected at `source` is discarded by
+        this -- the same thing that happened when a virtual stack's elements were discarded
+        outright and replaced by bare sources. As in `materialize()`, rebinding (not mutating in
+        place) keeps this from reaching into another stack that happens to share these elements.
+        No-op (returns immediately) if already virtual."""
+        if self.virtual:
+            return self
+        if None in self.sources:
+            raise ValueError("Can't defer stack without source information.")
         self._elements = [element.deferred() for element in self._elements]
+        return self
+
+    def materialized(self) -> DataObjectStack:
+        """Non-mutating counterpart of `materialize()`: returns `self` unchanged if already
+        resident, otherwise a *new* stack (built via `_respun`) with every element materialized
+        -- `self` and its elements are left untouched."""
+        if not self.virtual:
+            return self
+        self.check_compatible()
+        return self._respun([element.materialized() for element in self._elements])
+
+    def deferred(self) -> DataObjectStack:
+        """Non-mutating counterpart of `defer()`: returns `self` unchanged if already virtual,
+        otherwise a *new* stack (built via `_respun`) with every element deferred -- `self` and
+        its elements are left untouched."""
+        if self.virtual:
+            return self
+        if None in self.sources:
+            raise ValueError("Can't defer stack without source information.")
+        return self._respun([element.deferred() for element in self._elements])
+
+    def _respun(self, elements: list) -> DataObjectStack:
+        """A new stack of this type, same unique attrs, with `elements` swapped in. Built via
+        the subclass-aware slice path (`self[:]`, which subclasses like `LEEMStack` already
+        override to carry `time_origin`/`reader` through) so `materialized()`/`deferred()` don't
+        need their own copy of that per-subclass logic. Zero-I/O: `self[:]` rebuilds a stack of
+        the same virtual-ness as `self`, then the elements list is swapped for the already
+        materialized/deferred one."""
+        new = self[:]
+        new._elements = elements
+        return new
 
     def _single_construct(self, source: Any, defer: bool = False) -> DataObject:
         """Construct a single DataObject, resident (`defer=False`) or deferred (`defer=True`)."""
@@ -645,19 +684,17 @@ class DataObjectStack(Loadable):
 
     @virtual.setter
     def virtual(self, value: bool) -> None:
-        if self.virtual == value:
-            return
-        if value:
-            self._deconstruct()
-        else:
-            self._materialize_elements()
+        warnings.warn(
+            "Setting `.virtual` is deprecated; use stack.materialize()/stack.defer() to "
+            "convert in place, or stack.materialized()/stack.deferred() for a new stack.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self.defer() if value else self.materialize()
 
-    def copy(self, virtual: Optional[bool] = None):
+    def copy(self):
         """Returns a deepcopy."""
-        other = copy.deepcopy(self)
-        if virtual is not None:
-            other.virtual = virtual
-        return other
+        return copy.deepcopy(self)
 
     def __getitem__(
         self, index: Union[int, slice]
