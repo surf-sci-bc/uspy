@@ -10,10 +10,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 uspy is intended for use in Jupyter notebooks. Users call the methods directly to analyze data. A function that is never called in the codebase can still be important for analysis.
 
 Priorities:
+0. Be Brief.
 1. Never modify source data.
 2. The code/data processing must always behave as expected by the user. 
-3. Never silently change processing or visualization of data. If you do raise a Warning. 
-4. Never cherry-pick inputs for passing tests. Write tests against possible unexpected behavior and look into edge cases. 
+3. Never silently change processing or visualization of data. If you do raise a Warning.
+4. Keep the code focused. Dont mix data storage classes and visualization.
+5. Keep code easy to maintain. Reuse the codebase as much as possible. If you have written 200 Lines that could be 50, write 50.
+6. Write tests first then implement. Never cherry-pick inputs for passing tests.
+7. Write focused numpydoc-style docstrings instead of essays, stories or anecdotes.
 
 ## Setup
 
@@ -128,11 +132,42 @@ at construction, and is **never cached** — reading `img.image` twice reads the
 iterate once rather than indexing repeatedly if that matters. Metadata *is* resolved once per
 element and cached permanently, so gathers like `stack.energy` cost one header read per frame, not
 one per field per frame. Every stack operation (indexing, arithmetic, `.normalize()`, `.average()`,
-`.align()`, `.save()`) works the same as on a resident stack and stays out-of-core where the
-operation allows it (arithmetic and `.normalize()` compose into a new deferred expression rather
-than materializing); `stack.virtual = False` (or `.copy(virtual=False)`) materializes everything at
-once. A virtual stack skips the pairwise element-compatibility check at construction to stay
-zero-I/O; call `stack.check_compatible()` to fail early instead of at first bulk use.
+`.filter()`, `.align()`, `uspy.plotting.make_video()`, `.save()`) works the same as on a resident
+stack and stays out-of-core where the operation allows it: arithmetic, `.normalize()`, `.align()`
+(`LEEMImg.warp`), `.filter()`, and `ROI.apply()` all compose onto the existing `DeferredArray`
+(via `DeferredArray.map`, with a module-level function bound through `functools.partial` for
+anything parameterized — a lambda/closure isn't picklable and would defeat a pickled virtual
+stack's whole point) rather than loading and materializing; `.average()`/`.filter()` then pass
+`virtual=self.virtual` through so the *stack* built from those composed elements stays virtual
+too. `stack.virtual = False` (or `.copy(virtual=False)`) materializes everything at once. A
+virtual stack skips the pairwise element-compatibility check at construction to stay zero-I/O;
+call `stack.check_compatible()` to fail early instead of at first bulk use.
+
+`stack.virtual` is *derived* from its elements (`all(element.is_virtual for element in
+stack.elements)`), not a stored flag — it can't misreport. Slicing (`stack[a:b]`) is a view: the
+slice shares the same element objects as the parent, same as it always has (so does a `LEEMStack`'s
+shared `TimeOrigin`). What changed is that flipping `.virtual` on either the parent or a slice no
+longer *mutates* those shared elements in place — it rebinds `self._elements` to freshly
+materialized/deferred copies (`DataObject.materialized()`/`.deferred()`), leaving whichever stack
+you didn't touch (and its elements) untouched. So `sub = stack[:5]; sub.virtual = False` no longer
+silently pins the first five frames of `stack` in memory behind its back, but it does mean a
+reference held from *before* the transition (`img = stack[0]` taken before `stack.virtual =
+False`) is now a detached, stale copy — re-fetch `stack[0]` after a transition rather than reusing
+an old handle.
+
+Assigning a *resident* array onto a still-deferred element's data key (`img.image = some_array`)
+still permanently pins that one element in memory (`DataObject.__setattr__` warns, `UserWarning`,
+whenever this happens) — but since `virtual` is derived, any stack containing that element now
+correctly flips to `virtual=False` as soon as it's checked, rather than silently disagreeing with
+its own elements. Treat the warning as a sign an operation needs the compose-via-`.map()`
+treatment above instead of a materializing read/modify/write-back.
+
+Re-deferring (`stack.virtual = True`, or a single element's `.defer()`/`.deferred()`) always
+re-derives data from `source` from scratch — any in-memory edit *or composed processing chain*
+not yet reflected at `source` (a `.normalize()`/`.align()`/`.filter()` result that was never
+`.save()`d, for instance) is discarded, not preserved. This is a deliberate, documented contract,
+not a bug: don't round-trip `virtual = False` → `virtual = True` expecting composed results to
+survive.
 
 ### Data flow pattern
 

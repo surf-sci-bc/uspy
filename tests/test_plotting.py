@@ -39,14 +39,13 @@ class _FakeWriter:
 
 
 def test_make_video_mask_is_actually_applied_for_a_path_source(tmp_path, monkeypatch, capsys):
-    """Regression test: make_video() builds its stack via `stackify(stack, virtual=True)`
-    and then writes `img.image = np.ma.array(img.image, mask=~mask_array)` per frame to
-    apply the ROI mask before computing contrast. On the old virtual-stack backend, `stack[i]`
-    (and the `img` bound by the loop) were freshly re-parsed throwaway objects, so that write
-    was silently lost and the mask never actually affected the "maximum" contrast computed
-    right after it -- only reachable via a path/glob source (an already-eager LEEMStack
-    bypasses stackify() and never hit this). Confirmed fixed: contrast is now computed only
-    over the masked (in-ROI) region."""
+    """Regression test: make_video() applies the ROI mask at each pixel read
+    (`np.ma.array(img.image, mask=inv_mask)`) rather than writing a masked array back into the
+    stack -- a write-back would (a) on a virtual stack, permanently pin every frame in memory
+    (see CLAUDE.md's "Memory: large stacks" section) and (b) on the old virtual-stack backend
+    predating that fix, silently do nothing at all, since `stack[i]` used to be a throwaway
+    re-parsed object. Confirmed fixed here: contrast is computed only over the masked (in-ROI)
+    region, matching a mask genuinely applied."""
     fake_writer = _FakeWriter()
     monkeypatch.setattr(base_plotting.skvideo.io, "FFmpegWriter", lambda *a, **kw: fake_writer)
     monkeypatch.setattr(base_plotting, "Video", lambda ofile: ofile)
@@ -68,6 +67,32 @@ def test_make_video_mask_is_actually_applied_for_a_path_source(tmp_path, monkeyp
     printed = capsys.readouterr().out
     assert f"Set contrast to [{expected_c0}, {expected_c1}]" in printed
     assert len(fake_writer.frames) == len(stack)
+
+
+def test_make_video_leaves_a_virtual_stack_virtual(tmp_path, monkeypatch):
+    """Regression test for the reported bug: `make_video()` on a virtual stack used to
+    materialize every frame (`img.image = np.ma.array(...)` written back into each deferred
+    element, see CLAUDE.md's "Memory: large stacks" section) even though `stack.virtual`
+    stayed True. Masking is now applied at each read instead of written back, so the stack
+    (and every element) must still be virtual -- and holding no resident pixel data -- after
+    the call, whether or not a mask was requested."""
+    monkeypatch.setattr(base_plotting.skvideo.io, "FFmpegWriter", lambda *a, **kw: _FakeWriter())
+    monkeypatch.setattr(base_plotting, "Video", lambda ofile: ofile)
+
+    height, width = 0, 0
+    for use_mask in (False, True):
+        stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_RuO2", virtual=True)
+        height, width = stack[0].height, stack[0].width
+        mask = (
+            ROI.circle(x0=width // 4, y0=height // 4, radius=min(height, width) // 8)
+            if use_mask
+            else None
+        )
+        base_plotting.make_video(
+            stack, str(tmp_path / "out.mp4"), mask=mask, fields=None
+        )
+        assert stack.virtual is True
+        assert all(element.is_virtual for element in stack.elements)
 
 
 ### plot_img / make_video (uspy/leem/plotting.py wrappers)
@@ -105,10 +130,15 @@ def test_make_video_uses_configured_default_fields_when_omitted(tmp_path, monkey
 
     def fake_make_video(stack, *args, fields=None, **kwargs):  # pylint: disable=unused-argument
         captured["fields"] = fields
+        captured["virtual"] = stack.virtual
 
     monkeypatch.setattr(base_plotting, "make_video", fake_make_video)
     leem_plotting.make_video(str(tmp_path), ofile="unused.mp4")
     assert captured["fields"] == ("fov",)
+    # regression guard: a path source used to be forced eager here (stackify()'s virtual=False
+    # default), which meant a virtual stack could never reach uspy.plotting.make_video through
+    # the LEEM-facing wrapper at all.
+    assert captured["virtual"] is True
 
 
 def test_make_video_explicit_none_still_disables_overlay(tmp_path, monkeypatch):

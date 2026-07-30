@@ -31,7 +31,10 @@ _UNSET = object()
 
 
 def make_video(stack, *args, fields=_UNSET, **kwargs):
-    stack = stackify(stack)
+    # virtual=True: a path/glob/list source shouldn't be forced eager just to reach
+    # uspy.plotting.make_video, which already builds (and streams) a virtual stack itself --
+    # an already-constructed LEEMStack (any virtuality) passes through stackify unchanged.
+    stack = stackify(stack, virtual=True)
     # distinguish "fields not passed" (-> use the stack's configured defaults) from an
     # explicit fields=None (-> uspy.plotting.make_video treats that as "no overlay")
     if fields is _UNSET:

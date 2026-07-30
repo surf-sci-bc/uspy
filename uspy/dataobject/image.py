@@ -6,6 +6,7 @@
 from __future__ import annotations
 from typing import Any, Union
 from collections.abc import Iterable
+from functools import partial
 import glob
 import os
 
@@ -17,7 +18,22 @@ from tifffile.tifffile import TiffFileError
 import cv2 as cv
 
 from uspy.dataobject.base import DataObject, DataObjectStack, _ArithmeticMixin
-from uspy.dataobject.deferred import DeferredArray, materialize
+from uspy.dataobject.deferred import DeferredArray, is_deferred, materialize
+
+
+def _apply_filter(method: str, params: dict, arr: np.ndarray) -> np.ndarray:
+    """Apply the (pre-validated) filter identified by `method`/`params` to `arr`, as a
+    module-level function bound via `functools.partial` (picklable, unlike a
+    closure/lambda) so it can be used with `DeferredArray.map` -- see `Image.filter`."""
+    if method == "gaussian":
+        return cv.GaussianBlur(arr, params["size"], params["sigma"], **params["kwargs"])
+    if method == "blur":
+        return cv.blur(arr, params["size"], **params["kwargs"])
+    if method == "median":
+        return cv.medianBlur(arr, params["size"])
+    # method == "kernel" -- the only other value Image.filter builds params for; an unknown
+    # method is rejected eagerly in Image.filter, before this function is ever bound.
+    return cv.filter2D(arr, ddepth=-1, kernel=params["kernel"], **params["kwargs"])
 
 try:
     # Extensions imageio itself knows how to write, keyed lowercase-with-dot (e.g. ".png").
@@ -180,20 +196,30 @@ class Image(_ArithmeticMixin, DataObject):
             size = kwargs.pop("size", (3, 3))
             if isinstance(size, int):
                 size = (size, size)
-            filtered = cv.GaussianBlur(self.image, size, sigma, **kwargs)
+            params = {"size": size, "sigma": sigma, "kwargs": kwargs}
         elif method == "blur":
             size = kwargs.pop("size", (3, 3))
             if isinstance(size, int):
                 size = (size, size)
-            filtered = cv.blur(self.image, size, **kwargs)
+            params = {"size": size, "kwargs": kwargs}
         elif method == "median":
             size = kwargs.pop("size", 3)
-            filtered = cv.medianBlur(self.image, size)
+            params = {"size": size}
         elif method == "kernel":
             kernel = kwargs.pop("kernel", None)
-            filtered = cv.filter2D(self.image, ddepth=-1, kernel=kernel, **kwargs)
+            params = {"kernel": kernel, "kwargs": kwargs}
         else:
             raise ValueError("Unkown Filter")
+
+        current = self._data["image"]  # pylint: disable=protected-access
+        fn = partial(_apply_filter, method, params)
+        if is_deferred(current):
+            # Compose into a new DeferredArray instead of loading. Shape/dtype hints are
+            # deliberately dropped (unlike warp/mask) -- a filter's output isn't guaranteed to
+            # match the input's, e.g. `kernel` with an explicit `ddepth` kwarg.
+            filtered = current.map(fn)
+        else:
+            filtered = fn(current)
 
         return self._with_data(image=filtered)
 
@@ -352,7 +378,11 @@ class ImageStack(DataObjectStack):
             img = np.mean(self[i * avg : i * avg + avg])
             imgs.append(img)
 
-        return type(self)(imgs)
+        # virtual=self.virtual: the per-slice `np.mean` above composes onto each element's
+        # DeferredArray without loading it (see _ArithmeticMixin._operand); passing no
+        # `virtual` here would hit the eager default and materialize every one of them right
+        # back (DataObjectStack.__init__: objects_are_virtual and not virtual -> materialize).
+        return type(self)(imgs, virtual=self.virtual)
 
     def save(self, fname: str, **kwargs) -> None:
         if not fname.lower().endswith((".tiff", ".tif")):
@@ -393,4 +423,7 @@ class ImageStack(DataObjectStack):
         return None
 
     def filter(self, *args, **kwargs):
-        return type(self)([img.filter(*args, **kwargs) for img in self])
+        # virtual=self.virtual: Image.filter composes onto a deferred element without loading
+        # it; passing no `virtual` here would hit the eager default and materialize every
+        # filtered element right back (see the same reasoning in `average` above).
+        return type(self)([img.filter(*args, **kwargs) for img in self], virtual=self.virtual)

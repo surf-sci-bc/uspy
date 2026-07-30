@@ -366,7 +366,112 @@ def test_virtual_img_normalize_without_explicit_mcp_matches_eager(stack_folder):
     np.testing.assert_allclose(e_norm.image, v_norm.image, atol=1e-4)
 
 
-### average() parity
+### align() parity -- warp composes, stays virtual (regression: used to materialize the
+### whole stack via LEEMImg.warp's `self.image = cv.warpPerspective(...)`, see CLAUDE.md)
+
+
+def test_virtual_align_stays_virtual(stack_folder):
+    virtual = LEEMStack(stack_folder, virtual=True)[:5]
+    aligned = virtual.align()  # default mask=True -- also exercises ROI.apply's compose path
+    assert aligned.virtual is True
+    assert all(element.is_virtual for element in aligned.elements)
+
+
+def test_virtual_align_does_not_trigger_materialization_warning(stack_folder, recwarn):
+    virtual = LEEMStack(stack_folder, virtual=True)[:5]
+    virtual.align()
+    materializing = [w for w in recwarn.list if "deferred data with a resident" in str(w.message)]
+    assert not materializing
+
+
+def test_virtual_align_inplace_stays_virtual(stack_folder):
+    virtual = LEEMStack(stack_folder, virtual=True)[:4]
+    result = virtual.align(inplace=True)
+    assert result is virtual
+    assert virtual.virtual is True
+
+
+def test_virtual_align_pixel_and_warp_matrix_parity(stack_folder):
+    eager = LEEMStack(stack_folder)[:5]
+    virtual = LEEMStack(stack_folder, virtual=True)[:5]
+
+    e_aligned = eager.align()
+    v_aligned = virtual.align()
+
+    np.testing.assert_allclose(e_aligned.warp_matrix, v_aligned.warp_matrix, atol=1e-3)
+    for i in range(len(v_aligned)):
+        np.testing.assert_allclose(e_aligned[i].image, v_aligned[i].image, atol=1e-2)
+
+
+### LEEMImg.warp / ROI.apply / Image.filter -- compose onto a deferred element instead of
+### materializing it (the individual pieces `align()`/`make_video()` are built from)
+
+
+def test_virtual_warp_composes_and_matches_eager(stack_folder):
+    eager = LEEMStack(stack_folder)[0]
+    virtual = LEEMStack(stack_folder, virtual=True)[0]
+    warp = np.array([[1, 0, 3], [0, 1, -2], [0, 0, 1]], dtype=np.float64)
+
+    e_warped = eager.warp(warp, inplace=False)
+    v_warped = virtual.warp(warp, inplace=False)
+    assert v_warped.is_virtual
+    np.testing.assert_allclose(e_warped.image, v_warped.image, atol=1e-3)
+
+    v_inplace = LEEMStack(stack_folder, virtual=True)[1]
+    v_inplace.warp(warp, inplace=True)
+    assert v_inplace.is_virtual
+
+
+def test_virtual_roi_apply_stays_virtual_and_matches_eager(stack_folder):
+    from uspy.roi import ROI
+
+    eager = LEEMStack(stack_folder)[0]
+    virtual = LEEMStack(stack_folder, virtual=True)[0]
+    roi = ROI.circle(x0=eager.width // 2, y0=eager.height // 2, radius=eager.width // 4)
+
+    e_masked = roi.apply(eager)
+    v_masked = roi.apply(virtual)
+    assert v_masked.is_virtual
+
+    np.testing.assert_array_equal(
+        np.ma.getmaskarray(e_masked.image), np.ma.getmaskarray(v_masked.image)
+    )
+    np.testing.assert_allclose(
+        np.ma.filled(e_masked.image, 0), np.ma.filled(v_masked.image, 0), atol=1e-3
+    )
+
+
+def test_virtual_image_filter_stays_virtual_and_matches_eager(stack_folder):
+    eager = LEEMStack(stack_folder)[0]
+    virtual = LEEMStack(stack_folder, virtual=True)[0]
+
+    e_filtered = eager.filter(method="gaussian")
+    v_filtered = virtual.filter(method="gaussian")
+    assert v_filtered.is_virtual
+    np.testing.assert_allclose(e_filtered.image, v_filtered.image, atol=1e-3)
+
+
+def test_virtual_image_filter_unknown_method_raises_without_reading_pixels(
+    stack_folder, monkeypatch
+):
+    """Method/kwarg validation must stay eager -- an unknown method should raise immediately,
+    not get deferred into a DeferredArray.map() that only fails on first pixel read."""
+    from uspy.leem.readers.elmitec import ElmitecReader
+
+    calls = []
+    original = ElmitecReader.parse_pixels
+    monkeypatch.setattr(
+        ElmitecReader,
+        "parse_pixels",
+        lambda self, source: (calls.append(source), original(self, source))[1],
+    )
+    virtual = LEEMStack(stack_folder, virtual=True)[0]
+    with pytest.raises(ValueError):
+        virtual.filter(method="nonsense")
+    assert calls == []
+
+
+### average() / filter() parity -- stay virtual
 
 
 def test_virtual_average_parity(stack_folder):
@@ -378,8 +483,17 @@ def test_virtual_average_parity(stack_folder):
     e_avg = eager.average(2)
     v_avg = virtual.average(2)
     assert len(e_avg) == len(v_avg)
+    assert v_avg.virtual is True
+    assert all(element.is_virtual for element in v_avg.elements)
     for i in (0, len(v_avg) - 1):
         np.testing.assert_allclose(e_avg[i].image, v_avg[i].image, atol=1e-3)
+
+
+def test_virtual_stack_filter_stays_virtual(stack_folder):
+    virtual = LEEMStack(stack_folder, virtual=True)[:3]
+    filtered = virtual.filter(method="gaussian")
+    assert filtered.virtual is True
+    assert all(element.is_virtual for element in filtered.elements)
 
 
 def test_virtual_average_bad_divisor_raises(stack_folder):
@@ -412,10 +526,84 @@ def test_eager_stack_can_go_virtual(stack_folder):
     assert all(element.is_virtual for element in eager.elements)
 
 
+def test_materialize_then_defer_discards_composed_processing(stack_folder):
+    """Documents a deliberate, *accepted* contract, not a bug: `defer()`/`.virtual = True`
+    always re-derives data from `source` from scratch (see `DataObject.defer`'s docstring), so
+    a materialize -> defer round trip on a stack holding *composed, unsaved* processing (e.g. a
+    `.normalize()` result) discards that processing and comes back as the raw source data --
+    exactly as if the intermediate result had never been computed. This is intentional: saving
+    (`.save()`) before re-deferring is the way to keep composed results."""
+    mcp = imgify(MCP_IMG_FNAME)
+    raw = LEEMStack(stack_folder, virtual=True)
+
+    v_norm = raw.normalize(mcp=mcp)  # composes onto the DeferredArray, still virtual
+    assert v_norm.virtual is True
+
+    v_norm.virtual = False  # materializes the *normalized* pixels
+    normalized_pixels = v_norm[0].image.copy()
+    assert not np.allclose(normalized_pixels, raw[0].image)
+
+    v_norm.virtual = True  # re-derives from `source` -- the normalization is gone
+    np.testing.assert_array_equal(v_norm[0].image, raw[0].image)
+
+
 def test_leemstack_virtual_kwarg_dispatch(stack_folder):
     stack = LEEMStack(stack_folder, virtual=True)
     assert type(stack) is LEEMStack
     assert stack.virtual is True
+
+
+### Slicing a virtual stack is a view (shares elements with the parent); a virtual<->eager
+### transition on the slice must not reach back into the parent's shared elements. Regression
+### for: `sub = virt[:5]; sub.virtual = False` used to mutate `virt`'s own frames in place,
+### leaving `virt.virtual` reporting `True` while its first frames were actually resident.
+
+
+def test_virtual_stack_slice_materialize_does_not_affect_parent(stack_folder):
+    virt = LEEMStack(stack_folder, virtual=True)
+    sub = virt[:2]
+
+    assert sub[0] is virt[0]  # slicing shares element objects with the parent
+    sub.virtual = False
+
+    assert virt.virtual is True
+    assert all(element.is_virtual for element in virt.elements)
+    assert sub[0] is not virt[0]
+    assert sub.virtual is False
+
+
+def test_eager_stack_slice_defer_does_not_affect_parent(stack_folder):
+    eager = LEEMStack(stack_folder)
+    sub = eager[:2]
+
+    assert sub[0] is eager[0]
+    sub.virtual = True
+
+    assert eager.virtual is False
+    assert not any(element.is_virtual for element in eager.elements)
+    assert sub[0] is not eager[0]
+    assert sub.virtual is True
+
+
+def test_virtual_stack_normalize_inplace_after_slice_materialization(stack_folder):
+    """Regression for the concrete data-corruption case: before elements were rebound instead
+    of mutated in place, a virtual stack whose first frames had been pinned resident via a
+    materialized slice would silently *discard* an in-place normalize on those frames --
+    `LEEMStack.normalize(inplace=True)` trusted the (stale) `self.virtual` flag and rebuilt
+    each resident result from `source`, throwing away the just-computed normalization."""
+    mcp = imgify(MCP_IMG_FNAME)
+
+    eager_expected = LEEMStack(stack_folder).normalize(mcp=mcp)
+
+    virt = LEEMStack(stack_folder, virtual=True)
+    sub = virt[:2]
+    sub.virtual = False  # used to pin virt's first frames in place
+
+    virt.normalize(mcp=mcp, inplace=True)
+
+    for i in range(len(virt)):
+        assert virt[i].mcp == mcp.source
+        np.testing.assert_allclose(virt[i].image, eager_expected[i].image, atol=1e-4)
 
 
 def test_stackify_virtual(stack_folder):
@@ -431,7 +619,14 @@ def test_imagestack_virtual_kwarg_dispatch(stack_fname):
         pytest.skip("only meaningful for the 3D TIFF fixture")
     stack = ImageStack(stack_fname, virtual=True)
     assert type(stack) is ImageStack
-    assert stack.virtual is True
+    # Known, pre-existing limitation, not a regression: `ImageStack._split_source` reads a
+    # single 3D TIFF into memory in full up front (`tifffile.imread`) to split it into
+    # per-frame arrays, and `Image.parse_deferred`'s ndarray branch has no cheaper deferred
+    # path than the array already in hand -- so every element here actually ends up resident.
+    # `stack.virtual` (derived from the elements, see `DataObjectStack.virtual`) now reports
+    # that honestly instead of rubber-stamping the `virtual=True` request.
+    assert stack.virtual is False
+    assert not any(element.is_virtual for element in stack.elements)
     eager = ImageStack(stack_fname)
     assert type(eager) is ImageStack
     assert eager.virtual is False

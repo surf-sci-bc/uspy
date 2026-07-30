@@ -83,11 +83,28 @@ def test_deferred_metadata_resolves_once_and_caches():
 def test_write_to_deferred_field_replaces_handle_and_stops_reparsing():
     source = {"calls": 0}
     obj = CountingReparse(source, defer=True)
-    obj.value = np.array([999])
+    with pytest.warns(UserWarning, match="deferred"):
+        obj.value = np.array([999])
     assert not obj.is_virtual
     assert source["calls"] == 0  # writing must not itself trigger a parse
     assert np.array_equal(obj.value, [999])
     assert source["calls"] == 0  # reading the now-resident value doesn't reparse either
+
+
+def test_write_to_deferred_field_warns_once_then_stays_quiet(recwarn):
+    """`DataObject.__setattr__` warns the moment a resident write pins a still-deferred
+    element in memory (see tests/test_base.py for the Image-specific coverage) -- generic
+    across any DataObject subclass, not just the ones with a cheaper deferred path. A second
+    write, now resident-to-resident, must not warn again."""
+    source = {"calls": 0}
+    obj = CountingReparse(source, defer=True)
+
+    with pytest.warns(UserWarning, match="deferred"):
+        obj.value = np.array([1])
+    recwarn.clear()
+
+    obj.value = np.array([2])
+    assert not [w for w in recwarn.list if issubclass(w.category, UserWarning)]
 
 
 def test_defer_raises_without_a_source():

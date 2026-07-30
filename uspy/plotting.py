@@ -247,7 +247,6 @@ def make_video(
         return Video(ofile)
     # make input sane
     stack = stackify(stack, virtual=True)
-    stack = stack.copy()
     if "increment" in kwargs:
         skip = kwargs.pop("increment")
     if skip:
@@ -257,21 +256,18 @@ def make_video(
 
     ## Apply mask if applicable
 
-    # if mask is not None:
-    #    for index, img in enumerate(stack):
-    #        stack[index] = mask.apply(img)
-
     if mask:
         mask_array = mask.pad_to(stack[0].height, stack[0].width)
     else:
-        mask_array = np.ones_like(stack[0].image, dtype=bool)
+        mask_array = np.ones(stack[0].shape, dtype=bool)
+    inv_mask = ~mask_array
+    cv_mask = mask_array.astype(np.uint8)
 
-    ## apply mask to stack so the contrast is correctly extracted -- `img` and `stack[index]`
-    ## are the same (stable) element, so this write persists rather than being silently lost;
-    ## written through `img` directly (not `stack[index]`) so that's unambiguous.
-
-    for img in stack:
-        img.image = np.ma.array(img.image, mask=~mask_array)
+    ## Mask is applied at each read below (`np.ma.array(img.image, mask=inv_mask)`), not
+    ## written back into the stack: `img.image = ...` would replace a deferred element's
+    ## DeferredArray with a resident masked array, pinning the whole stack in memory for a
+    ## virtual stack (see DataObject.__setattr__'s warning) -- and reading `img.image` is
+    ## already uncached for a virtual stack, so wrapping at each read costs nothing extra.
 
     # find the contrast values
     if contrast in ("auto", "inner"):
@@ -283,14 +279,18 @@ def make_video(
         # stack's whole point for a data-heavy stack.
         c0, c1 = 2e16, 0
         for img in stack:
-            c0 = min(c0, np.ma.min(img.image))
-            c1 = max(c1, np.ma.max(img.image))
+            masked = np.ma.array(img.image, mask=inv_mask)
+            c0 = min(c0, np.ma.min(masked))
+            c1 = max(c1, np.ma.max(masked))
         contrast = sorted((c0, c1))
         print(f"Set contrast to {contrast}")
         contrast_type = "static"
     elif isinstance(contrast, int):
-        c0 = np.ma.nanmin(stack[contrast].image)
-        c1 = np.ma.nanmax(stack[contrast].image)
+        # Single read (not two) of `stack[contrast].image` -- a virtual stack's pixel data is
+        # never cached, so a second `.image` access would re-read the file from scratch.
+        masked = np.ma.array(stack[contrast].image, mask=inv_mask)
+        c0 = np.ma.nanmin(masked)
+        c1 = np.ma.nanmax(masked)
         contrast = sorted((c0, c1))
         print(f"Set contrast to {contrast}")
         contrast_type = "static"
@@ -320,8 +320,8 @@ def make_video(
     )
 
     # loop through the images
-    height, width = stack[0].image.shape
-    dy, dx = map(int, 0.2 * np.array(stack[0].image.shape))
+    height, width = stack[0].shape
+    dy, dx = map(int, 0.2 * np.array(stack[0].shape))
 
     if field_color is None:
         field_color = "yellow"
@@ -329,24 +329,8 @@ def make_video(
             field_color = "black"
     color = tuple(int(rgb * 255) for rgb in matplotlib.colors.to_rgb(field_color))
 
-    ## Create Mask if neccesary
-
     for img in stack:
-        data = np.nan_to_num(img.image)
-
-        # try:
-        # mask_array = np.array(img.image.mask, dtype=np.uint8)
-        # mask_array = np.ma.getmaskarray(img.image).astype(np.uint8)
-        # print(mask_array)
-        # except AttributeError:
-        #    mask_array = None
-
-        # print(mask_array.shape)
-        # plt.imshow(mask_array)
-        # plt.show()
-        # print(data.shape)
-
-        # data = np.ma.array(data, mask=~mask_array)
+        data = np.nan_to_num(np.ma.array(img.image, mask=inv_mask))
 
         if log:
             data = np.nan_to_num(np.log(data))
@@ -363,10 +347,10 @@ def make_video(
             0,
             255,
             norm_type=cv.NORM_MINMAX,
-            mask=mask_array.astype(np.uint8),
+            mask=cv_mask,
         )
 
-        data[~mask_array] = 255  # make outside of mask white
+        data[inv_mask] = 255  # make outside of mask white
 
         if invert:
             data = -data + data.max()

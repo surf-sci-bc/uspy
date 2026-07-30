@@ -5,6 +5,7 @@ Classes for defining shapes and regions on images.
 from __future__ import annotations
 from typing import Any, Sequence, Union, Optional
 from collections.abc import Iterable
+from functools import partial
 
 import numpy as np
 import matplotlib as mpl
@@ -15,6 +16,14 @@ from skimage.draw import ellipse as draw_ellipse, polygon as draw_polygon, recta
 from skimage.measure import profile_line
 
 import uspy.dataobject as do
+from uspy.dataobject.deferred import is_deferred
+
+
+def _apply_mask(full_mask: np.ndarray, arr: np.ndarray) -> np.ndarray:
+    """`np.ma.masked_array(arr, mask=~full_mask)`, as a module-level function bound to
+    `full_mask` via `functools.partial` (picklable, unlike a closure/lambda) so it can be
+    used with `DeferredArray.map` -- see `ROI.apply`."""
+    return np.ma.masked_array(arr, mask=~full_mask)
 
 
 class StyledObject:  # do.Loadable):
@@ -210,11 +219,20 @@ class ROI(StyledObject):
     ) -> Union[do.Image, np.ndarray]:
         """Apply the MaskLike to a Dataobject and either return the masked
         DataObject or the raw masked data."""
-        full_mask = self.pad_to(*obj.image.shape).astype(bool)
+        full_mask = self.pad_to(*obj.shape).astype(bool)
         if return_array:
             return np.ma.masked_array(obj.image, mask=~full_mask)
         result = obj.copy()
-        result.image = np.ma.masked_array(result.image, mask=~full_mask)
+        current = result._data["image"]  # pylint: disable=protected-access
+        fn = partial(_apply_mask, full_mask)
+        if is_deferred(current):
+            # Compose into a new DeferredArray instead of loading -- keeps a virtual
+            # element's mask application out-of-core (see `_apply_mask`'s docstring, and
+            # `LEEMStack.align()`'s per-element mask, which routes through here).
+            image = current.map(fn, shape=current._shape, dtype=current._dtype)  # pylint: disable=protected-access
+        else:
+            image = fn(current)
+        result._data["image"] = image  # pylint: disable=protected-access
         return result
 
     def pad_to(self, width: int, height: int) -> np.ndarray:

@@ -295,6 +295,101 @@ def test_stack_copy_of_virtual_stack_does_not_share_metadata_dicts(list1darrays)
     assert stack[0].some_meta != "changed-on-copy"
 
 
+def test_stack_slice_virtual_transition_does_not_affect_parent(list1darrays):
+    """Regression guard: a slice shares element objects with its parent (Python list-slice
+    semantics), but materializing the *slice* must not mutate -- and thus must not pin into
+    memory -- the parent's (still meant to be virtual) elements. Before this fix,
+    `_materialize_elements`/`_deconstruct` mutated shared elements in place, so a materialized
+    slice silently un-virtualized the parent's frames while `parent.virtual` kept reporting
+    `True`."""
+    parent = MinimalObjectStack(list1darrays, virtual=True)
+    sub = parent[:2]
+
+    assert sub[0] is parent[0]  # slicing is still a view, sharing elements
+    assert sub.virtual is True
+
+    sub.virtual = False
+
+    # The parent must stay fully virtual: neither its `virtual` flag nor its elements were
+    # touched by materializing the slice.
+    assert parent.virtual is True
+    assert all(element.is_virtual for element in parent.elements)
+    # The slice, in turn, no longer shares identity with the parent -- the transition rebuilt
+    # its elements rather than mutating the shared ones.
+    assert sub[0] is not parent[0]
+    assert not sub.virtual
+    assert not any(element.is_virtual for element in sub.elements)
+
+
+def test_stack_slice_defer_transition_does_not_affect_parent(list1darrays):
+    """Mirror of the above in the other direction: virtualizing a slice of an eager stack must
+    not re-defer (and thereby discard the resident data of) the parent's shared elements."""
+    parent = MinimalObjectStack(list1darrays, virtual=False)
+    sub = parent[:2]
+
+    assert sub[0] is parent[0]
+    assert sub.virtual is False
+
+    sub.virtual = True
+
+    assert parent.virtual is False
+    assert not any(element.is_virtual for element in parent.elements)
+    assert sub[0] is not parent[0]
+    assert sub.virtual is True
+    assert all(element.is_virtual for element in sub.elements)
+
+
+def test_stack_virtual_flag_is_derived_and_honest(list1darrays):
+    """`stack.virtual` is derived from the elements rather than a stored flag that could drift:
+    pinning a single element resident (via a direct `_data` write, which warns) must be
+    reflected immediately, without any explicit `stack.virtual = ...` call."""
+    stack = MinimalObjectStack(list1darrays, virtual=True)
+    assert stack.virtual is True
+
+    with pytest.warns(UserWarning, match="deferred data with a resident"):
+        stack[0].matrix = np.asarray(stack[0].matrix)
+
+    assert stack.virtual is False
+    assert not stack[0].is_virtual
+    assert all(element.is_virtual for element in stack.elements[1:])
+
+
+def test_stack_constructor_does_not_materialize_caller_objects(list1darrays):
+    """Building an eager stack directly from another (virtual) stack's elements must not
+    materialize those elements in place -- that would silently pin the source stack's data in
+    memory even though the source stack itself was never touched."""
+    virt = MinimalObjectStack(list1darrays, virtual=True)
+
+    eager = MinimalObjectStack(list(virt.elements))  # virtual=False (default)
+
+    assert eager.virtual is False
+    assert not any(element.is_virtual for element in eager.elements)
+    # The source stack's own elements must be untouched.
+    assert virt.virtual is True
+    assert all(element.is_virtual for element in virt.elements)
+    assert eager[0] is not virt[0]
+
+
+def test_stack_constructor_mixed_elements_end_fully_resident(list1darrays):
+    """A stack built directly from a mix of virtual and resident objects used to leave that
+    mix in place silently (no materialization, and -- if `virtual=True` was requested -- no
+    warning either, for a *partially* virtual input). Both requested-virtuality cases must now
+    end up fully resident, since the objects were "directly given" either way."""
+    objs = [MinimalObject(source) for source in list1darrays]
+    objs[0].defer()  # one element deferred, the rest resident: a genuine mix
+
+    with pytest.warns(UserWarning, match="won't be virtual"):
+        stack_requesting_virtual = MinimalObjectStack(objs, virtual=True)
+    assert stack_requesting_virtual.virtual is False
+    assert not any(element.is_virtual for element in stack_requesting_virtual.elements)
+
+    objs2 = [MinimalObject(source) for source in list1darrays]
+    objs2[0].defer()
+    stack_requesting_eager = MinimalObjectStack(objs2, virtual=False)
+    assert stack_requesting_eager.virtual is False
+    assert not any(element.is_virtual for element in stack_requesting_eager.elements)
+
+
 @pytest.mark.parametrize("virtual", [False, True])
 def test_stack_setattr(list1darrays, virtual):
     """A stack has no metadata of its own: a scalar set on the stack means "this value, for
@@ -662,6 +757,42 @@ def test_image_shape_resident_wins_over_stale_meta():
     img = Image(np.zeros((5, 7), dtype=np.float32))
     img.image = np.zeros((2, 3), dtype=np.float32)
     assert img.shape == (2, 3)
+
+
+### DataObject.__setattr__: warns when a resident write pins a still-deferred data key
+
+
+def test_setattr_warns_when_replacing_deferred_data_with_resident_array():
+    """Assigning a resident array onto a still-deferred `_data` key (`img.image = array`)
+    silently discards the DeferredArray handle and pins that element in memory for good, even
+    though a containing stack's `.virtual` flag won't reflect it -- see the "Memory: large
+    stacks" section of CLAUDE.md. This is the single chokepoint every such write funnels
+    through, regardless of which operation (warp/mask/filter/...) caused it."""
+    img = Image(np.zeros((2, 2), dtype=np.float32))
+    img._data["image"] = DeferredArray(lambda: np.ones((2, 2), dtype=np.float32))
+
+    with pytest.warns(UserWarning, match="deferred"):
+        img.image = np.zeros((3, 3), dtype=np.float32)
+
+    assert not img.is_virtual
+
+
+def test_setattr_does_not_warn_for_resident_to_resident_write(recwarn):
+    img = Image(np.zeros((2, 2), dtype=np.float32))
+    img.image = np.ones((2, 2), dtype=np.float32)
+    assert not [w for w in recwarn.list if issubclass(w.category, UserWarning)]
+
+
+def test_setattr_does_not_warn_when_assigning_a_deferred_value(recwarn):
+    """Composing onto a deferred element (`img._data["image"] = current.map(fn)`, the pattern
+    `LEEMImg.warp`/`ROI.apply`/`Image.filter` all use) must not itself warn -- only a
+    deferred-to-resident write should."""
+    img = Image(np.zeros((2, 2), dtype=np.float32))
+    img._data["image"] = DeferredArray(lambda: np.ones((2, 2), dtype=np.float32))
+
+    img._data["image"] = img._data["image"].map(lambda arr: arr * 2)
+    assert not [w for w in recwarn.list if issubclass(w.category, UserWarning)]
+    assert img.is_virtual
 
 
 def test_image_incompatibility_reason_names_both_shapes_without_loading():

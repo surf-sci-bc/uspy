@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Any, Union, Optional
 from collections.abc import Iterable
 from dataclasses import dataclass
+from functools import partial
 from numbers import Number
 from datetime import datetime
 import os
@@ -49,6 +50,18 @@ def _nan_to_num_zeroed(arr: np.ndarray) -> np.ndarray:
     """`np.nan_to_num(arr, posinf=0, neginf=0)`, as a module-level (picklable) function so it
     can be used with `DeferredArray.map` -- see `LEEMImg.normalize`."""
     return np.nan_to_num(arr, posinf=0, neginf=0)
+
+
+def _warp_perspective(warp_matrix: np.ndarray, arr: np.ndarray) -> np.ndarray:
+    """`cv.warpPerspective(arr, warp_matrix, ...)`, as a module-level function bound to
+    `warp_matrix` via `functools.partial` (picklable, unlike a closure/lambda) so it can be
+    used with `DeferredArray.map` -- see `LEEMImg.warp`."""
+    return cv.warpPerspective(
+        arr,
+        warp_matrix,
+        arr.shape[::-1],
+        flags=cv.INTER_LINEAR + cv.WARP_INVERSE_MAP,
+    )
 
 
 @dataclass(frozen=True)
@@ -216,19 +229,25 @@ class LEEMImg(Image):
         if warp_matrix is None:
             warp_matrix = self.warp_matrix
 
-        image = cv.warpPerspective(
-            self.image,
-            warp_matrix,
-            self.image.shape[::-1],
-            flags=cv.INTER_LINEAR + cv.WARP_INVERSE_MAP,
-        )
+        current = self._data["image"]  # pylint: disable=protected-access
+        fn = partial(_warp_perspective, warp_matrix)
+        if is_deferred(current):
+            # Compose into a new DeferredArray instead of loading -- this is what keeps
+            # `LEEMStack.align()` out-of-core on a virtual stack (see module docstring on
+            # `_warp_perspective`). The warp doesn't change shape/dtype, so both hints carry
+            # over from the pre-warp handle, straight from its own (already-known-or-not)
+            # cache rather than the possibly-load-triggering `.shape`/`dtype` properties.
+            image = current.map(fn, shape=current._shape, dtype=current._dtype)  # pylint: disable=protected-access
+        else:
+            image = fn(current)
+
         if inplace:
-            self.image = image
+            self._data["image"] = image  # pylint: disable=protected-access
             self.warp_matrix = warp_matrix
             return self
 
         result = self.copy()
-        result.image = image
+        result._data["image"] = image  # pylint: disable=protected-access
         result.warp_matrix = warp_matrix
         return result
 
@@ -274,7 +293,10 @@ class LEEMImg(Image):
             np.nan_to_num(result_image, copy=False, posinf=0, neginf=0)
 
         if inplace:
-            self.image = result.image
+            # Direct _data write (not `self.image = result.image`, which would materialize
+            # `result` and then pin the resident copy onto `self`) so a deferred `self` stays
+            # deferred, holding `result`'s composed DeferredArray instead.
+            self._data["image"] = result._data["image"]  # pylint: disable=protected-access
             self.mcp = mcp.source
             self.dark_counts = dark_counts
             return self
@@ -540,13 +562,21 @@ class LEEMStack(ImageStack):
         to interpolate, affected frames fall back to identity shift and a ``UserWarning``
         names them. The resulting warp matrices are applied via ``Image.warp()``.
 
+        On a virtual stack (``virtual=True``), the warp is composed onto each element's
+        deferred pixel data instead of being applied and stored -- the returned stack (or
+        ``self``, for ``inplace=True``) stays virtual, and every frame is re-warped from
+        ``source`` on each subsequent pixel read (the usual never-cached deferred trade-off;
+        see ``uspy.dataobject.deferred``).
+
         Parameters
         ----------
         inplace : bool, default False
             If 'True' the stack itself will be registered
-            If 'False' a copy of the stack will be registered (peak memory briefly ~2x
-            the stack's size, since the whole stack is deep-copied up front; prefer
-            'inplace=True' for a stack close to the memory limit)
+            If 'False' a copy of the stack will be registered. For an already-resident stack,
+            peak memory is briefly ~2x the stack's size, since the whole stack is deep-copied
+            up front (prefer 'inplace=True' for a stack close to the memory limit). For a
+            virtual stack this copy is free (deferred pixel data is never actually
+            duplicated) and the result stays virtual either way.
         mask : bool, np.ndarray or None, default True
             Mask that will be used during registration
 

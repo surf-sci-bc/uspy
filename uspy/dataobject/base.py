@@ -16,7 +16,13 @@ import numpy as np
 from tqdm import tqdm
 
 from uspy.serialize import Loadable
-from uspy.dataobject.deferred import DeferredArray, materialize, ReparsePixels, ReparseMeta
+from uspy.dataobject.deferred import (
+    DeferredArray,
+    is_deferred,
+    materialize,
+    ReparsePixels,
+    ReparseMeta,
+)
 
 __all__ = ["Loadable", "DataObject", "DataObjectStack"]
 
@@ -229,11 +235,8 @@ class DataObject(Loadable):
         return any(isinstance(v, DeferredArray) for v in self._data.values())
 
     def materialize(self) -> DataObject:
-        """Materialize every deferred `_data` value in place. Returns self.
+        """Materialize every deferred `_data` value in place. Returns self."""
 
-        Named `materialize`, not `load` -- `Loadable.load` is the classmethod file
-        deserializer (`LEEMImg.load(path)`); an instance method literally named `load` would
-        silently shadow it."""
         for key, value in list(self._data.items()):
             if isinstance(value, DeferredArray):
                 self._data[key] = value.load()
@@ -251,6 +254,28 @@ class DataObject(Loadable):
         for key in self._data_keys:
             self._data[key] = deferred[key]
         return self
+
+    def materialized(self) -> DataObject:
+        """Non-mutating counterpart of `materialize()`: returns `self` unchanged if nothing is
+        deferred, otherwise a *new* object with every deferred `_data` value loaded, built via
+        `_with_data` (no array deep-copy). Used by `DataObjectStack`'s `virtual` setter so a
+        virtual->eager transition never mutates an element that another stack (e.g. a slice)
+        might still be holding a reference to -- see `_materialize_elements`."""
+        if not self.is_virtual:
+            return self
+        return self._with_data(**{k: materialize(v) for k, v in self._data.items()})
+
+    def deferred(self) -> DataObject:
+        """Non-mutating counterpart of `defer()`: returns `self` unchanged if already fully
+        deferred, otherwise a *new* object whose `_data` values are deferred handles re-derived
+        from `source` (via `parse_deferred`), same discard-on-reload caveat as `defer()`. Used by
+        `DataObjectStack`'s `virtual` setter for the same reason as `materialized()`."""
+        if self.is_virtual:
+            return self
+        if self._source is None:
+            raise ValueError(f"Can't defer a {type(self).__name__} with no source to reload from.")
+        handles = self.parse_deferred(self._source)
+        return self._with_data(**{k: handles[k] for k in self._data_keys})
 
     def copy(self) -> DataObject:
         """Return a deep copy."""
@@ -341,6 +366,26 @@ class DataObject(Loadable):
             # raise, if read-only) instead of being silently swallowed into _meta below.
             super().__setattr__(attr, value)
         elif attr in self._data:
+            if is_deferred(self._data[attr]) and not is_deferred(value):
+                # A virtual element's whole memory-boundedness rests on `_data[attr]` staying
+                # a DeferredArray -- replacing it here with a resident array pins this one
+                # element's data in memory for good. A containing stack's `virtual` property
+                # is derived from its elements, so it *will* notice (flip to False) the moment
+                # this element is checked -- but that's still one element's memory pinned for
+                # good, and (if the element is shared, e.g. via a stack slice) may force an
+                # unrelated stack to report non-virtual too. Compose onto the deferred value
+                # instead (`DeferredArray.map`/arithmetic; see `LEEMImg.warp`/`LEEMImg.normalize`)
+                # so it survives as a new DeferredArray.
+                warnings.warn(
+                    UserWarning(
+                        f"Assigning a resident array to '{attr}' replaces this element's "
+                        "deferred data with a resident one, permanently pinning it in memory "
+                        "-- any stack containing this element (directly or via a slice) will "
+                        "report virtual=False from now on. Compose onto the deferred value "
+                        "instead (DeferredArray.map(fn) or arithmetic) to keep it out-of-core "
+                        "-- see LEEMImg.warp/LEEMImg.normalize."
+                    )
+                )
             self._data[attr] = value
         else:
             self._meta[attr] = value
@@ -436,7 +481,8 @@ class DataObjectStack(Loadable):
     _type = DataObject
 
     def __init__(self, source: Union[str, Iterable], virtual: bool = False) -> None:
-        self._virtual = virtual
+        # `virtual` is derived from the elements (see the `virtual` property below), not
+        # stored -- there is no `self._virtual` to set here.
         # An empty list is a deliberate, unsupported request to build a stack out of
         # nothing; checked before the isinstance/source[0] probe below, which would
         # otherwise raise a bare IndexError for `source == []`.
@@ -460,16 +506,19 @@ class DataObjectStack(Loadable):
                         "Stack won't be virtual (data objects were directly given)"
                     )
                 )
-                self._virtual = False
-            elif not virtual and objects_are_virtual:
+                # Materialize (into new objects, never mutating the caller's own) any element
+                # that's still deferred -- a no-op for one that's already resident. Covers a
+                # mix of virtual/resident objects too, which used to leave a silent mix behind.
+                source = [obj.materialized() for obj in source]
+            elif not virtual:
                 # Keep the invariant that a non-virtual stack's elements are all resident:
-                # materialize rather than silently carry deferred elements under a `virtual`
-                # flag that says otherwise.
-                for obj in source:
-                    obj.materialize()
-                self._virtual = False
-            else:
-                self._virtual = objects_are_virtual
+                # materialize rather than silently carry a deferred (or mixed) set of objects
+                # under a `virtual` flag that says otherwise. Same materialized() no-op logic
+                # as above -- this is the only thing enforcing the invariant now that `virtual`
+                # is derived from the elements instead of a stored flag.
+                source = [obj.materialized() for obj in source]
+            # else: virtual requested and every object already virtual -- nothing to do.
+
             # if stack is created from objects, all objects have to be the same
             for obj in source[1:]:
                 if not source[0].is_compatible(obj):
@@ -480,7 +529,7 @@ class DataObjectStack(Loadable):
             self._elements = list(source)
         else:
             sources = self._split_source(source)
-            if self.virtual:
+            if virtual:
                 self._elements = self._construct_virtual(sources)
             else:
                 self._elements = self._construct(sources)
@@ -521,23 +570,28 @@ class DataObjectStack(Loadable):
         return [self._single_construct(source, defer=True) for source in sources]
 
     def _materialize_elements(self) -> None:
-        """Reification path for the `virtual` setter: materialize every (already-built)
-        element in place, after checking they're actually compatible -- a virtual stack never
-        checked this at construction (see `_construct_virtual`)."""
+        """Reification path for the `virtual` setter: rebind `self._elements` to freshly
+        materialized copies (`DataObject.materialized()`), after checking they're actually
+        compatible -- a virtual stack never checked this at construction (see
+        `_construct_virtual`). Rebinding rather than mutating each element in place matters
+        because elements may be shared with another stack (e.g. a slice, see `__getitem__`):
+        mutating them here would silently pin that other stack's data in memory too, behind
+        its back."""
         self.check_compatible()
-        for element in self._elements:
-            element.materialize()
+        self._elements = [element.materialized() for element in self._elements]
 
     def _deconstruct(self) -> None:
-        """Defer every element in place, so its data is re-derived from `source` on next
-        access instead of staying resident. Note: any in-memory edit to an element's data that
-        isn't reflected at `source` is discarded by this -- the same thing that happened when
-        a virtual stack's elements were discarded outright and replaced by bare sources."""
+        """Defer path for the `virtual` setter: rebind `self._elements` to freshly deferred
+        copies (`DataObject.deferred()`), so data is re-derived from `source` on next access
+        instead of staying resident. Note: any in-memory edit to an element's data that isn't
+        reflected at `source` is discarded by this -- the same thing that happened when a
+        virtual stack's elements were discarded outright and replaced by bare sources. As in
+        `_materialize_elements`, rebinding (not mutating in place) keeps this from reaching
+        into another stack that happens to share these elements."""
         sources = [element.source for element in self._elements]
         if None in sources:
             raise ValueError("Can't virtualize stack without source information.")
-        for element in self._elements:
-            element.defer()
+        self._elements = [element.deferred() for element in self._elements]
 
     def _single_construct(self, source: Any, defer: bool = False) -> DataObject:
         """Construct a single DataObject, resident (`defer=False`) or deferred (`defer=True`)."""
@@ -582,18 +636,21 @@ class DataObjectStack(Loadable):
 
     @property
     def virtual(self) -> bool:
-        """If a data stack is virtual, it does only load the data on demand."""
-        return self._virtual
+        """If a data stack is virtual, it only loads data on demand. Derived from the elements
+        (`all(element.is_virtual for element in self._elements)`) rather than a stored flag, so
+        it can never misreport: any element pinned resident behind the stack's back (e.g. by
+        sharing elements with a slice that got materialized, or by `img.image = some_array`)
+        immediately shows up here instead of being silently out of sync."""
+        return all(element.is_virtual for element in self.__dict__.get("_elements", ()))
 
     @virtual.setter
     def virtual(self, value: bool) -> None:
-        if self._virtual == value:
+        if self.virtual == value:
             return
         if value:
             self._deconstruct()
         else:
             self._materialize_elements()
-        self._virtual = value
 
     def copy(self, virtual: Optional[bool] = None):
         """Returns a deepcopy."""

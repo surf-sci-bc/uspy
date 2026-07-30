@@ -238,11 +238,21 @@ class DeferredArray:
 
     ### composition
 
-    def map(self, fn: Callable[[np.ndarray], np.ndarray]) -> "DeferredArray":
+    def map(
+        self,
+        fn: Callable[[np.ndarray], np.ndarray],
+        shape: Optional[tuple] = None,
+        dtype: Optional[Any] = None,
+    ) -> "DeferredArray":
         """Return a new DeferredArray applying `fn` on load; does not load now. `fn` must be
-        picklable (a module-level function, not a lambda/closure) if the result needs to
-        survive a pickle without materializing."""
-        return DeferredArray(MappedArray(self, fn))
+        picklable (a module-level function, not a lambda/closure -- `functools.partial` around
+        one is fine) if the result needs to survive a pickle without materializing.
+
+        `shape`/`dtype` default to unknown: a mapped function may change either, so callers
+        that know `fn` preserves them (e.g. a same-size warp) should pass the *already-known*
+        `self._shape`/`self._dtype` through explicitly -- never the `.shape`/`.dtype`
+        properties, which could themselves force a load to answer."""
+        return DeferredArray(MappedArray(self, fn), shape=shape, dtype=dtype)
 
     def _binop(self, op_name: str, other: Any, reflect: bool = False) -> "DeferredArray":
         if not isinstance(other, (Number, np.ndarray, DeferredArray)):
