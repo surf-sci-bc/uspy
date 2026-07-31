@@ -355,7 +355,7 @@ class ImageStack(DataObjectStack):
 
         Examples
         --------
-        >>> stack = ImageStack("testdata/test_stack_IV_RuO2_normed_aligned_80-140.tif")[0:60]
+        >>> stack = ImageStack("testdata/bremen/test_stack_IV_RuO2_normed_aligned_80-140.tif")[0:60]
         >>> len(stack)
         60
         >>> avg_stack = stack.average(4)

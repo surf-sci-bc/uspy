@@ -10,7 +10,7 @@ import numpy as np
 from uspy.leem import cluster
 from uspy.leem import base
 
-from .conftest import TESTDATA_DIR
+from .conftest import TESTDATA_DIR, RUO2_STACK_TIF
 
 
 def main():
@@ -89,7 +89,7 @@ def pendry_stack():
         stack = base.LEEMStack.load(cache_fname)
         loaded = True
     except FileNotFoundError:
-        stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_RuO2_normed_aligned_80-140.tif")
+        stack = base.LEEMStack(RUO2_STACK_TIF)
         stack.energy = np.linspace(3.0, 50.0, len(stack))
 
     X, _, _ = cluster.stack2vectors(stack, mask_outer=0.2) # cut away 20% on every side
@@ -118,14 +118,15 @@ def test_pca_pendry(pendry_stack, n_components):
     assert W.shape == (pendry_stack.pendry.shape[0], n_components)
 
 @pytest.mark.parametrize("algorithm", ["pca"])#, "nmf"])
-def test_pca_full(short_stack, algorithm):
+def test_pca_full(short_stack, algorithm, tmp_path):
     X, _, _ = cluster.stack2vectors(short_stack, mask_outer=0.2)
     trafo, _, model = cluster.component_analysis(
         X, algorithm=algorithm, n_components=7
     )
     W = trafo(X)
-    cluster.save_model(model, TESTDATA_DIR + "pca.model")
-    _, inv_trafo, _ = cluster.load_pca_model(TESTDATA_DIR + "pca.model")
+    model_fname = str(tmp_path / "pca.model")
+    cluster.save_model(model, model_fname)
+    _, inv_trafo, _ = cluster.load_pca_model(model_fname)
     X2 = inv_trafo(W)
     assert X.shape == X2.shape
 

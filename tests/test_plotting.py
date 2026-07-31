@@ -19,9 +19,9 @@ from uspy.leem import base
 from uspy.leem import plotting as leem_plotting
 from uspy.roi import ROI
 
-from .conftest import TESTDATA_DIR
+from .conftest import ELETTRA_DAT_FNAME, RUO2_STACK_DIR
 
-ELETTRA_DAT = TESTDATA_DIR + "elettra.dat"
+ELETTRA_DAT = ELETTRA_DAT_FNAME
 
 
 class _FakeWriter:
@@ -50,13 +50,13 @@ def test_make_video_mask_is_actually_applied_for_a_path_source(tmp_path, monkeyp
     monkeypatch.setattr(base_plotting.skvideo.io, "FFmpegWriter", lambda *a, **kw: fake_writer)
     monkeypatch.setattr(base_plotting, "Video", lambda ofile: ofile)
 
-    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_RuO2", virtual=True)
+    stack = base.LEEMStack(RUO2_STACK_DIR, virtual=True)
     height, width = stack[0].height, stack[0].width
     mask = ROI.circle(x0=width // 4, y0=height // 4, radius=min(height, width) // 8)
     mask_array = mask.pad_to(height, width)
 
     # Ground truth: the masked min/max across the (still eager, untouched) source stack.
-    eager = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_RuO2")
+    eager = base.LEEMStack(RUO2_STACK_DIR)
     expected_c0 = min(np.ma.min(np.ma.array(img.image, mask=~mask_array)) for img in eager)
     expected_c1 = max(np.ma.max(np.ma.array(img.image, mask=~mask_array)) for img in eager)
 
@@ -81,7 +81,7 @@ def test_make_video_leaves_a_virtual_stack_virtual(tmp_path, monkeypatch):
 
     height, width = 0, 0
     for use_mask in (False, True):
-        stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_RuO2", virtual=True)
+        stack = base.LEEMStack(RUO2_STACK_DIR, virtual=True)
         height, width = stack[0].height, stack[0].width
         mask = (
             ROI.circle(x0=width // 4, y0=height // 4, radius=min(height, width) // 8)

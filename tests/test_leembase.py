@@ -19,12 +19,15 @@ from uspy.roi import ROI
 
 from .conftest import (
     MCP_IMG_FNAME,
+    BREMEN_IMG_FNAME,
+    BREMEN2_IMG_FNAME,
+    GCU_STACK_DIR,
+    RUO2_STACK_DIR,
     dark_counts,
     same_or_nan,
     IMG_FNAMES_COMPATIBLE,
     STACK_FNAMES,
     STACK_INCOMPATIBLE_IMG_FNAME,
-    TESTDATA_DIR,
     single_stack,
 )
 
@@ -152,36 +155,42 @@ def test_leemstack_glob_can_virtualize(tiff_frame_stack):
     assert not stack.virtual
 
 
-def test_leemstack_mixed_shape_tiff_glob_raises(tiff_stack_glob):
-    # testdata/tiff_stack/ deliberately contains frames of two different shapes -- the
-    # original bug report. Before the fix, this silently loaded 7 frames with several of
-    # them holding another file's pixels reshaped into the wrong dimensions.
+def test_leemstack_tiff_glob_loads(tiff_stack_glob):
+    # testdata/bremen/tiff_stack/ holds real per-frame LEED ".tiff" exports, all one shape
+    # (600, 624) -- a plain smoke test that the real-world fixture still loads as one stack.
+    stack = base.LEEMStack(tiff_stack_glob)
+    assert len(stack) == 3
+    assert all(element.image.shape == (600, 624) for element in stack)
+
+
+def test_leemstack_mixed_shape_tiff_glob_raises(mixed_shape_tiff_stack):
+    # The original bug report: a folder/glob of per-frame ".tiff" files with two different
+    # pixel shapes. Before the fix, this silently loaded all frames with several of them
+    # holding another file's pixels reshaped into the wrong dimensions.
     with pytest.raises(ValueError, match=r"(?i)shape|compatible"):
-        base.LEEMStack(tiff_stack_glob)
+        base.LEEMStack(mixed_shape_tiff_stack["glob"])
 
 
-def test_leemstack_mixed_shape_tiff_frames_load_correctly_when_selected(tiff_stack_glob):
-    import glob as glob_mod
-    import tifffile
-
-    fnames = sorted(glob_mod.glob(tiff_stack_glob))
-    shapes = {f: tifffile.imread(f).shape for f in fnames}
-    reference_shape = shapes[fnames[0]]
-    same_shape = [f for f in fnames if shapes[f] == reference_shape]
+def test_leemstack_mixed_shape_tiff_frames_load_correctly_when_selected(mixed_shape_tiff_stack):
+    paths = mixed_shape_tiff_stack["paths"]
+    arrays = mixed_shape_tiff_stack["arrays"]
+    shapes = mixed_shape_tiff_stack["shapes"]
+    reference_shape = shapes[0]
+    same_shape = [p for p, s in zip(paths, shapes) if s == reference_shape]
     assert len(same_shape) >= 2, "fixture must contain multiple same-shape frames"
 
     stack = LEEMStack(same_shape)
     for fname, element in zip(same_shape, stack):
-        expected = tifffile.imread(fname)
+        expected = arrays[paths.index(fname)]
         assert element.image.shape == expected.shape
         assert_array_equal(element.image, expected)
 
     # Guard the corruption mechanism itself: no loaded frame should equal a *different*
     # shape's data reshaped into the reference shape.
-    other_shape_files = [f for f in fnames if shapes[f] != reference_shape]
+    other_arrays = [a for a, s in zip(arrays, shapes) if s != reference_shape]
     for element in stack:
-        for other in other_shape_files:
-            reshaped = tifffile.imread(other).reshape(reference_shape)
+        for other in other_arrays:
+            reshaped = other.reshape(reference_shape)
             assert not np.array_equal(element.image, reshaped)
 
 
@@ -207,7 +216,7 @@ def test_img_attr_types(img):
 
 @pytest.mark.parametrize("inplace", [True, False])
 def test_img_normalize(inplace, normed_img):
-    img = base.LEEMImg(TESTDATA_DIR + "bremen.dat")
+    img = base.LEEMImg(BREMEN_IMG_FNAME)
     ref = img
     mcp = MCP_IMG_FNAME
     if inplace:
@@ -221,7 +230,7 @@ def test_img_normalize(inplace, normed_img):
 @pytest.mark.parametrize("inplace", [True, False])
 @pytest.mark.parametrize("copy", [True, False])
 def test_stack_normalize(inplace, copy, normed_img):
-    img = base.LEEMImg(TESTDATA_DIR + "bremen.dat")
+    img = base.LEEMImg(BREMEN_IMG_FNAME)
     if copy:
         stack = base.LEEMStack([img.copy(), img.copy()])
     else:
@@ -289,7 +298,7 @@ def test_stack_align_outlier_rejection(monkeypatch):
     nan, and recovered via spline interpolation instead of leaking into the final
     accumulated warp matrices -- see base.py:485-514."""
     n = 15
-    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")[0:n]
+    stack = base.LEEMStack(GCU_STACK_DIR)[0:n]
 
     rng = np.random.default_rng(0)
     raw_dx = rng.normal(0, 1, n)
@@ -335,7 +344,7 @@ def test_stack_align_template_recovers_shifts():
     Regression test for the double-composition bug (inv(prev) @ current, then
     additionally cumulatively multiplied by the sequential-mode loop)."""
     n = 10
-    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")[0:n]
+    stack = base.LEEMStack(GCU_STACK_DIR)[0:n]
     template = stack[0].copy()
 
     rng = np.random.default_rng(1)
@@ -371,13 +380,13 @@ def test_stack_align_template_recovers_shifts():
 def test_stack_align_template_out_of_range():
     """An out-of-range template index should raise a clear error instead of being
     swallowed by a bare except and passed through to OpenCV as a raw int."""
-    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")[0:5]
+    stack = base.LEEMStack(GCU_STACK_DIR)[0:5]
     with pytest.raises(IndexError):
         stack.align(template=999, mask=False)
 
 
 def test_stack_align_template_bad_type():
-    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")[0:5]
+    stack = base.LEEMStack(GCU_STACK_DIR)[0:5]
     with pytest.raises(TypeError):
         stack.align(template="not a template", mask=False)
 
@@ -386,7 +395,7 @@ def test_stack_align_single_frame():
     """A 1-frame stack has nothing to register against -- align() should return it
     unchanged with an identity warp instead of crashing (a 1-point array previously
     reached pandas' spline interpolation, which requires >= 2 points)."""
-    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")[0:1]
+    stack = base.LEEMStack(GCU_STACK_DIR)[0:1]
     original = stack[0].image.copy()
     aligned = stack.align(mask=False)
     assert len(aligned) == 1
@@ -400,7 +409,7 @@ def test_stack_align_small_stack(n):
     former hard-coded order=3) should still align without raising, using real ECC
     registration (typically no gaps at all -- see test_stack_align_small_stack_with_gap
     for the case that actually forces < 4 valid points)."""
-    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")[0:n]
+    stack = base.LEEMStack(GCU_STACK_DIR)[0:n]
     aligned = stack.align(mask=False)
     assert aligned.warp_matrix.shape == (n, 3, 3)
     assert not np.isnan(aligned.warp_matrix).any()
@@ -412,7 +421,7 @@ def test_stack_align_small_stack_with_gap(monkeypatch):
     hard-coded order=3 needs >= 4 points and raises 'error (m>k)'. The order must
     adapt to the number of valid points instead."""
     n = 3
-    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")[0:n]
+    stack = base.LEEMStack(GCU_STACK_DIR)[0:n]
 
     def fake_find_warp_matrix(self, template, **kwargs):
         # First pairwise call (frame 1 vs frame 0) fails; frame 2 vs frame 1 succeeds.
@@ -437,7 +446,7 @@ def test_stack_align_boundary_failure_extrapolated(monkeypatch):
     trivial (never-computed) identity, so a genuine *leading* failure can't occur.
     Boundary frames should now be extrapolated instead of leaking NaN."""
     n = 10
-    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")[0:n]
+    stack = base.LEEMStack(GCU_STACK_DIR)[0:n]
 
     rng = np.random.default_rng(2)
     raw_dx = rng.normal(0, 1, n)
@@ -468,7 +477,7 @@ def test_stack_align_recoverable_failure_prints_not_warns(monkeypatch, capfd, re
     expected path (like statistical outlier rejection) -- it should be printed, not
     surfaced as a UserWarning that would clutter notebooks."""
     n = 10
-    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")[0:n]
+    stack = base.LEEMStack(GCU_STACK_DIR)[0:n]
 
     rng = np.random.default_rng(3)
     raw_dx = rng.normal(0, 1, n)
@@ -503,7 +512,7 @@ def test_stack_align_sequential_all_fail_falls_back_to_identity(monkeypatch):
     interpolated, so the rest should warn and fall back to identity rather than
     crash or silently propagate nan."""
     n = 5
-    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")[0:n]
+    stack = base.LEEMStack(GCU_STACK_DIR)[0:n]
 
     def always_fail(self, template, **kwargs):
         raise RuntimeError("simulated ECC failure")
@@ -524,7 +533,7 @@ def test_stack_align_template_all_fail_returns_zeros(monkeypatch):
     valid point at all, and the whole stack should fall back to identity with a
     warning rather than crash or produce all-nan warp matrices."""
     n = 5
-    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")[0:n]
+    stack = base.LEEMStack(GCU_STACK_DIR)[0:n]
 
     def always_fail(self, template, **kwargs):
         raise RuntimeError("simulated ECC failure")
@@ -541,7 +550,7 @@ def test_stack_align_template_all_fail_returns_zeros(monkeypatch):
 def test_stack_align_does_not_modify_source():
     """align(inplace=False) (the default) must never mutate the original stack's
     image data -- project rule: never modify source data."""
-    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")[0:5]
+    stack = base.LEEMStack(GCU_STACK_DIR)[0:5]
     originals = [img.image.copy() for img in stack]
     original_warp_matrices = [img.warp_matrix.copy() for img in stack]
 
@@ -558,7 +567,7 @@ def test_leemstack_zero_width_slice_raises():
     __init__ can build, so LEEMStack.__getitem__ (which re-enters __init__ for a slice) must
     surface a clear ValueError for a zero-width slice instead of the opaque IndexError it used
     to raise via DataObjectStack.__init__'s unchecked `source[0]`."""
-    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")[0:5]
+    stack = base.LEEMStack(GCU_STACK_DIR)[0:5]
     with pytest.raises(ValueError):
         stack[0:0]
     with pytest.raises(ValueError):
@@ -569,7 +578,7 @@ def test_leemstack_all_false_boolean_mask_raises():
     """LEEMStack's boolean-mask __getitem__ (unlike plain ImageStack, which has none) can
     itself select zero elements -- must raise the same clear ValueError as a zero-width slice,
     not IndexError."""
-    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")[0:5]
+    stack = base.LEEMStack(GCU_STACK_DIR)[0:5]
     mask = np.zeros(len(stack), dtype=bool)
     with pytest.raises(ValueError):
         stack[mask]
@@ -581,7 +590,7 @@ def test_stack_align_empty_raises():
     *constructed* (see test_leemstack_zero_width_slice_raises above), but it can still *arise*
     from manipulating an existing one -- del stack[:] doesn't go through __init__, so that route
     stays open and is what this test exercises."""
-    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")[0:5]
+    stack = base.LEEMStack(GCU_STACK_DIR)[0:5]
     del stack[:]
     assert len(stack) == 0
     with pytest.raises(ValueError, match="empty"):
@@ -782,7 +791,7 @@ def test_resolve_shifts_mad_zero_outlier_detected(capfd):
 
 
 def test_img_normalize_shape_mismatch():
-    img = base.LEEMImg(TESTDATA_DIR + "bremen.dat")
+    img = base.LEEMImg(BREMEN_IMG_FNAME)
     bad_mcp = base.LEEMImg(np.ones((5, 5), dtype=np.float32))
     assert not img.is_compatible(bad_mcp)
     with pytest.raises(ValueError):
@@ -790,7 +799,7 @@ def test_img_normalize_shape_mismatch():
 
 
 def test_img_normalize_no_nan_or_inf():
-    img = base.LEEMImg(TESTDATA_DIR + "bremen.dat")
+    img = base.LEEMImg(BREMEN_IMG_FNAME)
     mcp = base.LEEMImg(MCP_IMG_FNAME)
     result = img.normalize(mcp=mcp, dark_counts=100)
     assert not np.isnan(result.image).any()
@@ -801,7 +810,7 @@ def test_img_normalize_no_nan_or_inf():
 
 
 def test_img_normalize_division_by_zero_becomes_zero():
-    img = base.LEEMImg(TESTDATA_DIR + "bremen.dat")
+    img = base.LEEMImg(BREMEN_IMG_FNAME)
     zero_mcp = base.LEEMImg(np.zeros_like(img.image))
     with np.errstate(divide="ignore", invalid="ignore"):
         result = img.normalize(mcp=zero_mcp, dark_counts=0)
@@ -815,7 +824,7 @@ def test_img_normalize_division_by_zero_becomes_zero_when_deferred():
     for a deferred (composed) image is a *freshly materialized copy* -- mutating that copy
     with `copy=False` fixed nothing on the object actually returned, so the correction was
     silently lost whenever the image was still virtual at normalize() time."""
-    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_RuO2", virtual=True)
+    stack = base.LEEMStack(RUO2_STACK_DIR, virtual=True)
     img = stack[0]
     assert img.is_virtual
     zero_mcp = base.LEEMImg(np.zeros_like(img.image))
@@ -827,7 +836,7 @@ def test_img_normalize_division_by_zero_becomes_zero_when_deferred():
 
 
 def test_img_normalize_stores_mcp_source_and_dark_counts():
-    img = base.LEEMImg(TESTDATA_DIR + "bremen.dat")
+    img = base.LEEMImg(BREMEN_IMG_FNAME)
     mcp = base.LEEMImg(MCP_IMG_FNAME)
     result = img.normalize(mcp=mcp, dark_counts=100)
     assert result.mcp == mcp.source
@@ -838,7 +847,7 @@ def test_stack_normalize_skips_already_normalized_image():
     """If the same image (by identity) appears twice in a stack and is already
     normalized against the given mcp, it should not be normalized a second time --
     base.py:569."""
-    img = base.LEEMImg(TESTDATA_DIR + "bremen.dat")
+    img = base.LEEMImg(BREMEN_IMG_FNAME)
     mcp = base.LEEMImg(MCP_IMG_FNAME)
     stack = base.LEEMStack([img, img])
     normed_once = stack.normalize(mcp=mcp, dark_counts=100, inplace=True)
@@ -863,7 +872,7 @@ def test_stack_time_origin_shared_with_images():
     object with the LEEMImgs it builds (base.py:354-356, LEEMImg.__init__ reuses an
     existing TimeOrigin instance rather than rewrapping it), so mutating
     stack.time_origin is visible on every element."""
-    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")
+    stack = base.LEEMStack(GCU_STACK_DIR)
     assert stack[0]._time_origin is stack._time_origin
     stack.time_origin = 100.0
     assert stack[0].time_origin == 100.0
@@ -875,7 +884,7 @@ def test_stack_time_origin_shared_with_images():
 
 
 def test_stack_time_origin_defaults_to_first_timestamp():
-    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")
+    stack = base.LEEMStack(GCU_STACK_DIR)
     assert same_or_nan(stack.time_origin, stack[0].timestamp)
 
 
@@ -885,7 +894,7 @@ def test_stack_getitem_slice_shares_time_origin_identity(virtual):
     instead of rewrapping it, so a sliced stack shares the *same* TimeOrigin object with
     its parent (not just an equal copied value) -- mutating either afterwards is visible
     on both, and on the (reused, not reconstructed) elements too."""
-    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu", virtual=virtual)
+    stack = base.LEEMStack(GCU_STACK_DIR, virtual=virtual)
     stack.time_origin = 123.0
     sliced = stack[1:4]
     assert sliced._time_origin is stack._time_origin
@@ -906,8 +915,8 @@ def test_stack_getitem_slice_shares_time_origin_identity(virtual):
 
 
 def test_stack_extend_warns_on_time_origin_mismatch():
-    stack_a = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")
-    stack_b = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")
+    stack_a = base.LEEMStack(GCU_STACK_DIR)
+    stack_b = base.LEEMStack(GCU_STACK_DIR)
     stack_b.time_origin = stack_a.time_origin + 1000.0
 
     with pytest.warns(UserWarning, match="time origin"):
@@ -915,8 +924,8 @@ def test_stack_extend_warns_on_time_origin_mismatch():
 
 
 def test_stack_extend_no_warning_when_origins_match():
-    stack_a = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")
-    stack_b = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")
+    stack_a = base.LEEMStack(GCU_STACK_DIR)
+    stack_b = base.LEEMStack(GCU_STACK_DIR)
     assert stack_a.time_origin == stack_b.time_origin
 
     with warnings.catch_warnings():
@@ -925,8 +934,8 @@ def test_stack_extend_no_warning_when_origins_match():
 
 
 def test_stack_extend_rebinds_appended_elements_time_origin():
-    stack_a = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")
-    stack_b = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")
+    stack_a = base.LEEMStack(GCU_STACK_DIR)
+    stack_b = base.LEEMStack(GCU_STACK_DIR)
     stack_b.time_origin = stack_a.time_origin + 1000.0
     n_a = len(stack_a)
 
@@ -946,8 +955,8 @@ def test_stack_extend_rebinds_appended_elements_time_origin():
 
 @pytest.mark.parametrize("op", ["add", "iadd"])
 def test_stack_add_and_iadd_operators_rebind_time_origin(op):
-    stack_a = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")
-    stack_b = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")
+    stack_a = base.LEEMStack(GCU_STACK_DIR)
+    stack_b = base.LEEMStack(GCU_STACK_DIR)
     stack_b.time_origin = stack_a.time_origin + 1000.0
     n_a = len(stack_a)
 
@@ -963,8 +972,8 @@ def test_stack_extend_virtual_self_nonvirtual_other_no_crash():
     """Regression test: DataObjectStack.extend previously left `elements` unassigned (an
     UnboundLocalError) when self was virtual and other was not; it should fall back to
     other's element sources, same as defer() does."""
-    stack_a = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu", virtual=True)
-    stack_b = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu", virtual=False)
+    stack_a = base.LEEMStack(GCU_STACK_DIR, virtual=True)
+    stack_b = base.LEEMStack(GCU_STACK_DIR, virtual=False)
     n_a = len(stack_a)
 
     stack_a.extend(stack_b)
@@ -982,7 +991,7 @@ def test_img_isotime_nan_for_missing_timestamp():
 
 
 def test_img_pressure_fallback():
-    img = base.LEEMImg(TESTDATA_DIR + "bremen.dat")
+    img = base.LEEMImg(BREMEN_IMG_FNAME)
     img._meta["pressure"] = np.nan
     img._meta["pressure1"] = np.nan
     img._meta["pressure2"] = 5.5
@@ -990,14 +999,14 @@ def test_img_pressure_fallback():
 
 
 def test_img_pressure_all_nan():
-    img = base.LEEMImg(TESTDATA_DIR + "bremen.dat")
+    img = base.LEEMImg(BREMEN_IMG_FNAME)
     for key in ("pressure", "pressure1", "pressure2", "MCH", "PCH"):
         img._meta[key] = np.nan
     assert np.isnan(img.pressure)
 
 
 def test_img_pressure_setter():
-    img = base.LEEMImg(TESTDATA_DIR + "bremen.dat")
+    img = base.LEEMImg(BREMEN_IMG_FNAME)
     img.pressure = 42.0
     assert img._meta["pressure"] == 42.0
     assert img.pressure == 42.0
@@ -1007,7 +1016,7 @@ def test_img_time_origin_setter_runs_not_silently_swallowed():
     """Before DataObject.__setattr__ was fixed to honor property setters,
     `img.time_origin = x` silently wrote `_meta["time_origin"]` (never read back, since the
     property getter always wins) instead of running `time_origin`'s setter."""
-    img = base.LEEMImg(TESTDATA_DIR + "bremen.dat")
+    img = base.LEEMImg(BREMEN_IMG_FNAME)
     img.time_origin = 555.0
     assert img.time_origin == 555.0
     assert "time_origin" not in img._meta
@@ -1016,7 +1025,7 @@ def test_img_time_origin_setter_runs_not_silently_swallowed():
 def test_img_binding_energy_setattr_raises():
     """binding_energy is a read-only property (derived from photon_energy, energy, and
     energy_offset) -- assigning to it must raise, not silently write a dead _meta entry."""
-    img = base.LEEMImg(TESTDATA_DIR + "bremen.dat")
+    img = base.LEEMImg(BREMEN_IMG_FNAME)
     with pytest.raises(AttributeError):
         img.binding_energy = 5.0
 
@@ -1025,7 +1034,7 @@ def test_stack_energy_offset_scalar_broadcasts_and_shifts_binding_energy():
     """The reported case: a scalar energy_offset set on a stack must apply to every element,
     since a stack has no metadata of its own -- and it must actually affect the derived
     binding_energy on every element by exactly that amount."""
-    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")
+    stack = base.LEEMStack(GCU_STACK_DIR)
     stack.photon_energy = 100.0  # binding_energy needs a real photon_energy to be meaningful
     before = stack.binding_energy.copy()
 
@@ -1038,7 +1047,7 @@ def test_stack_energy_offset_scalar_broadcasts_and_shifts_binding_energy():
 
 
 def test_stack_binding_energy_setattr_raises():
-    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")
+    stack = base.LEEMStack(GCU_STACK_DIR)
     with pytest.raises(AttributeError):
         stack.binding_energy = 5.0
 
@@ -1047,7 +1056,7 @@ def test_stack_binding_energy_setattr_raises():
 
 
 def test_img_warp_inplace_vs_copy():
-    img = base.LEEMImg(TESTDATA_DIR + "bremen.dat")
+    img = base.LEEMImg(BREMEN_IMG_FNAME)
     identity = np.eye(3)
     warp = np.array([[1, 0, 3], [0, 1, -2], [0, 0, 1]], dtype=np.float64)
 
@@ -1063,7 +1072,7 @@ def test_img_warp_inplace_vs_copy():
 
 
 def test_img_unwarped_roundtrip():
-    img = base.LEEMImg(TESTDATA_DIR + "bremen.dat")
+    img = base.LEEMImg(BREMEN_IMG_FNAME)
     warp = np.array([[1, 0, 4], [0, 1, -3], [0, 0, 1]], dtype=np.float64)
     warped = img.warp(warp, inplace=False)
     roundtripped = warped.unwarped
@@ -1080,7 +1089,7 @@ def test_img_unwarped_roundtrip():
 
 
 def test_img_constructor_from_image_copies_and_clears_source():
-    img = base.LEEMImg(TESTDATA_DIR + "bremen.dat")
+    img = base.LEEMImg(BREMEN_IMG_FNAME)
     img2 = base.LEEMImg(img)
     assert img2.source is None
     assert_array_equal(img2.image, img.image)
@@ -1098,7 +1107,7 @@ def test_img_temperature_sanitized_above_3000(monkeypatch):
         return idict
 
     monkeypatch.setattr(ElmitecReader, "parse_image", fake_parse_image)
-    img = base.LEEMImg(TESTDATA_DIR + "bremen.dat")
+    img = base.LEEMImg(BREMEN_IMG_FNAME)
     assert np.isnan(img.temperature)
 
 
@@ -1106,8 +1115,8 @@ def test_img_temperature_sanitized_above_3000(monkeypatch):
 
 
 def test_find_warp_matrix_unknown_algorithm():
-    img = base.LEEMImg(TESTDATA_DIR + "bremen.dat")
-    template = base.LEEMImg(TESTDATA_DIR + "bremen2.dat")
+    img = base.LEEMImg(BREMEN_IMG_FNAME)
+    template = base.LEEMImg(BREMEN2_IMG_FNAME)
     with pytest.raises(ValueError):
         img.find_warp_matrix(template, algorithm="nonsense")
 
@@ -1117,15 +1126,15 @@ def test_find_warp_matrix_unknown_algorithm():
 
 @pytest.mark.parametrize("trafo", ["translation", "rigid", "euclidean", "affine"])
 def test_do_ecc_align_trafo_variants(trafo):
-    img1 = base.LEEMImg(TESTDATA_DIR + "bremen.dat")
-    img2 = base.LEEMImg(TESTDATA_DIR + "bremen2.dat")
+    img1 = base.LEEMImg(BREMEN_IMG_FNAME)
+    img2 = base.LEEMImg(BREMEN2_IMG_FNAME)
     warp_matrix = base.do_ecc_align(img1, img2, trafo=trafo, max_iter=50)
     assert warp_matrix.shape == (3, 3)
 
 
 def test_do_ecc_align_unknown_trafo_falls_back_to_translation(capfd):
-    img1 = base.LEEMImg(TESTDATA_DIR + "bremen.dat")
-    img2 = base.LEEMImg(TESTDATA_DIR + "bremen2.dat")
+    img1 = base.LEEMImg(BREMEN_IMG_FNAME)
+    img2 = base.LEEMImg(BREMEN2_IMG_FNAME)
     warp_matrix = base.do_ecc_align(img1, img2, trafo="nonsense", max_iter=50)
     out, _err = capfd.readouterr()
     assert "Unrecognized transformation" in out
@@ -1138,7 +1147,7 @@ def test_do_ecc_align_unknown_trafo_falls_back_to_translation(capfd):
 def test_img_json_roundtrip():
     import json_tricks
 
-    img = base.LEEMImg(TESTDATA_DIR + "bremen.dat")
+    img = base.LEEMImg(BREMEN_IMG_FNAME)
     dumped = json_tricks.dumps(img)
     loaded = json_tricks.loads(dumped)
     assert isinstance(loaded, base.LEEMImg)
@@ -1147,7 +1156,7 @@ def test_img_json_roundtrip():
 
 
 def test_img_json_roundtrip_with_normalization():
-    img = base.LEEMImg(TESTDATA_DIR + "bremen.dat")
+    img = base.LEEMImg(BREMEN_IMG_FNAME)
     normed = img.normalize(mcp=MCP_IMG_FNAME, dark_counts=100)
     import json_tricks
 
@@ -1160,7 +1169,7 @@ def test_img_json_roundtrip_with_normalization():
 
 
 def test_img_get_field_string_defaults():
-    img = base.LEEMImg(TESTDATA_DIR + "bremen.dat")
+    img = base.LEEMImg(BREMEN_IMG_FNAME)
     # temperature: ".0f", energy: ".3g", rel_time: ".0f" -- base.py:114-124
     assert "." not in img.get_field_string("temperature").split()[0]
     energy_str = img.get_field_string("energy").split()[0]
@@ -1172,7 +1181,7 @@ def test_img_get_field_string_defaults():
 
 
 def test_stack_getitem_boolean_mask():
-    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")
+    stack = base.LEEMStack(GCU_STACK_DIR)
     mask = np.zeros(len(stack), dtype=bool)
     mask[[0, 2, 4]] = True
     substack = stack[mask]
@@ -1184,7 +1193,7 @@ def test_stack_getitem_boolean_mask():
 
 @pytest.mark.parametrize("virtual", [False, True])
 def test_stack_getitem_slice_propagates_state(virtual):
-    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu", virtual=virtual)
+    stack = base.LEEMStack(GCU_STACK_DIR, virtual=virtual)
     stack.time_origin = 123.0
     sliced = stack[1:4]
     assert isinstance(sliced, base.LEEMStack)
@@ -1197,8 +1206,8 @@ def test_stack_getitem_slice_propagates_state(virtual):
 
 def test_stack_inherits_reader_from_image_list():
     images = [
-        base.LEEMImg(TESTDATA_DIR + "bremen.dat"),
-        base.LEEMImg(TESTDATA_DIR + "bremen2.dat"),
+        base.LEEMImg(BREMEN_IMG_FNAME),
+        base.LEEMImg(BREMEN2_IMG_FNAME),
     ]
     stack = base.LEEMStack(images)
     assert stack._reader is images[0]._reader
@@ -1208,7 +1217,7 @@ def test_stack_inherits_reader_from_image_list():
 
 
 def test_ivcurve_constructs_with_energy_xaxis():
-    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")
+    stack = base.LEEMStack(GCU_STACK_DIR)
     roi = ROI.circle(x0=stack[0].width // 2, y0=stack[0].height // 2, radius=10)
     curve = base.IVCurve(stack, roi)
     assert curve.xdim == "energy"
@@ -1218,7 +1227,7 @@ def test_ivcurve_constructs_with_energy_xaxis():
 def test_ivcurve_accepts_keyword_arguments():
     """Regression test: IVCurve.__init__ used to call print(**kwargs), which raised
     TypeError for any keyword argument other than sep/end/file/flush."""
-    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")
+    stack = base.LEEMStack(GCU_STACK_DIR)
     roi = ROI.circle(x0=stack[0].width // 2, y0=stack[0].height // 2, radius=10)
     curve = base.IVCurve(stack, rois=roi)
     assert len(curve.x) == len(stack)
@@ -1228,7 +1237,7 @@ def test_ivcurve_stitches_overlapping_stacks():
     """Regression test: StitchedLine._stitch_curves calls scipy.optimize.curve_fit on
     the real-overlap path, which used to raise AttributeError because scipy.optimize
     was never imported in uspy.dataobject."""
-    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")
+    stack = base.LEEMStack(GCU_STACK_DIR)
     roi = ROI.circle(x0=stack[0].width // 2, y0=stack[0].height // 2, radius=10)
     half = len(stack) // 2
     stack1 = stack[0 : half + 5]
@@ -1241,7 +1250,7 @@ def test_intensity_line_new_field_axis_does_not_crash():
     """The reported failure mode: after adding brand-new metadata to a stack (via the
     scalar-broadcast __setattr__), using it as the x-axis of an IntensityLine must not
     KeyError just because there's no unit recorded for it yet -- it gets the default ""."""
-    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")
+    stack = base.LEEMStack(GCU_STACK_DIR)
     roi = ROI.circle(x0=stack[0].width // 2, y0=stack[0].height // 2, radius=10)
     stack.some_new_field = 5.0
 
@@ -1256,7 +1265,7 @@ def test_intensity_line_computed_axis_without_unit_entry_does_not_crash():
     either. This covers the `.get(xaxis, "")` fallback in IntensityLine.parse, which the
     metadata-write fix alone can't reach since nothing ever calls __setattr__ for a
     property."""
-    stack = base.LEEMStack(TESTDATA_DIR + "test_stack_IV_g-Cu")
+    stack = base.LEEMStack(GCU_STACK_DIR)
     roi = ROI.circle(x0=stack[0].width // 2, y0=stack[0].height // 2, radius=10)
     assert "kinetic_energy" not in stack[0].unit
 

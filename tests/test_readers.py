@@ -5,7 +5,6 @@
 # pylint: disable=protected-access
 
 import datetime
-import os
 import shutil
 import struct
 
@@ -25,9 +24,19 @@ from uspy.leem.readers.elmitec import parse_dat, ATTR_NAMES
 from uspy.leem.readers.smart import SmartReader
 from uspy.utility import parse_bytes
 
-from .conftest import TESTDATA_DIR
+from .conftest import (
+    TESTDATA_DIR,
+    BREMEN_IMG_FNAME,
+    MCP_IMG_FNAME,
+    ALBA_IMG_FNAME,
+    ELETTRA_DAT_FNAME,
+    ELETTRA_TIF_FNAME,
+    ELETTRA_DIR,
+    DC_IMG_FNAME,
+    BESSY_DIR,
+)
 
-ELETTRA_DAT = TESTDATA_DIR + "elettra.dat"
+ELETTRA_DAT = ELETTRA_DAT_FNAME
 
 
 @pytest.fixture(autouse=True)
@@ -326,8 +335,8 @@ def test_resolve_reader_default_is_elmitec():
 
 @pytest.fixture()
 def elettra_tif_folder(tmp_path):
-    shutil.copy(TESTDATA_DIR + "elettra.tif", tmp_path / "test_000.tif")
-    shutil.copy(TESTDATA_DIR + "elettra.tif", tmp_path / "test_001.tif")
+    shutil.copy(ELETTRA_TIF_FNAME, tmp_path / "test_000.tif")
+    shutil.copy(ELETTRA_TIF_FNAME, tmp_path / "test_001.tif")
     (tmp_path / "test.camera.txt").write_text(
         "width 464x464\nexposure info 500\naveraging 4\n"
     )
@@ -396,7 +405,7 @@ def test_elettra_module_shim_still_works():
 ### measurement at the Nanospectroscopy beamline -- an end-to-end check of the reading
 ### routine against real data, rather than synthetic sidecars.
 
-XPEEM_FOLDER = TESTDATA_DIR + "elettra/2024_09_26_004_XPS"
+XPEEM_FOLDER = ELETTRA_DIR + "2024_09_26_004_XPS"
 XPEEM_DAT_000 = XPEEM_FOLDER + "/2024_09_26_004_000.dat"
 XPEEM_TIF_000 = XPEEM_FOLDER + "/2024_09_26_004_000.tif"
 
@@ -577,19 +586,15 @@ def test_xpeem_config_file_resolution(tmp_path):
 ### Real SMART fixture (testdata/bessy/0409ac*.hdf): a "SCAN_MODE = TIME" series that didn't
 ### fit in a single HDF4 file, split by SMART into "0409ac.hdf" (first part) + "0409ac_1.hdf"
 ### + "0409ac_2.hdf" (continuations) -- an end-to-end check that globbing/reading a split scan
-### by its basename reassembles one correctly-ordered stack. These fixtures are large (~1.15GB
-### each) and not tracked in the testdata submodule, so this section skips cleanly when absent.
+### by its basename reassembles one correctly-ordered stack. Shrunk by
+### scripts/shrink_bessy_fixtures.py to a handful of leading frames per file (originally 300
+### frames/~1.15GB each) -- small enough now that these no longer need @pytest.mark.slow or a
+### skipif guard for local absence.
 
-BESSY_SPLIT_BASE = TESTDATA_DIR + "bessy/0409ac"
-
-pytestmark_bessy_split = pytest.mark.skipif(
-    not os.path.exists(BESSY_SPLIT_BASE + ".hdf"),
-    reason="testdata/bessy/0409ac*.hdf fixtures not present locally",
-)
+BESSY_SPLIT_BASE = BESSY_DIR + "0409ac"
+BESSY_SPLIT_N_PER_FILE = len(SmartReader().list_files(BESSY_SPLIT_BASE + ".hdf"))
 
 
-@pytestmark_bessy_split
-@pytest.mark.slow
 def test_bessy_split_scan_basename_merges_all_parts_in_order():
     # the un-suffixed base file sorts before its "_1"/"_2" siblings under natsort (since
     # "." < "_"), so a bare basename globs and concatenates the parts in acquisition order
@@ -600,36 +605,31 @@ def test_bessy_split_scan_basename_merges_all_parts_in_order():
         BESSY_SPLIT_BASE + "_1.hdf",
         BESSY_SPLIT_BASE + "_2.hdf",
     ]
-    assert len(sources) == 900  # 300 frames/file * 3 files
+    assert len(sources) == 3 * BESSY_SPLIT_N_PER_FILE
 
 
-@pytestmark_bessy_split
-@pytest.mark.slow
 def test_bessy_split_scan_exact_base_file_loads_only_that_file():
     # known, documented limitation: the exact "<base>.hdf" path is not expanded to its
     # siblings -- only the basename/glob form loads a whole split scan (see the module
     # docstring of uspy.leem.readers.smart)
     sources = SmartReader().list_files(BESSY_SPLIT_BASE + ".hdf")
-    assert len(sources) == 300
+    assert len(sources) == BESSY_SPLIT_N_PER_FILE
     assert {path for path, _index in sources} == {BESSY_SPLIT_BASE + ".hdf"}
 
 
-@pytestmark_bessy_split
-@pytest.mark.slow
 def test_bessy_split_scan_virtual_stack_length_and_order():
     # virtual=True keeps elements as unloaded (path, frame_index) sources, so this check
-    # doesn't have to load ~7GB of pixel data just to confirm the merge is correct
+    # doesn't have to load any pixel data just to confirm the merge is correct
     stack = base.LEEMStack(BESSY_SPLIT_BASE, reader="smart", virtual=True)
     assert isinstance(stack._reader, SmartReader)
-    assert len(stack) == 900
+    n = BESSY_SPLIT_N_PER_FILE
+    assert len(stack) == 3 * n
     # timestamps are per-file (not per-frame), so they step up once per file boundary but
     # must never go backwards across the seams between parts
-    timestamps = [stack[i].timestamp for i in (0, 299, 300, 599, 600, 899)]
+    timestamps = [stack[i].timestamp for i in (0, n - 1, n, 2 * n - 1, 2 * n, 3 * n - 1)]
     assert all(a <= b for a, b in zip(timestamps, timestamps[1:]))
 
 
-@pytestmark_bessy_split
-@pytest.mark.slow
 def test_bessy_split_scan_parts_appended_as_separate_stacks_reconcile_time_origin():
     # Documented limitation (test_bessy_split_scan_exact_base_file_loads_only_that_file):
     # the exact "<base>.hdf" path only loads that one part, so a user working around that
@@ -637,8 +637,8 @@ def test_bessy_split_scan_parts_appended_as_separate_stacks_reconcile_time_origi
     # measurement -- would naturally load each part as its own LEEMStack and combine them with
     # extend()/`+=`. Each part independently defaults its time_origin to its own first frame's
     # timestamp, so the two parts' origins genuinely differ here. Uses extend() in place
-    # (rather than `+`, which forces virtual=False via .copy()) to avoid materializing ~2.3GB
-    # of pixel data just to check the merge -- virtual=True keeps elements as unloaded
+    # (rather than `+`, which forces virtual=False via .copy()) to avoid materializing pixel
+    # data just to check the merge -- virtual=True keeps elements as unloaded
     # (path, frame_index) sources.
     part1 = base.LEEMStack(BESSY_SPLIT_BASE + ".hdf", reader="smart", virtual=True)
     part2 = base.LEEMStack(BESSY_SPLIT_BASE + "_1.hdf", reader="smart", virtual=True)
@@ -662,11 +662,11 @@ def test_bessy_split_scan_parts_appended_as_separate_stacks_reconcile_time_origi
 ### parse_dat: the Elmitec UKSOFT2001 binary format parser (uspy.leem.readers.elmitec)
 
 DAT_FNAMES = [
-    TESTDATA_DIR + "bremen.dat",
-    TESTDATA_DIR + "channelplate.dat",
-    TESTDATA_DIR + "alba.dat",
-    TESTDATA_DIR + "elettra.dat",
-    TESTDATA_DIR + "dark_counts_bremen.dat",
+    BREMEN_IMG_FNAME,
+    MCP_IMG_FNAME,
+    ALBA_IMG_FNAME,
+    ELETTRA_DAT_FNAME,
+    DC_IMG_FNAME,
 ]
 
 

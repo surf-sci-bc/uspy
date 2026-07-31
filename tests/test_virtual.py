@@ -32,7 +32,7 @@ from uspy.leem.readers.elmitec import ElmitecReader
 from uspy.leem.utility import imgify, stackify
 
 from .conftest import (
-    TESTDATA_DIR,
+    BREMEN_IMG_FNAME,
     MCP_IMG_FNAME,
     DC_IMG_FNAME,
     ELETTRA_TIF_DIR,
@@ -200,14 +200,14 @@ def test_virtual_leemstack_glob_bare_folder(tiff_frame_stack):
         np.testing.assert_array_equal(virtual_dir[i].image, virtual_glob[i].image)
 
 
-def test_virtual_leemstack_mixed_shape_tiff_glob_raises_at_first_bulk_use(tiff_stack_glob):
+def test_virtual_leemstack_mixed_shape_tiff_glob_raises_at_first_bulk_use(mixed_shape_tiff_stack):
     # Eager/virtual parity for the reported bug: a set of frames that can't form one stack
     # must eventually fail the same way on both backends. Unlike the eager path (which checks
     # pairwise compatibility as it constructs, since every element is loaded anyway), a virtual
     # stack skips that check at construction to stay zero-I/O -- so construction itself
     # succeeds, and the mismatch is only caught at first bulk use (check_compatible(), or
     # anything that calls it: virtual = False, average(), a data-key gather, ...).
-    virtual = LEEMStack(tiff_stack_glob, virtual=True)  # must not raise
+    virtual = LEEMStack(mixed_shape_tiff_stack["glob"], virtual=True)  # must not raise
     with pytest.raises(ValueError, match=r"(?i)shape|compatible"):
         virtual.check_compatible()
     with pytest.raises(ValueError, match=r"(?i)shape|compatible"):
@@ -245,7 +245,7 @@ def test_virtual_generic_image_stack(stack_fname):
 
 
 def test_virtual_single_frame_stack():
-    fname = TESTDATA_DIR + "bremen.dat"
+    fname = BREMEN_IMG_FNAME
     eager = LEEMStack([fname])
     virtual = LEEMStack([fname], virtual=True)
     assert len(virtual) == 1
@@ -767,8 +767,8 @@ def test_materialized_and_deferred_preserve_subclass_state(stack_folder):
     assert lazy._reader is resident._reader
 
 
-def test_materialized_raises_on_incompatible_virtual_stack(tiff_stack_glob):
-    virtual = LEEMStack(tiff_stack_glob, virtual=True)
+def test_materialized_raises_on_incompatible_virtual_stack(mixed_shape_tiff_stack):
+    virtual = LEEMStack(mixed_shape_tiff_stack["glob"], virtual=True)
     with pytest.raises(ValueError, match=r"(?i)shape|compatible"):
         virtual.materialized()
 

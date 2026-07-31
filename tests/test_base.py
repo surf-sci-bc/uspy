@@ -25,7 +25,7 @@ from .conftest import (
     TESTDATA_DIR,
     TESTIMAGE,
     TESTIMAGE_ENDING,
-    TESTIMAGE_NAME,
+    TESTIMAGE_BASE,
     ARRAY_1D,
     ARRAY_2D,
     quad_line,
@@ -701,7 +701,7 @@ def test_stack_setitem(source, source_add, virtual):
 
 @pytest.mark.parametrize("fileending", TESTIMAGE_ENDING)
 def test_image_generation_from_common_filetypes(fileending):
-    img = Image(TESTDATA_DIR + TESTIMAGE_NAME + fileending)
+    img = Image(TESTIMAGE_BASE + fileending)
     # pylint: disable = no-member
     assert (img.image == TESTIMAGE).all()
     assert (img.width, img.height) == TESTIMAGE.shape
@@ -1019,11 +1019,11 @@ def test_stack_addsub_stack():
 # Further Tests have to be done with a Stack of a Class that implements calc itself
 
 
-# @pytest.mark.parametrize("x", [Image(TESTDATA_DIR + TESTIMAGE_NAME + ".png"), 10, 10.0])
+# @pytest.mark.parametrize("x", [Image(TESTIMAGE_BASE + ".png"), 10, 10.0])
 # @pytest.mark.parametrize(
 #    "virtual", [False, pytest.param(True, marks=pytest.mark.xfail(raises=ValueError))]
 # )
-@pytest.mark.parametrize("x", [Image(TESTDATA_DIR + TESTIMAGE_NAME + ".png"), 10, 10.0])
+@pytest.mark.parametrize("x", [Image(TESTIMAGE_BASE + ".png"), 10, 10.0])
 @pytest.mark.parametrize("virtual", [False, True])
 @pytest.mark.filterwarnings("ignore::RuntimeWarning")
 @pytest.mark.filterwarnings("ignore::UserWarning")
@@ -1228,12 +1228,13 @@ def test_line_xy_alias(source):
 
 
 @pytest.mark.parametrize("source", ARRAY_2D)
-def test_line_saveload_csv(source):
+def test_line_saveload_csv(source, tmp_path):
     line = Line(source)
     line.xdim = "a"
     line.ydim = "b"
-    line.save(TESTDATA_DIR + "test.csv")
-    line2 = Line(TESTDATA_DIR + "test.csv")
+    csv_fname = str(tmp_path / "test.csv")
+    line.save(csv_fname)
+    line2 = Line(csv_fname)
     # assert line.dataframe.equals(line2.dataframe)
     pd.testing.assert_frame_equal(line.dataframe, line2.dataframe)
 

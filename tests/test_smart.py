@@ -1,11 +1,7 @@
 """Tests the SMART/BESSY HDF4 reader (uspy.leem.readers.smart).
 
-These files are HDF4. The reader uses the optional `pyhdf` package when it is installed, but
-otherwise falls back to the built-in pure-Python HDF4 reader (`uspy.leem.readers._hdf4`), so --
-unlike before -- the file-reading tests run with or without `pyhdf`. A dedicated parity test
-(`test_fallback_matches_pyhdf`) additionally asserts the two backends agree wherever `pyhdf`
-happens to be installed, and `test_fallback_used_when_pyhdf_absent` forces the fallback path so
-it is exercised even in an environment that *does* have `pyhdf`.
+These files are HDF4, read through the built-in pure-Python HDF4 parser
+(`uspy.leem.readers._hdf4`) -- no native HDF4 library is required.
 """
 # pylint: disable=invalid-name
 # pylint: disable=missing-docstring
@@ -30,23 +26,28 @@ from uspy.leem.readers.smart import (
 )
 from uspy.leem.readers._hdf4 import Hdf4File, Hdf4Error
 
-from .conftest import TESTDATA_DIR
+from .conftest import BESSY_DIR
 
-BESSY_DIR = TESTDATA_DIR + "bessy/"
 SMART_IMG = BESSY_DIR + "0409a001.hdf"  # 1 frame, "Einzelbild", MICRO 2.0V
 SMART_IMG2 = BESSY_DIR + "0409a002.hdf"  # 1 frame
-SMART_STACK = BESSY_DIR + "0409aa.hdf"  # 161 frames, "EDC" energy scan, 10..40V
-# A "TIME" scan split across 3 files (300 frames each) -- see the module docstring on
-# "<base>.hdf"/"<base>_1.hdf"/"<base>_2.hdf" splitting.
+# A handful of leading frames from a real 161-point "EDC" energy scan, 10..40V -- shrunk from
+# the original 161-frame/618MB file by scripts/shrink_bessy_fixtures.py, which keeps the kept
+# frames' pixel bytes byte-identical to the original and recomputes MICRO_END_1 to the true
+# energy of the last kept frame (see that script's docstring). Derived here, not hardcoded, so
+# a future re-shrink to a different frame count doesn't silently desync these tests.
+SMART_STACK = BESSY_DIR + "0409aa.hdf"
+SMART_STACK_N_FRAMES = Hdf4File(SMART_STACK).shape[0]
+# A "TIME" scan split across 3 files -- see the module docstring on
+# "<base>.hdf"/"<base>_1.hdf"/"<base>_2.hdf" splitting. Also shrunk (each file originally 300
+# frames/~1.15GB) to a few leading frames per file.
 SMART_SPLIT_GLOB = BESSY_DIR + "0409ac*.hdf"
+SMART_SPLIT_N_PER_FILE = Hdf4File(BESSY_DIR + "0409ac.hdf").shape[0]
 
 
-### Registration works even without pyhdf installed
+### Registration
 
 
 def test_smart_reader_is_registered():
-    # SmartReader must self-register at import time regardless of whether pyhdf is
-    # installed -- only *parsing* a real file should require it.
     from uspy.leem.readers.base import LEEMReader  # pylint: disable=import-outside-toplevel
 
     assert LEEMReader._registry["smart"] is SmartReader
@@ -63,7 +64,7 @@ def test_smart_handles():
     assert reader.handles(123) is False
 
 
-### Pure-Python helpers (no pyhdf/HDF4 needed -- these operate on plain strings/dicts)
+### Pure-Python helpers (no HDF4 file needed -- these operate on plain strings/dicts)
 
 
 def test_parse_fd_text_multiple_pairs_per_line():
@@ -147,8 +148,7 @@ def test_metadata_dict_timestamp_falls_back_without_exposure():
     assert all(ts == pytest.approx(base_ts) for ts in timestamps)
 
 
-### The pure-Python HDF4 fallback reader (uspy.leem.readers._hdf4), tested directly. This runs
-### regardless of whether pyhdf is installed -- it never uses pyhdf.
+### The pure-Python HDF4 reader (uspy.leem.readers._hdf4), tested directly.
 
 
 def test_hdf4file_reads_dims_and_dtype():
@@ -186,47 +186,15 @@ def test_hdf4file_rejects_non_hdf4(tmp_path):
         Hdf4File(str(bogus))
 
 
-def test_fallback_used_when_pyhdf_absent(monkeypatch):
-    # Force the pure-Python fallback even where pyhdf is installed, so this path is always
-    # exercised. Clearing the annotation cache avoids reusing a pyhdf-parsed result.
-    monkeypatch.setattr(smart, "_pyhdf", lambda: None)
-    smart._read_smart_annotations.cache_clear()
+### Reading whole fixtures through the LEEMImg/LEEMStack API.
 
+
+def test_smart_image_reads_through_builtin_hdf4():
     img = base.LEEMImg(SMART_IMG, reader="smart")
     assert img.image.shape == (1200, 1600)
     assert img.image.dtype == np.float32
     assert img.energy == pytest.approx(2.0)
     assert img.ident == "SMART"
-    smart._read_smart_annotations.cache_clear()
-
-
-def test_fallback_matches_pyhdf():
-    # Wherever pyhdf *is* installed, the fallback must produce byte-identical pixels and the
-    # same metadata. Skipped (not failed) when pyhdf is unavailable.
-    pytest.importorskip("pyhdf")
-    from pyhdf.SD import SD  # pylint: disable=import-outside-toplevel
-    from pyhdf.HDF import HDF  # pylint: disable=import-outside-toplevel
-    from pyhdf.AN import AN_FILE_DESC  # pylint: disable=import-outside-toplevel
-
-    sd_file = SD(SMART_IMG)
-    ref = np.asarray(sd_file.select("Range0")[0, :, :])
-    sd_file.end()
-
-    hdf_file = HDF(SMART_IMG)
-    annot = hdf_file.astart()
-    ann = annot.select(0, AN_FILE_DESC)
-    ref_desc = ann.annotation()
-    ann.endaccess()
-    annot.end()
-    hdf_file.close()
-
-    hdf4 = Hdf4File(SMART_IMG)
-    assert np.array_equal(np.asarray(hdf4.read_frame(0)), ref)  # equal regardless of byteorder
-    assert _parse_fd_text(hdf4.file_description()) == _parse_fd_text(ref_desc)
-
-
-### Reading whole fixtures through the LEEMImg/LEEMStack API. These use whichever backend is
-### active (pyhdf if installed, otherwise the pure-Python fallback).
 
 
 def test_smart_reader_selected_by_name():
@@ -275,7 +243,7 @@ def test_smart_parse_metadata_matches_parse_image():
     # return exactly what parse_image does, minus "image" itself,
     # for both a single-frame file and one frame of a multi-frame scan. nan-aware since e.g.
     # 'photon_energy' is nan for these fixtures (no monochromator energy).
-    for source in (SMART_IMG, (SMART_STACK, 0), (SMART_STACK, 42)):
+    for source in (SMART_IMG, (SMART_STACK, 0), (SMART_STACK, SMART_STACK_N_FRAMES - 1)):
         image_dict = dict(SmartReader().parse_image(source))
         image_dict.pop("image")
         metadata_dict = SmartReader().parse_metadata(source)
@@ -294,7 +262,7 @@ def test_smart_parse_metadata_reads_no_pixels(monkeypatch):
     monkeypatch.setattr(
         smart, "_read_smart_frame", lambda path, index: (calls.append(index), original(path, index))[1]
     )
-    SmartReader().parse_metadata((SMART_STACK, 42))
+    SmartReader().parse_metadata((SMART_STACK, SMART_STACK_N_FRAMES - 1))
     assert calls == []
 
 
@@ -339,7 +307,7 @@ def test_smart_folder_loads_multiple_files(tmp_path):
 
 def test_smart_list_files_expands_single_file_into_frames():
     # A folder containing one single-frame file expands to exactly one (path, 0) source --
-    # exercised without touching the large 161-frame stack fixture.
+    # exercised without touching the multi-frame stack fixture.
     files = SmartReader().list_files(SMART_IMG)
     assert files == [(SMART_IMG, 0)]
 
@@ -348,32 +316,32 @@ def test_smart_rel_time_ramps_within_a_multiframe_file():
     # Regression test for the reported bug: loading a SMART multi-frame scan file
     # (LEEMStack(..., reader="smart")) gave an all-zero rel_time, since every frame shared
     # one per-file DATE/TIME. Uses parse_metadata (no pixel reads) to stay fast on the
-    # 161-frame fixture -- mirrors test_smart_parse_metadata_matches_parse_image's use of
+    # multi-frame fixture -- mirrors test_smart_parse_metadata_matches_parse_image's use of
     # SMART_STACK without @pytest.mark.slow.
-    indices = [0, 1, 80, 160]
+    indices = [0, 1, SMART_STACK_N_FRAMES // 2, SMART_STACK_N_FRAMES - 1]
     metas = [SmartReader().parse_metadata((SMART_STACK, i)) for i in indices]
     timestamps = [m["timestamp"] for m in metas]
     assert timestamps == sorted(timestamps)
     assert len(set(timestamps)) == len(timestamps)  # not degenerate/constant anymore
     exposure = metas[0]["exposure"]
-    assert timestamps[2] - timestamps[0] == pytest.approx(80 * exposure)  # index 80 vs 0
+    assert timestamps[2] - timestamps[0] == pytest.approx((indices[2] - indices[0]) * exposure)
 
 
 def test_smart_list_files_expands_split_scan_glob():
     # natsort places the un-suffixed base file before its numbered continuations (see module
     # docstring): "0409ac.hdf" < "0409ac_1.hdf" < "0409ac_2.hdf".
     sources = SmartReader().list_files(SMART_SPLIT_GLOB)
-    assert len(sources) == 900  # 3 files x 300 frames
+    assert len(sources) == 3 * SMART_SPLIT_N_PER_FILE
     assert sources[0] == (BESSY_DIR + "0409ac.hdf", 0)
-    assert sources[300] == (BESSY_DIR + "0409ac_1.hdf", 0)
-    assert sources[600] == (BESSY_DIR + "0409ac_2.hdf", 0)
+    assert sources[SMART_SPLIT_N_PER_FILE] == (BESSY_DIR + "0409ac_1.hdf", 0)
+    assert sources[2 * SMART_SPLIT_N_PER_FILE] == (BESSY_DIR + "0409ac_2.hdf", 0)
 
 
 def test_smart_rel_time_monotonic_across_split_scan_files():
     # Regression test for the reported bug: loading the whole split-scan glob gave rel_time
     # only 3 distinct values (one per file), since every frame within a file shared that
     # file's single DATE/TIME. Uses parse_metadata (no pixel reads) so this stays fast even
-    # across all three 300-frame files.
+    # across all three files.
     sources = SmartReader().list_files(SMART_SPLIT_GLOB)
     timestamps = [SmartReader().parse_metadata(s)["timestamp"] for s in sources]
     assert timestamps == sorted(timestamps)
@@ -381,9 +349,10 @@ def test_smart_rel_time_monotonic_across_split_scan_files():
 
     # Each file's own frame 0 still lands exactly on that file's recorded start time --
     # the per-frame estimate re-anchors to the real clock at each file boundary.
+    n = SMART_SPLIT_N_PER_FILE
     assert timestamps[0] == pytest.approx(_smart_timestamp("9.Apr 2025", "17:45:51"))
-    assert timestamps[300] == pytest.approx(_smart_timestamp("9.Apr 2025", "17:50:54"))
-    assert timestamps[600] == pytest.approx(_smart_timestamp("9.Apr 2025", "17:55:56"))
+    assert timestamps[n] == pytest.approx(_smart_timestamp("9.Apr 2025", "17:50:54"))
+    assert timestamps[2 * n] == pytest.approx(_smart_timestamp("9.Apr 2025", "17:55:56"))
 
 
 def test_smart_default_reader_is_still_elmitec(img_fname):
@@ -393,20 +362,25 @@ def test_smart_default_reader_is_still_elmitec(img_fname):
     assert isinstance(img._reader, ElmitecReader)
 
 
-### The 161-frame, 618 MB I(V) stack -- marked slow (needs `pytest --runslow`).
+### The I(V) stack, a handful of leading frames of the real 161-point, 10..40V scan (see
+### SMART_STACK_N_FRAMES above) -- small enough now that these no longer need @pytest.mark.slow.
+
+# The real energy of the last kept frame, from scripts/shrink_bessy_fixtures.py's
+# MICRO_END_1 recomputation: 10.0 + (SMART_STACK_N_FRAMES - 1) * (40.0 - 10.0) / (161 - 1).
+_SMART_STACK_LAST_ENERGY = 10.0 + (SMART_STACK_N_FRAMES - 1) * 30.0 / 160.0
 
 
-@pytest.mark.slow
 def test_smart_stack_length_and_energy_axis():
     stack = base.LEEMStack(SMART_STACK, reader="smart")
-    assert len(stack) == 161
+    assert len(stack) == SMART_STACK_N_FRAMES
     assert stack[0].energy == pytest.approx(10.0)
-    assert stack[-1].energy == pytest.approx(40.0)
-    np.testing.assert_allclose(list(stack.energy), np.linspace(10.0, 40.0, 161))
+    assert stack[-1].energy == pytest.approx(_SMART_STACK_LAST_ENERGY)
+    np.testing.assert_allclose(
+        list(stack.energy), np.linspace(10.0, _SMART_STACK_LAST_ENERGY, SMART_STACK_N_FRAMES)
+    )
     assert all(img.image.shape == (1200, 1600) for img in stack)
 
 
-@pytest.mark.slow
 def test_smart_stack_virtual_mode():
     stack = base.LEEMStack(SMART_STACK, reader="smart", virtual=True)
     assert stack.virtual is True
@@ -416,9 +390,9 @@ def test_smart_stack_virtual_mode():
     assert img.energy == pytest.approx(10.0)
 
 
-@pytest.mark.slow
 def test_smart_parse_frame_index_directly():
     # midpoint frame of the 10..40V, 161-point scan
-    idict = SmartReader().parse_image((SMART_STACK, 80))
-    assert idict["energy"] == pytest.approx(25.0)
+    midpoint = SMART_STACK_N_FRAMES // 2
+    idict = SmartReader().parse_image((SMART_STACK, midpoint))
+    assert idict["energy"] == pytest.approx(np.linspace(10.0, _SMART_STACK_LAST_ENERGY, SMART_STACK_N_FRAMES)[midpoint])
     assert idict["image"].shape == (1200, 1600)

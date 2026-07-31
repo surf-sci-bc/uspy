@@ -53,47 +53,62 @@ def pytest_collection_modifyitems(config, items):
 
 TESTDATA_DIR = os.path.dirname(__file__) + "/../testdata/"
 
-STACK_FNAMES = [
-    TESTDATA_DIR + "test_stack_IV_RuO2",
-    TESTDATA_DIR + "test_stack_IV_g-Cu",
-    TESTDATA_DIR + "test_stack_IV_RuO2_normed_aligned_80-140.tif",
-]
-STACK_INCOMPATIBLE_IMG_FNAME = TESTDATA_DIR + "elettra.dat"
+# testdata/ is grouped one folder per instrument/beamline (see testdata/dataset_info.txt for
+# provenance of the ALBA fixture).
+BREMEN_DIR = TESTDATA_DIR + "bremen/"  # Elmitec LEEM, Bremen home lab -- 600x624
+ALBA_DIR = TESTDATA_DIR + "alba/"  # ALBA beamtime, Elmitec -- 1024x1024
+ELETTRA_DIR = TESTDATA_DIR + "elettra/"  # Elettra Nanospectroscopy -- 464x464
+BESSY_DIR = TESTDATA_DIR + "bessy/"  # SMART @ BESSY, HDF4
+SYNTH_DIR = TESTDATA_DIR + "synthetic/"  # instrument-independent test images
+
+BREMEN_IMG_FNAME = BREMEN_DIR + "bremen.dat"
+BREMEN2_IMG_FNAME = BREMEN_DIR + "bremen2.dat"
+BREMEN_NORMED_FNAME = BREMEN_DIR + "bremen_normed.tif"
+MCP_IMG_FNAME = BREMEN_DIR + "channelplate.dat"
+DC_IMG_FNAME = BREMEN_DIR + "dark_counts_bremen.dat"
+RUO2_STACK_DIR = BREMEN_DIR + "test_stack_IV_RuO2"
+GCU_STACK_DIR = BREMEN_DIR + "test_stack_IV_g-Cu"
+RUO2_STACK_TIF = BREMEN_DIR + "test_stack_IV_RuO2_normed_aligned_80-140.tif"
+
+ALBA_IMG_FNAME = ALBA_DIR + "alba.dat"
+
+ELETTRA_DAT_FNAME = ELETTRA_DIR + "elettra.dat"
+ELETTRA_TIF_FNAME = ELETTRA_DIR + "elettra.tif"
+
+STACK_FNAMES = [RUO2_STACK_DIR, GCU_STACK_DIR, RUO2_STACK_TIF]
+STACK_INCOMPATIBLE_IMG_FNAME = ELETTRA_DAT_FNAME
 
 # An Elettra beamline stack whose per-frame energy/temperature/timestamp are NOT in the
 # per-image ".tif" sidecars but distributed from a single shared "*trace.txt" tracefile by
 # ElettraReader.post_process_stack -- exercises a metadata path the plain per-file Elmitec
 # ".dat" fixtures above (STACK_FNAMES) never touch. See tests/test_virtual.py.
-ELETTRA_TIF_DIR = TESTDATA_DIR + "elettra/2024_09_26_004_XPS/"
+ELETTRA_TIF_DIR = ELETTRA_DIR + "2024_09_26_004_XPS/"
 
-# Per-frame ".tiff" fixtures (one 2D image per file, as opposed to a single 3D-TIFF stack)
-# reproducing a reported bug: frames here deliberately have TWO DIFFERENT pixel shapes
-# ((600, 624) and (624, 600)), so a correct loader must reject the whole glob/folder rather
-# than silently reshaping frames into a single, wrong shape (see tests/test_leembase.py,
-# tests/test_virtual.py).
-TIFF_STACK_DIR = TESTDATA_DIR + "tiff_stack/"
+# Per-frame ".tiff" fixtures (one 2D image per file, as opposed to a single 3D-TIFF stack),
+# all sharing one pixel shape (600, 624). The mixed-shape case ("a loader must reject frames
+# that can't form one stack") is covered by the synthetic `mixed_shape_tiff_stack` fixture
+# below instead -- see its docstring for why.
+TIFF_STACK_DIR = BREMEN_DIR + "tiff_stack/"
 TIFF_STACK_GLOB = TIFF_STACK_DIR + "*.tiff"
 
-# A SMART/BESSY multi-frame HDF4 scan file (an I(V) energy series, 161 points in one file --
-# see uspy.leem.readers.smart) -- exercises the "(path, frame_index)" tuple-source path and
-# computed properties (e.g. rel_time) that aren't themselves stored metadata.
-BESSY_SCAN_FNAME = TESTDATA_DIR + "bessy/0409aa.hdf"
+# A SMART/BESSY multi-frame HDF4 scan file (a handful of leading frames of a real I(V) energy
+# series, shrunk by scripts/shrink_bessy_fixtures.py -- see uspy.leem.readers.smart) --
+# exercises the "(path, frame_index)" tuple-source path and computed properties (e.g. rel_time)
+# that aren't themselves stored metadata.
+BESSY_SCAN_FNAME = BESSY_DIR + "0409aa.hdf"
 
 IMG_FNAMES = [
-    TESTDATA_DIR + "bremen.dat",
-    TESTDATA_DIR + "channelplate.dat",
-    TESTDATA_DIR + "alba.dat",
-    TESTDATA_DIR + "elettra.dat",
-    TESTDATA_DIR + "elettra.tif",
-    TESTDATA_DIR + "bremen2.dat",
+    BREMEN_IMG_FNAME,
+    MCP_IMG_FNAME,
+    ALBA_IMG_FNAME,
+    ELETTRA_DAT_FNAME,
+    ELETTRA_TIF_FNAME,
+    BREMEN2_IMG_FNAME,
 ]
 IMG_FNAMES_COMPATIBLE = [
-    TESTDATA_DIR + "bremen.dat",
-    TESTDATA_DIR + "bremen2.dat",
+    BREMEN_IMG_FNAME,
+    BREMEN2_IMG_FNAME,
 ]
-
-DC_IMG_FNAME = TESTDATA_DIR + "dark_counts_bremen.dat"
-MCP_IMG_FNAME = TESTDATA_DIR + "channelplate.dat"
 
 ARRAY_2D = [np.array([[1, 2], [3, 4]]), np.ones((2, 2)), np.eye(2)]
 
@@ -104,7 +119,7 @@ ARRAY_1D = [
 ]
 
 TESTIMAGE = np.eye(10) * 38550
-TESTIMAGE_NAME = "test_gray_16bit"
+TESTIMAGE_BASE = SYNTH_DIR + "test_gray_16bit"
 TESTIMAGE_ENDING = [".png", ".tif"]
 
 # Create Testimages
@@ -122,7 +137,7 @@ def list2darrays(request):
 
 @pytest.fixture()
 def testimgpng():
-    return Image(TESTDATA_DIR + TESTIMAGE_NAME + ".png")
+    return Image(TESTIMAGE_BASE + ".png")
 
 @pytest.fixture()
 def quad_line():
@@ -143,7 +158,7 @@ def img(img_fname):
 
 @pytest.fixture()
 def normed_img():
-    return LEEMImg(TESTDATA_DIR+"bremen_normed.tif")
+    return LEEMImg(BREMEN_NORMED_FNAME)
 
 
 @pytest.fixture(scope="module", params=STACK_FNAMES)
@@ -158,9 +173,10 @@ def stack_folder(request):
 
 @pytest.fixture()
 def tiff_stack_glob():
-    """Glob pattern for the mixed-shape per-frame ".tiff" fixture at `testdata/tiff_stack/`
-    (see TIFF_STACK_DIR above). Skips if the testdata submodule/fixture isn't present, like
-    `elettra_tif_fnames` does."""
+    """Glob pattern for the real per-frame ".tiff" fixture at `testdata/bremen/tiff_stack/`
+    (see TIFF_STACK_DIR above), all sharing one pixel shape. Skips if the testdata
+    submodule/fixture isn't present, like `elettra_tif_fnames` does. For the mixed-shape
+    regression case, see `mixed_shape_tiff_stack` below instead."""
     import glob
 
     if not glob.glob(TIFF_STACK_GLOB):
@@ -197,6 +213,37 @@ def tiff_frame_stack(tmp_path):
     }
 
 
+@pytest.fixture()
+def mixed_shape_tiff_stack(tmp_path):
+    """Per-frame ".tiff" files whose pixel shapes deliberately disagree -- (5, 4) and (4, 5),
+    two frames each. The two shapes hold the same number of elements on purpose: that is what
+    made the original bug possible (a frame silently `reshape`d into another frame's shape
+    instead of the mismatched set being rejected outright), so a test can still prove no
+    loaded frame equals a differently-shaped frame reshaped. Synthetic and in `tmp_path`
+    rather than a testdata fixture: `testdata/bremen/tiff_stack/` used to hold real frames at
+    two shapes, but that mismatch was an export accident, not a deliberate fixture, so fixing
+    it upstream would have silently deleted this regression coverage.
+
+    Returns a dict with the containing directory, a "*.tiff" glob pattern into it, the file
+    paths, the pixel array written to each, and each array's shape (all parallel lists).
+    """
+    shapes = [(5, 4), (5, 4), (4, 5), (4, 5)]
+    paths, arrays = [], []
+    for i, shape in enumerate(shapes):
+        arr = np.full(shape, float(i + 1), dtype=np.float32)
+        path = tmp_path / f"frame_{i}.tiff"
+        tifffile.imwrite(str(path), arr)
+        paths.append(str(path))
+        arrays.append(arr)
+    return {
+        "dir": str(tmp_path),
+        "glob": str(tmp_path / "*.tiff"),
+        "paths": paths,
+        "arrays": arrays,
+        "shapes": shapes,
+    }
+
+
 @pytest.fixture(scope="module")
 def elettra_tif_fnames():
     """Explicit, sorted list of per-frame ".tif" paths for the Elettra tracefile fixture --
@@ -218,14 +265,14 @@ def stack(stack_fname):
 
 @pytest.fixture(scope="module")
 def single_stack():
-    stack = LEEMStack(TESTDATA_DIR + "test_stack_IV_RuO2_normed_aligned_80-140.tif")
+    stack = LEEMStack(RUO2_STACK_TIF)
     stack.energy = np.linspace(3.0, 50.0, len(stack))
     return stack
 
 
 @pytest.fixture(scope="module")
 def short_stack():
-    stack = LEEMStack(TESTDATA_DIR + "test_stack_IV_RuO2_normed_aligned_80-140.tif")
+    stack = LEEMStack(RUO2_STACK_TIF)
     stack.energy = np.linspace(19, 28.81, len(stack))
     return stack[10:20]
 
