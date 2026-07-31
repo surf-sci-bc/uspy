@@ -283,7 +283,7 @@ def make_video(
             c0 = min(c0, np.ma.min(masked))
             c1 = max(c1, np.ma.max(masked))
         contrast = sorted((c0, c1))
-        print(f"Set contrast to {contrast}")
+        print(f"Set contrast to [{contrast[0]}, {contrast[1]}]")
         contrast_type = "static"
     elif isinstance(contrast, int):
         # Single read (not two) of `stack[contrast].image` -- a virtual stack's pixel data is
@@ -292,7 +292,7 @@ def make_video(
         c0 = np.ma.nanmin(masked)
         c1 = np.ma.nanmax(masked)
         contrast = sorted((c0, c1))
-        print(f"Set contrast to {contrast}")
+        print(f"Set contrast to [{contrast[0]}, {contrast[1]}]")
         contrast_type = "static"
     elif isinstance(contrast, Iterable) and len(contrast) == 2:
         contrast_type = "static"
