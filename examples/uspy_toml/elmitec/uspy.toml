@@ -29,3 +29,14 @@ print_fields = [
     "width",
     "height",
 ]
+
+# Instrument default mask used by LEEMStack.align()/plot_img()/make_video() when called
+# with mask=True (see LEEMImg.default_mask). Uncomment to override the reader's built-in
+# channelplate circle (x0="50%", y0="50%", radius="45%") -- e.g. a tighter aperture, or
+# "shape = \"none\"" to disable the default mask entirely. Numbers are pixels; percent
+# strings ("45%") scale with the frame width (x0/width/radius) or height (y0/height).
+# [uspy.mask]
+# shape  = "circle"
+# x0     = "50%"
+# y0     = "50%"
+# radius = "45%"

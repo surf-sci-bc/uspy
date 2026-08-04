@@ -11,7 +11,7 @@ See `uspy.leem.readers.resolve_reader` for how a reader is selected for a given 
 # pylint: disable=missing-docstring
 
 from __future__ import annotations
-from typing import Any, Iterable, Union
+from typing import Any, Iterable, Optional, Union
 
 
 class LEEMReader:
@@ -30,6 +30,12 @@ class LEEMReader:
     extensions: tuple = ()
     meta_defaults: dict = {}
     unit_defaults: dict = {}
+    # Built-in default mask, as a spec dict for `uspy.roi.ROI.from_spec` (see
+    # `uspy.leem.readers.resolve_default_mask`) -- overridable per-instrument via a
+    # `[uspy.mask]` uspy.toml table. Defaults to the channelplate aperture shared by every
+    # built-in reader (all channelplate LEEM instruments); a reader for a different kind of
+    # detector should override this, e.g. to `None` to disable by default.
+    default_mask: Optional[dict] = {"shape": "circle", "x0": "50%", "y0": "50%", "radius": "45%"}
 
     _registry: dict = {}
 

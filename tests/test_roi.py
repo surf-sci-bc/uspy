@@ -131,6 +131,102 @@ def test_roi_radius_and_width_conflict_raises():
         pass
 
 
+### ROI.from_spec ####################################################
+
+
+def test_from_spec_absolute_pixels():
+    spec = {"shape": "circle", "x0": 12, "y0": 7, "radius": 5}
+    r = ROI.from_spec(spec)
+    assert_array_equal(r.position, [12, 7])
+    assert_array_equal(r.ref_point, [5, 5])
+
+
+def test_from_spec_percent_strings_scale_to_frame():
+    # frame is (height=1000, width=2000): x0/width/radius scale off width,
+    # y0/height off height.
+    spec = {"shape": "circle", "x0": "50%", "y0": "50%", "radius": "45%"}
+    r = ROI.from_spec(spec, shape=(1000, 2000))
+    assert_array_equal(r.position, [1000, 500])
+    assert_array_equal(r.ref_point, [900, 900])
+
+
+def test_from_spec_percent_matches_align_hardcoded_circle():
+    # regression pin: this must reproduce the pre-config-mask hardcoded circle
+    # used by LEEMStack.align() (radius = width // 2 * 9 // 10) for a square frame.
+    width = 1024
+    spec = {"shape": "circle", "x0": "50%", "y0": "50%", "radius": "45%"}
+    r = ROI.from_spec(spec, shape=(width, width))
+    assert r.position[0] == width // 2
+    assert r.ref_point[0] == width // 2 * 9 // 10
+
+
+def test_from_spec_mixed_absolute_and_percent():
+    spec = {"shape": "rectangle", "x0": "50%", "y0": 10, "width": "20%", "height": 6}
+    r = ROI.from_spec(spec, shape=(100, 200))
+    assert r.position[0] == 100  # x0 = 50% of width=200
+    assert r.position[1] == 10  # y0 absolute
+    assert r.ref_point[0] == 20  # width = 20% of 200, ref_point = width/2
+
+
+def test_from_spec_polygon_corners_scaled_per_component():
+    spec = {
+        "shape": "polygon",
+        "corners": [["0%", "0%"], ["50%", "100%"]],
+    }
+    r = ROI.from_spec(spec, shape=(100, 200))
+    # corners are re-based to (0, 0) by ROI.polygon, so just check area/shape sanity
+    assert r.array.shape[0] == 100  # height extent from 0% to 100%
+    assert r.array.shape[1] == 100  # width extent from 0% to 50% of 200
+
+
+def test_from_spec_rotation_not_scaled():
+    spec = {"shape": "rectangle", "x0": 0, "y0": 0, "width": 10, "height": 4, "rotation": 30}
+    r = ROI.from_spec(spec, shape=(50, 50))
+    # no exception, and area roughly preserved under rotation
+    assert r.area > 0
+
+
+def test_from_spec_percent_without_shape_raises():
+    spec = {"shape": "circle", "x0": "50%", "y0": "50%", "radius": "45%"}
+    try:
+        ROI.from_spec(spec)
+        assert False, "expected ValueError"
+    except ValueError:
+        pass
+
+
+def test_from_spec_bad_percent_string_raises():
+    spec = {"shape": "circle", "x0": "fifty%", "y0": 0, "radius": 5}
+    try:
+        ROI.from_spec(spec, shape=(100, 100))
+        assert False, "expected ValueError"
+    except ValueError:
+        pass
+
+
+def test_from_spec_unknown_shape_raises():
+    spec = {"shape": "triangle", "x0": 0, "y0": 0, "radius": 5}
+    try:
+        ROI.from_spec(spec)
+        assert False, "expected ValueError"
+    except ValueError:
+        pass
+
+
+def test_from_spec_forwards_style_and_label():
+    spec = {"shape": "circle", "x0": 0, "y0": 0, "radius": 5, "color": "red", "label": "cp"}
+    r = ROI.from_spec(spec)
+    assert r.color == "red"
+    assert r.label == "cp"
+
+
+def test_from_spec_does_not_mutate_input_dict():
+    spec = {"shape": "circle", "x0": "50%", "y0": "50%", "radius": "45%"}
+    original = dict(spec)
+    ROI.from_spec(spec, shape=(100, 100))
+    assert spec == original
+
+
 ### ROI: array storage (packbits round-trip) #########################
 
 

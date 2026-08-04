@@ -289,7 +289,7 @@ class DataObject(Loadable):
 
         Weaker independence contract than `copy()`: `_data`/`_meta`/`_units` are independent
         of `self` afterwards, but everything else (`_source`, `LEEMImg._reader`/
-        `_time_origin`/`default_mask`, ...) is shared by reference, not deep-copied.
+        `_time_origin`/`_mask_spec`, ...) is shared by reference, not deep-copied.
         """
         new = copy.copy(self)  # shares _data/_meta/_units/other attrs by reference
         # object.__setattr__ bypasses __setattr__'s no-op-on-existing-dict guard, needed

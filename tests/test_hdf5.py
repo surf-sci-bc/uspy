@@ -407,12 +407,10 @@ class TestObjectRoundtrip:
     def test_none_valued_fields_survive_as_none(self, tmp_path):
         img = make_leem_img()
         assert img.mcp is None
-        assert img._meta["default_mask"] is None
         target = tmp_path / "x.h5"
         img.save(str(target))
         reloaded = LEEMImg.load(str(target))
         assert reloaded.mcp is None
-        assert reloaded._meta["default_mask"] is None
 
     def test_line_default_label_none_roundtrip(self, tmp_path, line):
         assert line.label is None

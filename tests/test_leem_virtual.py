@@ -96,6 +96,23 @@ def test_leemstack_virtual_pixel_access_reads_pixels_not_headers(stack_folder, m
 
 
 @pytest.mark.parametrize("stack_folder", ELMITEC_STACK_FOLDERS)
+def test_leemstack_virtual_default_mask_reads_no_pixels(stack_folder, monkeypatch):
+    """`LEEMImg.default_mask` resolves a spec dict to a `ROI` lazily via `self.shape`, which
+    for a deferred element with no shape hint means (at most) one header read -- never a
+    pixel read. Accessing it must not disturb the element's/stack's virtual-ness either."""
+    stack = LEEMStack(stack_folder, virtual=True)
+    counts = _patch_counts(monkeypatch)
+
+    mask = stack[1].default_mask
+
+    assert mask is not None
+    assert counts["parse_pixels"] == 0
+    assert counts["parse_metadata"] <= 1
+    assert stack.virtual
+    assert base.is_deferred(stack[1]._data["image"])
+
+
+@pytest.mark.parametrize("stack_folder", ELMITEC_STACK_FOLDERS)
 def test_leemstack_virtual_pixel_parity_with_eager(stack_folder):
     eager = LEEMStack(stack_folder, virtual=False)
     virtual = LEEMStack(stack_folder, virtual=True)

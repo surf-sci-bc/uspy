@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 
 import numpy as np
 
+import uspy.dataobject as do
 import uspy.plotting as base_plotting
 from uspy.leem import base
 from uspy.leem import plotting as leem_plotting
@@ -93,6 +94,76 @@ def test_make_video_leaves_a_virtual_stack_virtual(tmp_path, monkeypatch):
         )
         assert stack.virtual is True
         assert all(element.is_virtual for element in stack.elements)
+
+
+def test_make_video_mask_true_uses_default_mask(tmp_path, monkeypatch, capsys):
+    # regression: mask=True used to crash (`True.pad_to(...)` -- bool has no such method).
+    monkeypatch.setattr(base_plotting.skvideo.io, "FFmpegWriter", lambda *a, **kw: _FakeWriter())
+    monkeypatch.setattr(base_plotting, "Video", lambda ofile: ofile)
+
+    stack = base.LEEMStack(RUO2_STACK_DIR, virtual=True)
+    height, width = stack[0].height, stack[0].width
+    default_mask_array = stack[0].default_mask.pad_to(height, width)
+
+    eager = base.LEEMStack(RUO2_STACK_DIR)
+    expected_c0 = min(
+        np.ma.min(np.ma.array(img.image, mask=~default_mask_array)) for img in eager
+    )
+    expected_c1 = max(
+        np.ma.max(np.ma.array(img.image, mask=~default_mask_array)) for img in eager
+    )
+
+    base_plotting.make_video(
+        stack, str(tmp_path / "out.mp4"), mask=True, contrast="maximum", fields=None
+    )
+    printed = capsys.readouterr().out
+    assert f"Set contrast to [{expected_c0}, {expected_c1}]" in printed
+
+
+def test_make_video_mask_ndarray_accepted(tmp_path, monkeypatch):
+    monkeypatch.setattr(base_plotting.skvideo.io, "FFmpegWriter", lambda *a, **kw: _FakeWriter())
+    monkeypatch.setattr(base_plotting, "Video", lambda ofile: ofile)
+
+    stack = base.LEEMStack(RUO2_STACK_DIR, virtual=True)
+    height, width = stack[0].height, stack[0].width
+    mask_array = ROI.circle(x0=width // 2, y0=height // 2, radius=10).pad_to(height, width)
+
+    base_plotting.make_video(stack, str(tmp_path / "out.mp4"), mask=mask_array, fields=None)
+
+
+def test_make_video_mask_false_and_none_equivalent_to_no_mask(tmp_path, monkeypatch):
+    monkeypatch.setattr(base_plotting.skvideo.io, "FFmpegWriter", lambda *a, **kw: _FakeWriter())
+    monkeypatch.setattr(base_plotting, "Video", lambda ofile: ofile)
+
+    for mask in (False, None):
+        stack = base.LEEMStack(RUO2_STACK_DIR, virtual=True)
+        base_plotting.make_video(stack, str(tmp_path / "out.mp4"), mask=mask, fields=None)
+
+
+### plot_img mask handling (uspy/plotting.py)
+
+
+def test_plot_img_mask_true_uses_default_mask():
+    img = base.LEEMImg(ELETTRA_DAT)
+    ax = base_plotting.plot_img(img, mask=True)
+    plt.close(ax.figure)
+
+
+def test_plot_img_mask_true_on_plain_image_is_noop():
+    # regression: do.Image has no default_mask attribute of its own -- mask=True used to
+    # raise AttributeError instead of being a no-op.
+    img = do.Image(np.arange(20 * 30).reshape(20, 30).astype(float))
+    ax = base_plotting.plot_img(img, mask=True)
+    plt.close(ax.figure)
+
+
+def test_plot_img_ndarray_mask_does_not_raise():
+    # regression: `if mask or invert:` raised ValueError for a >1-element ndarray mask
+    # (ambiguous truth value); only bool/ROI/None were ever actually handled.
+    img = base.LEEMImg(ELETTRA_DAT)
+    mask_array = np.ones(img.shape, dtype=bool)
+    ax = base_plotting.plot_img(img, mask=mask_array)
+    plt.close(ax.figure)
 
 
 ### plot_img / make_video (uspy/leem/plotting.py wrappers)

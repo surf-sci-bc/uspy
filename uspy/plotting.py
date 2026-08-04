@@ -89,8 +89,11 @@ def plot_img(
     ticks : bool, optional
         If True, show x and y coordinates for the pixels on each axis, by default False.
     mask : Union[ROI, bool], optional
-        If given, use a ROI to mask out parts of the image. If set to True, take the default
-        mask of the image class. By default False.
+        If an ROI, use it to mask out parts of the image. If True, use ``img.default_mask``
+        -- the instrument's default mask (e.g. the channelplate aperture for a `LEEMImg`,
+        resolved from a `uspy.toml` `[uspy.mask]` table or the reader's built-in default;
+        see `uspy.leem.base.LEEMImg.default_mask`); a no-op for a plain `do.Image`, which has
+        no default mask of its own. By default False.
     cmap : str, optional
         The colormap that matplotlib should use. Defaults to grayscale.
     **kwargs :
@@ -121,7 +124,8 @@ def plot_img(
     if mask is True:
         mask = img.default_mask
 
-    if isinstance(mask, rois.ROI):
+    mask_applied = isinstance(mask, rois.ROI)
+    if mask_applied:
         data = mask.apply(img, return_array=True)
 
     if log:
@@ -152,7 +156,7 @@ def plot_img(
 
     if field_color is None:
         field_color = "yellow"
-        if mask or invert:
+        if mask_applied or invert:
             field_color = "black"
 
     for i, field in enumerate(fields):
@@ -190,7 +194,7 @@ def make_video(
     overwrite=True,
     scale=0.5,
     crf: int = 23,
-    mask=None,
+    mask: Union[rois.ROI, np.ndarray, bool, None] = None,
     **kwargs,
 ):
     """
@@ -235,6 +239,12 @@ def make_video(
       exists). Faster if you don't need to change anything.
     - scale:
       Will make the video larger/smaller by changing the resolution (default 0.5)
+    - mask: ROI, np.ndarray, bool or None, default None
+      Pixels outside the mask are shown white and excluded from "auto"/"inner"/"maximum"
+      contrast (applied at each frame read -- see the comment below). If True, use
+      stack[0].default_mask -- the instrument's default mask (e.g. the channelplate
+      aperture; see LEEMImg.default_mask). If an ROI, converted via ROI.pad_to. If an
+      ndarray, used directly (must match the frame shape; cast to bool). False/None: no mask.
 
     Returns an iPython.display Video object
     """
@@ -256,8 +266,12 @@ def make_video(
 
     ## Apply mask if applicable
 
-    if mask:
+    if mask is True:
+        mask = stack[0].default_mask
+    if isinstance(mask, rois.ROI):
         mask_array = mask.pad_to(stack[0].height, stack[0].width)
+    elif mask is not None and mask is not False:
+        mask_array = np.asarray(mask).astype(bool)
     else:
         mask_array = np.ones(stack[0].shape, dtype=bool)
     inv_mask = ~mask_array

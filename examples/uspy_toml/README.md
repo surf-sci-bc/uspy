@@ -42,6 +42,39 @@ set_reader(None)                # or reset_reader() -- clears the override again
 This ranks below an explicit `reader=` argument to `LEEMImg`/`LEEMStack`, but above every
 `uspy.toml`.
 
+## Default mask (`[uspy.mask]`)
+
+The same `uspy.toml` files can also declare the instrument's default mask -- e.g. the
+LEEM channelplate aperture -- used by `LEEMStack.align()`, `plot_img()`, and
+`make_video()` when called with `mask=True` (never automatically otherwise):
+
+```toml
+[uspy.mask]
+shape  = "circle"   # circle | ellipse | square | rectangle | polygon | point | "none"
+x0     = "50%"      # percent strings scale with frame width  (x0, width, radius)
+y0     = "50%"      # percent strings scale with frame height (y0, height)
+radius = "45%"      # plain numbers are absolute pixels; may be mixed with percent strings
+```
+
+Without a `[uspy.mask]` table anywhere, each reader has its own built-in default (a
+channelplate circle, `x0="50%", y0="50%", radius="45%"`, for every built-in reader --
+see `LEEMReader.default_mask`). Set `shape = "none"` to disable the default mask for an
+instrument that doesn't need one. Like `reader`/`[uspy.options]`, `[uspy.mask]` is taken
+as a unit from the first file on the search path that declares it, not merged per-key
+like `[uspy.plotting]`.
+
+A session override, mirroring `set_reader`, ranks above every `uspy.toml`:
+
+```python
+from uspy.leem.readers import set_default_mask, reset_default_mask
+
+set_default_mask(False)          # disable the default mask for the rest of the session
+reset_default_mask()             # clears the override again
+```
+
+See `LEEMImg.default_mask`/`uspy.leem.readers.resolve_default_mask` for the full
+resolution order.
+
 ## Data directories (`[uspy.paths]`)
 
 The same `uspy.toml` files can also declare where real experimental data lives, via a

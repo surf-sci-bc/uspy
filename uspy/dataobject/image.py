@@ -86,6 +86,11 @@ class Image(_ArithmeticMixin, DataObject):
     _data_keys = ("image",)
     _meta_keys = ("width", "height")
     _op_attr = "image"
+    # No default mask outside LEEMImg (which overrides this with a property resolved from
+    # a reader/uspy.toml/session default -- see uspy.leem.base.LEEMImg.default_mask). Kept
+    # here so `uspy.plotting.plot_img(img, mask=True)` is a no-op instead of AttributeError
+    # for a plain Image.
+    default_mask = None
 
     def parse(self, source: Union(str, np.ndarray)) -> dict[str, Any]:
         if isinstance(source, np.ndarray):

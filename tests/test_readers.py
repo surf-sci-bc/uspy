@@ -16,10 +16,15 @@ from uspy.leem.readers import (
     ElettraReader,
     ElmitecReader,
     resolve_reader,
+    resolve_default_mask,
     set_reader,
     get_reader,
     reset_reader,
+    set_default_mask,
+    get_default_mask,
+    reset_default_mask,
 )
+from uspy.roi import ROI
 from uspy.leem.readers.elmitec import parse_dat, ATTR_NAMES
 from uspy.leem.readers.smart import SmartReader
 from uspy.utility import parse_bytes
@@ -46,6 +51,15 @@ def _no_session_reader_leak():
     reset_reader()
     yield
     reset_reader()
+
+
+@pytest.fixture(autouse=True)
+def _no_session_mask_leak():
+    """Same as `_no_session_reader_leak`, for the session-wide `set_default_mask`
+    override."""
+    reset_default_mask()
+    yield
+    reset_default_mask()
 
 
 ### Default resolution (no reader given, no config file present) -> Elmitec
@@ -309,6 +323,94 @@ def test_config_file_plotting_fields_propagate_through_stack(tmp_path):
     for img in stack:
         assert img.default_fields == ("fov",)
         assert img.print_fields == ("energy",)
+
+
+### Config-file-driven default mask (uspy.toml [uspy.mask])
+
+
+def test_no_config_file_resolves_reader_default_mask():
+    spec = resolve_default_mask(ELETTRA_DAT, ElettraReader())
+    assert spec == ElettraReader.default_mask
+    assert spec == {"shape": "circle", "x0": "50%", "y0": "50%", "radius": "45%"}
+
+
+def test_config_file_overrides_default_mask(tmp_path):
+    shutil.copy(ELETTRA_DAT, tmp_path / "elettra_000.dat")
+    (tmp_path / "uspy.toml").write_text(
+        '[uspy.mask]\nshape = "circle"\nx0 = "50%"\ny0 = "50%"\nradius = "30%"\n'
+    )
+    spec = resolve_default_mask(str(tmp_path / "elettra_000.dat"), ElettraReader())
+    assert spec == {"shape": "circle", "x0": "50%", "y0": "50%", "radius": "30%"}
+
+
+def test_config_file_mask_taken_as_a_unit_not_merged(tmp_path):
+    # regression: [uspy.mask] must be taken whole from the first file that declares it,
+    # like [uspy]/[uspy.options] -- not merged per-key like [uspy.plotting]. A
+    # less-specific file's extra/different keys must not leak into a more-specific file's
+    # table.
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    shutil.copy(ELETTRA_DAT, data_dir / "elettra_000.dat")
+    (data_dir / "uspy.toml").write_text(
+        '[uspy.mask]\nshape = "square"\nx0 = "50%"\ny0 = "50%"\nwidth = "10%"\n'
+    )
+    (tmp_path / "uspy.toml").write_text(
+        '[uspy.mask]\nshape = "circle"\nx0 = "50%"\ny0 = "50%"\nradius = "45%"\n'
+    )
+    spec = resolve_default_mask(str(data_dir / "elettra_000.dat"), ElettraReader())
+    assert spec == {"shape": "square", "x0": "50%", "y0": "50%", "width": "10%"}
+
+
+def test_config_file_mask_shape_none_disables(tmp_path):
+    # a folder-local uspy.toml can opt an instrument out of the reader's default mask
+    shutil.copy(ELETTRA_DAT, tmp_path / "elettra_000.dat")
+    (tmp_path / "uspy.toml").write_text('[uspy.mask]\nshape = "none"\n')
+    spec = resolve_default_mask(str(tmp_path / "elettra_000.dat"), ElettraReader())
+    assert spec is None
+
+
+def test_reader_default_mask_used_when_no_config_declares_one(tmp_path):
+    shutil.copy(ELETTRA_DAT, tmp_path / "elettra_000.dat")
+    (tmp_path / "uspy.toml").write_text(
+        '[uspy.plotting]\ndefault_fields = ["fov"]\n'
+    )
+    spec = resolve_default_mask(str(tmp_path / "elettra_000.dat"), ElettraReader())
+    assert spec == ElettraReader.default_mask
+
+
+def test_set_default_mask_overrides_config_file(tmp_path):
+    shutil.copy(ELETTRA_DAT, tmp_path / "elettra_000.dat")
+    (tmp_path / "uspy.toml").write_text('[uspy.mask]\nshape = "none"\n')
+
+    roi = ROI.circle(10, 10, radius=5)
+    set_default_mask(roi)
+    spec = resolve_default_mask(str(tmp_path / "elettra_000.dat"), ElettraReader())
+    assert spec is roi
+
+
+def test_set_default_mask_false_disables_session_wide():
+    set_default_mask(False)
+    assert get_default_mask() == (True, None)
+    spec = resolve_default_mask(ELETTRA_DAT, ElettraReader())
+    assert spec is None
+
+
+def test_reset_default_mask_restores_config_resolution(tmp_path):
+    shutil.copy(ELETTRA_DAT, tmp_path / "elettra_000.dat")
+    (tmp_path / "uspy.toml").write_text(
+        '[uspy.mask]\nshape = "circle"\nx0 = "50%"\ny0 = "50%"\nradius = "30%"\n'
+    )
+    set_default_mask(False)
+    reset_default_mask()
+    assert get_default_mask() == (False, None)
+    spec = resolve_default_mask(str(tmp_path / "elettra_000.dat"), ElettraReader())
+    assert spec == {"shape": "circle", "x0": "50%", "y0": "50%", "radius": "30%"}
+
+
+def test_set_default_mask_none_is_equivalent_to_reset():
+    set_default_mask(False)
+    set_default_mask(None)
+    assert get_default_mask() == (False, None)
 
 
 ### Registry

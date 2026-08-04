@@ -214,6 +214,64 @@ class ROI(StyledObject):
         """Construct a ROI directly from a boolean mask array."""
         return cls(x0, y0, source=array, **kwargs)
 
+    @classmethod
+    def from_spec(cls, spec: dict[str, Any], shape: Optional[tuple[int, int]] = None, **kwargs) -> ROI:
+        """Construct a ROI from a plain dict spec, e.g. a `uspy.toml` `[uspy.mask]` table
+        (see `uspy.leem.readers`). Every geometry value may be an absolute pixel number, or
+        a percent string (`"45%"`) scaled against `shape=(height, width)`: `x0`/`width`/
+        `radius`/`corners`' x-components scale with width, `y0`/`height`/`corners`'
+        y-components scale with height; `rotation` is never scaled. `shape` is only needed
+        when `spec` actually contains a percent string.
+
+        Percent scaling floors to the nearest pixel (`int()`) -- e.g. `"45%"` of a
+        1024px-wide frame is 460px, matching the historical hardcoded channelplate circle
+        (`radius = width // 2 * 9 // 10`).
+
+        Raises
+        ------
+        ValueError
+            If a percent string is given without `shape`, is not parseable, or `spec`'s
+            `shape` names an unknown ROI shape (see `ROI.shapes`).
+        """
+        spec = dict(spec, **kwargs)  # copy: never mutate the caller's dict
+        shape_name = spec.pop("shape", "circle")
+        height, width = shape if shape is not None else (None, None)
+
+        def resolve(value, extent, key):
+            if not isinstance(value, str):
+                return value
+            if not value.endswith("%"):
+                raise ValueError(
+                    f"Invalid value {value!r} for {key!r}: expected a number or a "
+                    "percent string like '45%'"
+                )
+            try:
+                pct = float(value[:-1])
+            except ValueError as exc:
+                raise ValueError(f"Invalid percent value {value!r} for {key!r}") from exc
+            if extent is None:
+                raise ValueError(
+                    f"Percent value {value!r} for {key!r} requires "
+                    "from_spec(..., shape=(height, width))"
+                )
+            return int(pct / 100 * extent)
+
+        if shape_name == "polygon":
+            corners = [
+                [resolve(x, width, "corners"), resolve(y, height, "corners")]
+                for x, y in spec.pop("corners")
+            ]
+            return cls.polygon(corners, **spec)
+
+        x0 = resolve(spec.pop("x0"), width, "x0")
+        y0 = resolve(spec.pop("y0"), height, "y0")
+        for key in ("width", "radius"):
+            if key in spec:
+                spec[key] = resolve(spec[key], width, key)
+        if "height" in spec:
+            spec["height"] = resolve(spec["height"], height, "height")
+        return cls(x0, y0, source=shape_name, **spec)
+
     def apply(
         self, obj: do.Image, return_array: bool = False
     ) -> Union[do.Image, np.ndarray]:
