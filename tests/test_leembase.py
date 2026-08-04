@@ -59,7 +59,7 @@ def test_img_copying(img):
 
 def test_img_filter_contrast_carries_over_state(img):
     # LEEMImg carries extra per-instance state beyond base Image (_reader, _time_origin,
-    # default_mask) that DataObject._with_data (which filter()/contrast() are built on)
+    # _mask_spec) that DataObject._with_data (which filter()/contrast() are built on)
     # intentionally shares by reference rather than deep-copying, unlike copy(). Lock that
     # contract in, alongside the basic "still a correctly-transformed, correctly-typed
     # LEEMImg" check -- this is what a first, buggy _with_data got silently wrong (it never
@@ -78,6 +78,7 @@ def test_img_filter_contrast_carries_over_state(img):
         # documented _with_data contract: shared, not deep-copied, by reference
         assert result._reader is img._reader
         assert result._time_origin is img._time_origin
+        assert result._mask_spec is img._mask_spec
 
 
 def test_imge_constructor_nonsense():
@@ -244,6 +245,64 @@ def test_stack_normalize(inplace, copy, normed_img):
     for img, ref_img in zip(stack, ref):
         assert (img is ref_img) == inplace
         assert_array_equal(img.image, normed_img.image)
+
+
+### default_mask #######################################################
+
+
+def test_default_mask_resolves_to_reader_default(img):
+    mask = img.default_mask
+    assert isinstance(mask, ROI)
+    height, width = img.shape
+    assert mask.position[0] == width // 2
+    assert mask.position[1] == height // 2
+    assert mask.ref_point[0] == width // 2 * 9 // 10
+
+
+def test_default_mask_not_in_meta(img):
+    # default_mask is now a lazily-resolved property, not metadata -- it must not sit in
+    # _meta (where it used to live as a hardcoded None, dropped from HDF5 export).
+    assert "default_mask" not in img._meta
+
+
+def test_default_mask_setter_accepts_roi(img):
+    roi = ROI.circle(1, 1, radius=1)
+    img2 = img.copy()
+    img2.default_mask = roi
+    assert img2.default_mask is roi
+    # the original/other instance is untouched
+    assert img.default_mask is not roi
+
+
+def test_default_mask_setter_accepts_spec_dict(img):
+    img2 = img.copy()
+    img2.default_mask = {"shape": "circle", "x0": "50%", "y0": "50%", "radius": "10%"}
+    height, width = img2.shape
+    assert img2.default_mask.ref_point[0] == int(0.10 * width)
+
+
+def test_default_mask_setter_accepts_none(img):
+    img2 = img.copy()
+    img2.default_mask = None
+    assert img2.default_mask is None
+
+
+def test_default_mask_cached_per_shape(img):
+    first = img.default_mask
+    second = img.default_mask
+    assert first is second
+
+
+def test_align_mask_true_matches_pre_config_hardcoded_circle(short_stack):
+    # regression guard: align(mask=True)'s resolved mask must stay bit-identical to the
+    # pre-config hardcoded circle (radius = width // 2 * 9 // 10) it replaces.
+    stack = short_stack.copy()
+    height, width = stack[0].shape
+    expected = ROI.circle(
+        x0=width // 2, y0=height // 2, radius=width // 2 * 9 // 10
+    ).pad_to(height, width)
+    resolved = base._resolve_mask(stack[0].default_mask, (height, width))
+    assert_array_equal(resolved, expected)
 
 
 def test_stack_align(short_stack):
@@ -1139,6 +1198,202 @@ def test_do_ecc_align_unknown_trafo_falls_back_to_translation(capfd):
     out, _err = capfd.readouterr()
     assert "Unrecognized transformation" in out
     assert warp_matrix.shape == (3, 3)
+
+
+### registration algorithms (phasecorr, mask handling, registry)
+#
+# do_ecc_align fails outright on contrast-inverted images (LEEM images can invert contrast
+# across a wide energy sweep) -- these tests cover "phasecorr" (FFT phase correlation), the
+# algorithm added to survive that, plus the shared mask handling (`_resolve_mask`) both
+# algorithms and `align()` go through.
+#
+# Ground truth is built the same way as test_stack_align: warp a real image by a *known*
+# matrix via cv.warpPerspective(..., flags=INTER_LINEAR + WARP_INVERSE_MAP), matching uspy's
+# own `template = warp_matrix * input` convention (see `_warp_perspective`), so registering
+# the pair back should recover exactly that matrix's translation.
+
+
+def _shift_matrix(tx, ty):
+    warp = np.eye(3, dtype=np.float32)
+    warp[0, 2] = -tx
+    warp[1, 2] = -ty
+    return warp
+
+
+def _shifted(template_arr, tx, ty):
+    """`input` such that registering it against `template_arr` should recover translation
+    `(tx, ty)` under uspy's warp convention -- see module comment above."""
+    warp = _shift_matrix(tx, ty)
+    return cv.warpPerspective(
+        template_arr, warp, template_arr.shape[::-1],
+        flags=cv.INTER_LINEAR + cv.WARP_INVERSE_MAP,
+    )
+
+
+def _bremen_roi():
+    template = base.LEEMImg(BREMEN_IMG_FNAME)
+    return ROI.circle(
+        x0=template.width // 2, y0=template.height // 2, radius=template.width // 2 * 9 // 10
+    )
+
+
+def _bremen_template_and_mask():
+    template = base.LEEMImg(BREMEN_IMG_FNAME)
+    mask = _bremen_roi().pad_to(template.height, template.width).astype(np.uint8)
+    return template.image.astype(np.float32), mask
+
+
+### mask handling (_resolve_mask): the ndarray-truthiness bug, and ROI-as-mask support
+
+
+def test_align_accepts_ndarray_mask(short_stack):
+    """Regression: align(mask=<ndarray>) used to raise ValueError('The truth value of an
+    array...') from a bare `if mask:` truthiness check on the array."""
+    mask = _bremen_roi().pad_to(short_stack[0].height, short_stack[0].width).astype(np.uint8)
+    aligned = short_stack.copy().align(mask=mask)
+    assert aligned.warp_matrix.shape == (len(short_stack), 3, 3)
+
+
+def test_align_accepts_roi_mask(short_stack):
+    roi = ROI.circle(
+        x0=short_stack[0].width // 2, y0=short_stack[0].height // 2, radius=130
+    )
+    ndarray_mask = roi.pad_to(short_stack[0].height, short_stack[0].width).astype(np.uint8)
+
+    via_roi = short_stack.copy().align(mask=roi)
+    via_ndarray = short_stack.copy().align(mask=ndarray_mask)
+    np.testing.assert_allclose(via_roi.warp_matrix, via_ndarray.warp_matrix, atol=1e-4)
+
+
+def test_do_ecc_align_accepts_roi_mask():
+    img1 = base.LEEMImg(BREMEN_IMG_FNAME)
+    img2 = base.LEEMImg(BREMEN2_IMG_FNAME)
+    roi = _bremen_roi()
+    ndarray_mask = roi.pad_to(img1.height, img1.width).astype(np.uint8)
+
+    via_roi = base.do_ecc_align(img1, img2, mask=roi, max_iter=50)
+    via_ndarray = base.do_ecc_align(img1, img2, mask=ndarray_mask, max_iter=50)
+    assert_array_equal(via_roi, via_ndarray)
+
+
+def test_do_phasecorr_align_accepts_roi_mask():
+    template, ndarray_mask = _bremen_template_and_mask()
+    roi = _bremen_roi()
+    moving = _shifted(template, 15.0, -10.0)
+
+    via_roi = base.do_phasecorr_align(moving, template, mask=roi)
+    via_ndarray = base.do_phasecorr_align(moving, template, mask=ndarray_mask)
+    assert_array_equal(via_roi, via_ndarray)
+
+
+def test_find_warp_matrix_accepts_roi_mask():
+    img1 = base.LEEMImg(BREMEN_IMG_FNAME)
+    img2 = base.LEEMImg(BREMEN2_IMG_FNAME)
+    roi = _bremen_roi()
+    ndarray_mask = roi.pad_to(img1.height, img1.width).astype(np.uint8)
+
+    via_roi = img1.find_warp_matrix(img2, mask=roi, max_iter=50)
+    via_ndarray = img1.find_warp_matrix(img2, mask=ndarray_mask, max_iter=50)
+    assert_array_equal(via_roi, via_ndarray)
+
+
+### do_phasecorr_align
+
+
+def test_phasecorr_recovers_known_shift():
+    template, mask = _bremen_template_and_mask()
+    tx, ty = 15.0, -10.0
+    moving = _shifted(template, tx, ty)
+    warp_matrix = base.do_phasecorr_align(moving, template, mask=mask)
+    assert warp_matrix.shape == (3, 3)
+    np.testing.assert_allclose([warp_matrix[0, 2], warp_matrix[1, 2]], [tx, ty], atol=0.5)
+
+
+def test_phasecorr_masked_has_no_zero_shift_bias():
+    """The mask boundary must not itself act as a spurious zero-shift feature -- a hard 0/1
+    edge is bit-identical between both images and out-correlates real content; feathering the
+    mask (see do_phasecorr_align) is what avoids that."""
+    template, mask = _bremen_template_and_mask()
+    tx, ty = 3.0, 4.0
+    moving = _shifted(template, tx, ty)
+    warp_matrix = base.do_phasecorr_align(moving, template, mask=mask)
+    assert not (warp_matrix[0, 2] == 0 and warp_matrix[1, 2] == 0)
+    np.testing.assert_allclose([warp_matrix[0, 2], warp_matrix[1, 2]], [tx, ty], atol=0.5)
+
+
+def test_phasecorr_survives_contrast_inversion():
+    template, mask = _bremen_template_and_mask()
+    tx, ty = 15.0, -10.0
+    moving_inverted = template.max() - _shifted(template, tx, ty)
+    warp_matrix = base.do_phasecorr_align(moving_inverted, template, mask=mask)
+    np.testing.assert_allclose([warp_matrix[0, 2], warp_matrix[1, 2]], [tx, ty], atol=0.5)
+
+
+def test_phasecorr_rejects_non_translation_trafo():
+    template, mask = _bremen_template_and_mask()
+    with pytest.raises(ValueError, match="translation"):
+        base.do_phasecorr_align(template, template, trafo="affine", mask=mask)
+
+
+def test_find_warp_matrix_phasecorr_non_translation_trafo_raises():
+    img1 = base.LEEMImg(BREMEN_IMG_FNAME)
+    img2 = base.LEEMImg(BREMEN2_IMG_FNAME)
+    with pytest.raises(ValueError):
+        img1.find_warp_matrix(img2, algorithm="phasecorr", trafo="affine")
+
+
+### do_ecc_align: known limitation motivating "phasecorr"
+
+
+def test_ecc_fails_on_contrast_inversion():
+    template, mask = _bremen_template_and_mask()
+    moving_inverted = template.max() - _shifted(template, 15.0, -10.0)
+    with pytest.raises(cv.error):
+        base.do_ecc_align(moving_inverted, template, mask=mask, max_iter=200)
+
+
+### algorithm registry
+
+
+def test_find_warp_matrix_unknown_algorithm_matches_registry_message():
+    img1 = base.LEEMImg(BREMEN_IMG_FNAME)
+    img2 = base.LEEMImg(BREMEN2_IMG_FNAME)
+    with pytest.raises(ValueError, match="Unknown Algorithm"):
+        img1.find_warp_matrix(img2, algorithm="nonsense")
+
+
+def test_align_unknown_algorithm_raises_immediately(short_stack):
+    """A bad 'algorithm' must surface as an immediate error, not be caught by align()'s
+    per-frame `except Exception` and silently degraded into an interpolated guess."""
+    with pytest.raises(ValueError, match="Unknown Algorithm"):
+        short_stack.align(algorithm="nonsense")
+
+
+def test_align_phasecorr_non_translation_trafo_raises_immediately(short_stack):
+    with pytest.raises(ValueError):
+        short_stack.align(algorithm="phasecorr", trafo="affine")
+
+
+def test_stack_align_phasecorr(short_stack):
+    stack = short_stack
+    template = stack[0].copy()
+
+    rng = np.random.default_rng(7)
+    x = rng.random(len(stack)) * 20 - 10
+    y = rng.random(len(stack)) * 20 - 10
+    x[0] = y[0] = 0
+
+    for dx, dy, img in zip(x, y, stack):
+        warp = np.array([[1, 0, dx], [0, 1, dy], [0, 0, 1]])
+        img.image = cv.warpPerspective(
+            template.image, warp, img.image.shape[::-1], flags=cv.INTER_CUBIC,
+        )
+    stack = stack.align(mask=True, algorithm="phasecorr")
+
+    dx = stack.warp_matrix[:, 0, 2]
+    dy = stack.warp_matrix[:, 1, 2]
+    np.testing.assert_allclose(x, dx, atol=0.5)
+    np.testing.assert_allclose(y, dy, atol=0.5)
 
 
 ### json round-trip

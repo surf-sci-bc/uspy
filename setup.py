@@ -31,6 +31,7 @@ setup(
         "deepdiff",
         "matplotlib",
         "pandas",
+        "scipy",
         "scikit-image",
         "scikit-learn",
         #"scikit-video",

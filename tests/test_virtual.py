@@ -384,6 +384,17 @@ def test_virtual_align_does_not_trigger_materialization_warning(stack_folder, re
     assert not materializing
 
 
+def test_virtual_align_phasecorr_stays_virtual(stack_folder, recwarn):
+    """Same compose-not-materialize contract as the default 'ecc' algorithm (above), for the
+    new 'phasecorr' registration backend."""
+    virtual = LEEMStack(stack_folder, virtual=True)[:5]
+    aligned = virtual.align(algorithm="phasecorr")
+    assert aligned.virtual is True
+    assert all(element.is_virtual for element in aligned.elements)
+    materializing = [w for w in recwarn.list if "deferred data with a resident" in str(w.message)]
+    assert not materializing
+
+
 def test_virtual_align_inplace_stays_virtual(stack_folder):
     virtual = LEEMStack(stack_folder, virtual=True)[:4]
     result = virtual.align(inplace=True)

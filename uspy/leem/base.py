@@ -10,7 +10,7 @@ uspy.leem.readers) -- the Elmitec UKSOFT2001 ".dat" format is the default.
 # plyint: disable=access-member-before-definition
 
 from __future__ import annotations
-from typing import Any, Union, Optional
+from typing import Any, Callable, Union, Optional
 from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import partial
@@ -23,6 +23,7 @@ import pandas as pd
 
 import numpy as np
 import cv2 as cv
+from skimage.registration import phase_cross_correlation
 
 import tifffile
 from tifffile.tifffile import TiffFileError
@@ -33,7 +34,12 @@ from uspy.dataobject.deferred import DeferredArray, ReaderPixels, is_deferred
 from uspy.derived import StitchedLine
 from uspy.leem.utility import imgify
 from uspy.roi import ROI
-from uspy.leem.readers import LEEMReader, resolve_reader, resolve_plotting_fields
+from uspy.leem.readers import (
+    LEEMReader,
+    resolve_reader,
+    resolve_plotting_fields,
+    resolve_default_mask,
+)
 # Re-exported for backward compatibility -- the Elmitec binary parser and its lookup
 # tables now live in uspy.leem.readers.elmitec.
 from uspy.leem.readers.elmitec import (  # noqa: F401  pylint: disable=unused-import
@@ -187,12 +193,41 @@ class LEEMImg(Image):
             time_origin = TimeOrigin(time_origin)
         super().__init__(*args, defer=defer, **kwargs)
         self._time_origin = time_origin  # is a list so it can be mutable
-        # Writes the store directly, not `self.default_mask = None` (which would go through
-        # the _meta property and immediately resolve/consume the metadata loader installed
-        # just above by a deferred construction -- defeating the entire point of deferring).
-        self._meta_store["default_mask"] = None  # ROI.circle(
-        #     x0=self.width // 2, y0=self.height // 2, radius=self.width // 2
-        # )
+        # The instrument's default mask (see the `default_mask` property below), resolved
+        # to an unresolved spec/ROI/None here (cheap -- reuses the same cached uspy.toml
+        # search-path walk as plotting_fields above) but not yet converted to a `ROI`: that
+        # conversion needs `self.shape`, which for a deferred element could mean a file-header
+        # read, so it stays lazy until `default_mask` is actually asked for.
+        self._mask_spec = resolve_default_mask(source, self._reader)
+        self._default_mask_cache = None  # (shape, ROI) once resolved -- see the property
+
+    @property
+    def default_mask(self) -> Optional[ROI]:
+        """The instrument's default mask (e.g. the channelplate aperture), used by
+        `LEEMStack.align()`/`uspy.plotting.plot_img()`/`uspy.plotting.make_video()` when
+        called with `mask=True`. Resolved at construction time from (most specific first) a
+        session override (`uspy.leem.readers.set_default_mask`), a `uspy.toml` `[uspy.mask]`
+        table, or the reader's own `default_mask` -- see
+        `uspy.leem.readers.resolve_default_mask`. `None` if no mask applies.
+
+        A spec dict is converted to a `ROI` lazily, on first access, and cached per
+        `self.shape` (re-resolved if `self.shape` changes, e.g. after `_with_data` produces
+        a differently-shaped copy) -- this avoids resolving `self.shape` (a potential
+        file-header read for a deferred element) until a mask is actually asked for.
+        """
+        if self._mask_spec is None or isinstance(self._mask_spec, ROI):
+            return self._mask_spec
+        shape = self.shape
+        if self._default_mask_cache is not None and self._default_mask_cache[0] == shape:
+            return self._default_mask_cache[1]
+        roi = ROI.from_spec(self._mask_spec, shape=shape)
+        self._default_mask_cache = (shape, roi)
+        return roi
+
+    @default_mask.setter
+    def default_mask(self, value: Union[ROI, dict, None]) -> None:
+        self._mask_spec = value
+        self._default_mask_cache = None
 
     def parse_deferred(self, source: Any) -> dict[str, Any]:
         """Deferred (`defer=True`) counterpart of `parse`: builds a cheap, reader-backed
@@ -305,20 +340,29 @@ class LEEMImg(Image):
         result.dark_counts = dark_counts
         return result
 
-    def find_warp_matrix(
-        self, template: Image, algorithm="ecc", **kwargs
-    ) -> np.ndarray:
+    def find_warp_matrix(self, template: Image, algorithm="ecc", **kwargs) -> np.ndarray:
         """Calculates a warp matrix between the image and a template.
 
-        The algorithm applied is specified by the *algorithm* argument, which is *ecc* by default.
-        currently only *ecc* is implemented
+        The algorithm applied is specified by the *algorithm* argument, which is *ecc* by
+        default. Both algorithms accept *mask* (an `ROI` or an ndarray); only *ecc* accepts
+        transformations other than *translation* (via the *trafo* kwarg).
+
+        - "ecc" (`do_ecc_align`): OpenCV's enhanced correlation coefficient. Fast and
+          accurate, but assumes a positive-gain relationship between image intensities and
+          fails outright if contrast inverts between *self* and *template* (as LEEM images
+          can across a wide energy sweep).
+        - "phasecorr" (`do_phasecorr_align`): FFT phase correlation
+          (`skimage.registration.phase_cross_correlation`). Translation only. Structurally
+          invariant to contrast inversion. Can lock onto the wrong period for images
+          dominated by repeating structure (e.g. a wide-FOV terrace array) -- prefer a tight
+          *mask* in that regime.
 
         Parameters
         ----------
         template : Image
             Template image against which is aligned
         algorithm : str, optional
-            algorithm used for registration, by default "ecc"
+            algorithm used for registration: "ecc" (default) or "phasecorr"
 
         **kwargs
             Additional keyword arguments are passed through to the registration function. Can specifiy further options like convergence criteria or transformations
@@ -331,16 +375,16 @@ class LEEMImg(Image):
         Raises
         ------
         ValueError
-            Raised when not implemented alogrithm is called.
+            Raised when an unknown *algorithm*, or an unsupported *trafo* for the chosen
+            *algorithm*, is given.
 
         See Also
         --------
         do_ecc_align
+        do_phasecorr_align
         """
-        if algorithm == "ecc":
-            return do_ecc_align(self, template, **kwargs)
-
-        raise ValueError("Unknown Algorithm")
+        fn = _resolve_algorithm(algorithm, kwargs.get("trafo", "translation"))
+        return fn(self, template, **kwargs)
 
     def parse(self, source: str) -> dict[str, Any]:
         if isinstance(source, Image):
@@ -542,7 +586,7 @@ class LEEMStack(ImageStack):
     def align(
         self,
         inplace: bool = False,
-        mask: Union[bool, np.ndarray, None] = True,
+        mask: Union[bool, np.ndarray, ROI, None] = True,
         template: Union[int, Image, None] = None,
         sanity: bool = True,
         **kwargs,
@@ -577,13 +621,18 @@ class LEEMStack(ImageStack):
             up front (prefer 'inplace=True' for a stack close to the memory limit). For a
             virtual stack this copy is free (deferred pixel data is never actually
             duplicated) and the result stays virtual either way.
-        mask : bool, np.ndarray or None, default True
+        mask : bool, np.ndarray, ROI or None, default True
             Mask that will be used during registration
 
-            - If 'True' a circular mask with a radius=0.9*Image.width is used as mask
+            - If 'True', 'stack[0].default_mask' is used -- the instrument's default mask
+              (e.g. the channelplate aperture; a radius=0.9*Image.width circle unless
+              overridden via a 'uspy.toml' '[uspy.mask]' table or
+              'uspy.leem.readers.set_default_mask', see 'LEEMImg.default_mask')
             - If 'False' or 'None' no mask is used during registration
-            - If np.ndarray the array must be of dtype=np.uint8 and contain the mask that should be
-              applied
+            - If an 'ROI' (e.g. 'ROI.circle(x0, y0, radius=...)'), it is converted internally
+              (zero pixel I/O -- see 'ROI.pad_to')
+            - If np.ndarray, any 2D array matching the stack's frame shape; cast to uint8, so
+              a boolean array (e.g. 'roi.array') works too
         template : int, Image or None, default None
             If given, every image is aligned directly against this fixed reference image
             instead of sequentially against its predecessor. An int indexes 'stack'
@@ -593,7 +642,10 @@ class LEEMStack(ImageStack):
             Whether to run the z-score outlier check described above.
 
         **kwargs
-            Additional keyword arguments are passed through to Image.find_warp_matrix
+            Additional keyword arguments are passed through to Image.find_warp_matrix --
+            notably 'algorithm' ("ecc" default or "phasecorr"; see 'find_warp_matrix'). For
+            an energy sweep with strong contrast inversion, prefer 'algorithm="phasecorr"'
+            over plain "ecc".
 
         Returns
         -------
@@ -603,7 +655,8 @@ class LEEMStack(ImageStack):
         Raises
         ------
         ValueError
-            If the stack is empty.
+            If the stack is empty, or 'algorithm'/'trafo' is not recognized or not supported
+            together.
         TypeError
             If 'template' is neither an int, an Image, nor None.
         IndexError
@@ -616,6 +669,11 @@ class LEEMStack(ImageStack):
         """
         if len(self) == 0:
             raise ValueError("Cannot align an empty stack.")
+
+        # Resolve up front (rather than letting a bad 'algorithm'/'trafo' combination be
+        # caught, per frame, by the broad `except Exception` below) so a typo surfaces as an
+        # immediate error instead of silently degrading every frame to an interpolated guess.
+        _resolve_algorithm(kwargs.get("algorithm", "ecc"), kwargs.get("trafo", "translation"))
 
         if inplace:
             stack = self
@@ -636,15 +694,13 @@ class LEEMStack(ImageStack):
                 "are not sanity-checked."
             )
 
-        if mask:
-            roi = ROI.circle(
-                x0=stack[0].width // 2,
-                y0=stack[0].height // 2,
-                radius=stack[0].width // 2 * 9 // 10,
-            )
-            mask = (~np.ma.getmaskarray(roi.apply(stack[0]).image)).astype(np.uint8)
-        else:
-            mask = None
+        # `isinstance` first, rather than testing `mask` for truthiness directly: an ndarray
+        # mask's truth value is ambiguous (raises ValueError) once it has more than one
+        # element, so only the bool-or-None `True`/`False`/`None` shorthand is ever tested
+        # that way.
+        if isinstance(mask, bool):
+            mask = stack[0].default_mask if mask else None
+        mask = _resolve_mask(mask, (stack[0].height, stack[0].width))
 
         if template is None:
             # List of all warp matrices, relative to the first image. The first
@@ -772,13 +828,37 @@ class IVCurve(StitchedLine):
         super().__init__(*args, **kwargs, xaxis="energy")
 
 
+def _as_array(img: Union[Image, np.ndarray]) -> np.ndarray:
+    """`img.image` for an `Image`, or `img` itself coerced via `np.asarray` -- lets every
+    registration backend (`do_ecc_align`/`do_phasecorr_align`) accept either an `Image`/
+    `LEEMImg` or a raw ndarray."""
+    return img.image if isinstance(img, Image) else np.asarray(img)
+
+
+def _resolve_mask(
+    mask: Union[np.ndarray, ROI, None], shape: tuple[int, int]
+) -> Optional[np.ndarray]:
+    """Normalizes a registration `mask` argument to a uint8 ndarray or `None`. Accepts `None`,
+    an `ROI` (converted via `ROI.pad_to` -- zero pixel I/O, unlike `roi.apply(img).image`), or
+    an ndarray of any dtype (cast to uint8, so a boolean array -- e.g. `roi.array` -- also just
+    works). `shape` is the target `(height, width)`, matching `Image.image.shape` (note
+    `ROI.pad_to`'s own parameter names are, confusingly, `(width, height)` but are actually
+    consumed in `(rows, cols)` = `(height, width)` order -- passing `*shape` here sidesteps
+    that directly rather than re-deriving it at each call site)."""
+    if mask is None:
+        return None
+    if isinstance(mask, ROI):
+        return mask.pad_to(*shape).astype(np.uint8)
+    return np.asarray(mask).astype(np.uint8)
+
+
 def do_ecc_align(
-    input_img: Image,
-    template_img: Image,
+    input_img: Union[Image, np.ndarray],
+    template_img: Union[Image, np.ndarray],
     max_iter: int = 500,
     eps: float = 1e-4,
     trafo: str = "translation",
-    mask: Union[np.ndarray, None] = None,
+    mask: Union[np.ndarray, ROI, None] = None,
 ) -> np.ndarray:
     """Finds warp matrix between two Images using ECC
 
@@ -786,11 +866,16 @@ def do_ecc_align(
     specified by 'trafo' using the ECC Algorithm. A optional mask can be given to masked areas of
     the images that are not taken into account during registration
 
+    ECC assumes a positive-gain relationship between the two images' intensities and fails
+    outright (raises `cv2.error`) if contrast has inverted between them -- as LEEM images
+    routinely do across a wide energy sweep. For that case, use 'algorithm="phasecorr"' on
+    `LEEMImg.find_warp_matrix`/`LEEMStack.align` instead.
+
     Parameters
     ----------
-    input_img : Image
+    input_img : Image or np.ndarray
         Image that will be warped to match the tempalate image
-    template_img : Image
+    template_img : Image or np.ndarray
         The template image
     max_iter : int, optional
         Number of iterations to find the warp matrix. Regstration fails if max_iter is
@@ -801,19 +886,24 @@ def do_ecc_align(
         The transformation that is applied to the images. 'trafo' must be either
 
         * "translation" for only x,y shifting of images
-        * "rigid" or "euclidean" for translation, rotation and scaling
+        * "rigid" or "euclidean" for translation and rotation
         * "affine" for translation, rotation, scaling and shearing
 
         , by default "translation"
-    mask : Union[np.ndarray, None], optional
-        The mask must be a 2D numpy array of dtype=np.uint8 containing '0' where pixels in the
-        images will not be taken into account during registration and '1' when they are, by
-        default 'None'
+    mask : np.ndarray, ROI or None, optional
+        Pixels excluded from registration. An `ROI` (e.g. `ROI.circle(x0, y0, radius=...)`) is
+        converted internally; an ndarray must be 2D and is cast to uint8, with '0' where
+        pixels are excluded and any nonzero value where they are taken into account. By
+        default 'None' (no mask).
 
     Returns
     -------
     np.ndarray
         3x3 numpy array representing the warp matrix
+
+    See Also
+    --------
+    do_phasecorr_align
     """
 
     criteria = (cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, max_iter, eps)
@@ -829,8 +919,12 @@ def do_ecc_align(
 
     warp_matrix = np.eye(2, 3, dtype=np.float32)
 
+    template_pixels = _as_array(template_img)
+    input_pixels = _as_array(input_img)
+    mask = _resolve_mask(mask, template_pixels.shape)
+
     template_arr = cv.normalize(
-        template_img.image,
+        template_pixels,
         None,
         0,
         255,
@@ -839,7 +933,7 @@ def do_ecc_align(
         mask,
     )
     input_arr = cv.normalize(
-        input_img.image,
+        input_pixels,
         None,
         0,
         255,
@@ -865,6 +959,138 @@ def do_ecc_align(
     warp_matrix = np.append(warp_matrix, [[0, 0, 1]], axis=0)
 
     return warp_matrix
+
+
+def do_phasecorr_align(
+    input_img: Union[Image, np.ndarray],
+    template_img: Union[Image, np.ndarray],
+    upsample_factor: int = 20,
+    mask: Union[np.ndarray, ROI, None] = None,
+    trafo: str = "translation",
+    normalization: Optional[str] = "phase",
+    mask_feather: float = 15,
+) -> np.ndarray:
+    """Finds a translation warp matrix between two images using FFT phase correlation.
+
+    Wraps `skimage.registration.phase_cross_correlation`. Structurally invariant to a
+    contrast inversion between 'input_img' and 'template_img' (negating one image negates
+    the whole cross-power spectrum; the peak is located on its magnitude), unlike
+    `do_ecc_align`, which fails outright in that case.
+
+    Being a single global FFT rather than a local iterative optimization, phase correlation
+    can lock onto the wrong period for images dominated by repeating structure (e.g. a
+    wide-FOV terrace array) instead of the true shift -- prefer a tight 'mask' if that is a
+    concern.
+
+    Parameters
+    ----------
+    input_img : Image or np.ndarray
+        Image that will be warped to match the template image
+    template_img : Image or np.ndarray
+        The template image
+    upsample_factor : int, optional
+        Registers to within '1/upsample_factor' of a pixel, by default 20
+    mask : np.ndarray, ROI or None, optional
+        Pixels excluded from registration. An `ROI` (e.g. `ROI.circle(x0, y0, radius=...)`) is
+        converted internally; an ndarray must be 2D and is cast to uint8, with '0' where
+        pixels are excluded and any nonzero value where they are taken into account. By
+        default 'None' (no mask). Applied by mean-subtracting each image within the mask,
+        then multiplying by a Gaussian-feathered ('mask_feather' px sigma) version of the
+        mask, rather than zeroing outside it sharply: a hard 0/1 edge is bit-identical
+        between both images and is otherwise itself a strong feature that a global FFT
+        correlation reliably locks onto at zero shift, regardless of the images' actual
+        content (this is not a hypothetical edge case -- it reproducibly beat the real
+        registration signal on real LEEM fixtures during development). skimage's
+        masked-normalized-correlation path is not used instead: that mode picks the *signed*
+        correlation maximum rather than its magnitude, so it is not contrast-inversion
+        invariant.
+    trafo : str, optional
+        Must be "translation" -- phase correlation cannot express rotation/scale/shear; by
+        default "translation"
+    normalization : str or None, optional
+        Passed to `phase_cross_correlation`; by default "phase"
+    mask_feather : float, optional
+        Gaussian sigma, in pixels, used to feather 'mask''s edge -- see 'mask' above. By
+        default 15; the exact value is not sensitive (verified over sigma 3-30 px on real
+        data) since its only job is breaking the hard edge's bit-for-bit self-similarity.
+
+    Returns
+    -------
+    np.ndarray
+        3x3 numpy array representing the warp matrix
+
+    Raises
+    ------
+    ValueError
+        If 'trafo' is not "translation".
+
+    See Also
+    --------
+    do_ecc_align
+    """
+    if trafo != "translation":
+        raise ValueError(
+            f"do_phasecorr_align only supports trafo='translation', got {trafo!r}. "
+            "Use algorithm='ecc' for rotation/scale/shear."
+        )
+
+    template_arr = _as_array(template_img).astype(np.float64)
+    input_arr = _as_array(input_img).astype(np.float64)
+    mask = _resolve_mask(mask, template_arr.shape)
+
+    if mask is not None:
+        valid = mask > 0
+        taper = np.clip(cv.GaussianBlur(mask.astype(np.float32), (0, 0), mask_feather), 0, 1)
+        template_arr = (template_arr - template_arr[valid].mean()) * taper
+        input_arr = (input_arr - input_arr[valid].mean()) * taper
+
+    # template = warp_matrix * input (see do_ecc_align) <-> input(u) = template(u - shift),
+    # i.e. warp_matrix's translation is the negative of the (row, col) shift skimage returns.
+    shift, _error, _phasediff = phase_cross_correlation(
+        template_arr,
+        input_arr,
+        upsample_factor=upsample_factor,
+        normalization=normalization,
+    )
+    warp_matrix = np.eye(3, dtype=np.float32)
+    warp_matrix[0, 2] = -shift[1]
+    warp_matrix[1, 2] = -shift[0]
+    return warp_matrix
+
+
+@dataclass(frozen=True)
+class _Algorithm:
+    """One registration backend for `find_warp_matrix`/`LEEMStack.align`: 'fn' is
+    `do_ecc_align`/`do_phasecorr_align`, 'trafos' the set of 'trafo' values it can express."""
+
+    fn: Callable[..., np.ndarray]
+    trafos: tuple[str, ...]
+
+
+#: Registry of `find_warp_matrix`'s `algorithm` option.
+ALIGNMENT_ALGORITHMS: dict[str, _Algorithm] = {
+    "ecc": _Algorithm(do_ecc_align, ("translation", "rigid", "euclidean", "affine")),
+    "phasecorr": _Algorithm(do_phasecorr_align, ("translation",)),
+}
+
+
+def _resolve_algorithm(algorithm: str, trafo: str) -> Callable[..., np.ndarray]:
+    """Looks up 'algorithm' in `ALIGNMENT_ALGORITHMS` and checks it supports 'trafo', raising
+    `ValueError` immediately on either mismatch -- used by both `find_warp_matrix` (per call)
+    and `LEEMStack.align` (once, up front, so a bad combination doesn't get caught by the
+    per-frame `except Exception` there and silently degraded to an interpolated guess)."""
+    try:
+        entry = ALIGNMENT_ALGORITHMS[algorithm]
+    except KeyError as exc:
+        raise ValueError(
+            f"Unknown Algorithm {algorithm!r}. Must be one of {tuple(ALIGNMENT_ALGORITHMS)}."
+        ) from exc
+    if trafo not in entry.trafos:
+        raise ValueError(
+            f"algorithm={algorithm!r} does not support trafo={trafo!r}; supported: "
+            f"{entry.trafos}."
+        )
+    return entry.fn
 
 
 #: Threshold on the robust (modified) z-score above which a shift is rejected as a
