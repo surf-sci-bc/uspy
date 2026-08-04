@@ -17,6 +17,7 @@ import scipy.optimize
 import scipy.constants as sc
 import scipy.signal
 import scipy.ndimage
+import scipy.spatial
 import skimage.measure
 from skimage.feature import peak_local_max
 from uspy import roi as rois
@@ -283,11 +284,15 @@ def xps_correct(stack, roi, radius=5, p0=None, plot=True, duplet=False):
     if plot:
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
 
-    if type(roi[0]) is np.array:  # if roi is list of points
+    if isinstance(roi[0], np.ndarray):  # if roi is list of points
+        # `type(roi[0]) is np.array` never matched (np.array is a function, not a type),
+        # so this coordinate-list convenience path was dead code.
         try:
-            roi = [rois.ROI.circle(*r, radius=5) for r in roi]
-        except:
-            print("roi must either be a list of rois or a list of coordinates")
+            roi = [rois.ROI.circle(*r, radius=radius) for r in roi]
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "roi must either be a list of ROIs or a list of (x, y) coordinates"
+            ) from exc
 
     # Extract curves
 
@@ -360,9 +365,13 @@ def xps_correct(stack, roi, radius=5, p0=None, plot=True, duplet=False):
     # Fit plane to shifts
     normal_vector, constant_term = _fit_plane(points[:, 0], points[:, 1], shifts)
 
+    # _fit_plane was called with (points[:, 0], points[:, 1], shifts) == (x, y, z), so
+    # normal_vector[0]/[1] are the x/y coefficients respectively -- must pair with xx/yy in
+    # that same order (xx varies over width/x, yy over height/y; np.mgrid[0:width, 0:height]
+    # below), not swapped.
     xx, yy = np.mgrid[0 : stack[0].width, 0 : stack[0].height]
     zz = (
-        -(normal_vector[0] * yy + normal_vector[1] * xx + constant_term)
+        -(normal_vector[0] * xx + normal_vector[1] * yy + constant_term)
         / normal_vector[2]
     )
 
@@ -578,19 +587,23 @@ def correct_energies(stack, z_corr):
 #     return intensity
 
 
-def get_max_variance_idx(stack):
-    stack = stackify(stack)
-    max_var = 0
-    max_index = 0
-    for i, img in enumerate(stack):
-        var = np.var(
-            (img.data.flatten() - np.amin(img.data))
-            / (np.amax(img.data) - np.amin(img.data))
-        )
-        if var > max_var:
-            max_var = var
-            max_index = i
-    return max_index
+# Commented out 2026-08-04: broken duplicate of uspy.plotting.get_max_variance_idx (reads
+# img.data, a dict in the current DataObject API, not an ndarray -- see CLAUDE.md). The
+# working copy in uspy/plotting.py:980 is the one already in use (uspy/plotting.py:640) and
+# is now the sole canonical get_max_variance_idx. See tests/coverage plan discussion.
+# def get_max_variance_idx(stack):
+#     stack = stackify(stack)
+#     max_var = 0
+#     max_index = 0
+#     for i, img in enumerate(stack):
+#         var = np.var(
+#             (img.data.flatten() - np.amin(img.data))
+#             / (np.amax(img.data) - np.amin(img.data))
+#         )
+#         if var > max_var:
+#             max_var = var
+#             max_index = i
+#     return max_index
 
 
 # class Profile(ROI):
@@ -693,58 +706,64 @@ def get_max_variance_idx(stack):
 #         return art
 
 
-class RSM:
-    def __init__(self, stack, profile, BZ_pix, d, gamma=None, Vi=0):
-        self.stack = stackify(stack)
-        self.profile = profile
-        if gamma is None:
-            gamma = profile.position
-
-        self.gamma = np.array(gamma)
-        self.k_BZ = 2 * np.pi / d
-        self.k_res = self.k_BZ / BZ_pix
-        self.Vi = Vi
-
-        self.data = None
-
-    def __call__(self):
-        if self.data is not None:
-            return self.data
-
-        kpara = np.linalg.norm(self.profile.xyC - self.gamma, axis=1) * self.k_res
-        kxi_center = np.linalg.norm(self.profile.position - self.profile.xy[0, :])
-        kxi_x = np.linalg.norm(self.profile.xyC - self.profile.xyC[0, :], axis=1)
-        kxi = (kxi_x - kxi_center) * self.k_res
-        kx = np.tile(kxi, (len(self.stack) + 1, 1))
-
-        E = self.stack.energy
-        dE = np.mean(np.diff(E))
-        EC = np.append(E - dE, E[-1] + dE)
-
-        ky = np.zeros((len(EC), self.profile.length + 1))
-        z = np.zeros((len(self.stack), self.profile.length))
-
-        for i, img in enumerate(progress_bar(self.stack, "Calculating RSM...")):
-            ky[i, :] = self.get_kperp(EC[i], kpara)
-            z[i, :] = self.profile.apply(img.data)
-
-        ky[-1, :] = self.get_kperp(EC[-1], kpara)
-        self.data = (kx, ky, z)
-        return self.data
-
-    def get_kpara(self):
-        kx = np.linalg.norm(self.profile.xyC - self.gamma, axis=1) * self.k_res
-        return kx
-
-    def get_kperp(self, E, kpara):
-        energy = (E + self.Vi) * sc.e
-        k0 = np.sqrt(2 * sc.m_e * energy) / sc.hbar  # k0
-        kpara = kpara.clip(max=k0)
-        # see Thomas Schmidt, hering3.c, L600
-        # kpara^2 + kperp^2 = K
-        # k0^2 = (kperp - k0)^2 + kpara^2
-        kperp = k0 + np.sqrt(k0**2 - kpara**2)  # kpara^2 + kperp^2 = k0^2
-        return np.nan_to_num(kperp, 0)
+# Commented out 2026-08-04: not in use (see uspy/plotting.py's plot_rsm, commented out
+# alongside this). __call__ needs profile.position/.xy/.xyC/.length and
+# profile.apply(img.data), none of which uspy.roi.Profile (only .points/.width/.apply(obj))
+# provides any more -- reviving this means designing those geometry properties, including
+# the xy-vs-xyC convention that sets the k-parallel scale, which is a physics decision, not
+# a test gap. See CLAUDE.md and the coverage-improvement plan discussion.
+# class RSM:
+#     def __init__(self, stack, profile, BZ_pix, d, gamma=None, Vi=0):
+#         self.stack = stackify(stack)
+#         self.profile = profile
+#         if gamma is None:
+#             gamma = profile.position
+#
+#         self.gamma = np.array(gamma)
+#         self.k_BZ = 2 * np.pi / d
+#         self.k_res = self.k_BZ / BZ_pix
+#         self.Vi = Vi
+#
+#         self.data = None
+#
+#     def __call__(self):
+#         if self.data is not None:
+#             return self.data
+#
+#         kpara = np.linalg.norm(self.profile.xyC - self.gamma, axis=1) * self.k_res
+#         kxi_center = np.linalg.norm(self.profile.position - self.profile.xy[0, :])
+#         kxi_x = np.linalg.norm(self.profile.xyC - self.profile.xyC[0, :], axis=1)
+#         kxi = (kxi_x - kxi_center) * self.k_res
+#         kx = np.tile(kxi, (len(self.stack) + 1, 1))
+#
+#         E = self.stack.energy
+#         dE = np.mean(np.diff(E))
+#         EC = np.append(E - dE, E[-1] + dE)
+#
+#         ky = np.zeros((len(EC), self.profile.length + 1))
+#         z = np.zeros((len(self.stack), self.profile.length))
+#
+#         for i, img in enumerate(progress_bar(self.stack, "Calculating RSM...")):
+#             ky[i, :] = self.get_kperp(EC[i], kpara)
+#             z[i, :] = self.profile.apply(img.data)
+#
+#         ky[-1, :] = self.get_kperp(EC[-1], kpara)
+#         self.data = (kx, ky, z)
+#         return self.data
+#
+#     def get_kpara(self):
+#         kx = np.linalg.norm(self.profile.xyC - self.gamma, axis=1) * self.k_res
+#         return kx
+#
+#     def get_kperp(self, E, kpara):
+#         energy = (E + self.Vi) * sc.e
+#         k0 = np.sqrt(2 * sc.m_e * energy) / sc.hbar  # k0
+#         kpara = kpara.clip(max=k0)
+#         # see Thomas Schmidt, hering3.c, L600
+#         # kpara^2 + kperp^2 = K
+#         # k0^2 = (kperp - k0)^2 + kpara^2
+#         kperp = k0 + np.sqrt(k0**2 - kpara**2)  # kpara^2 + kperp^2 = k0^2
+#         return np.nan_to_num(kperp, 0)
 
 
 # class LEEMCurve(Loadable):
@@ -907,36 +926,41 @@ class RSM:
 #         np.savetxt(ofile, data, delimiter=",")
 
 
-def poisson_correction(line: IntensityLine, plot=False) -> IntensityLine:
-    stack = line.stack
-    roi = line.roi
-
-    # mask image for each image in stack, so mean and variance can be calulated
-    mstack = LEEMStack([roi.apply(img) for img in stack])
-    mean = np.array([np.mean((img.image)) for img in mstack])
-    var = np.array([np.var((img.image)) / np.sum(~img.image.mask) for img in mstack])
-
-    # Fit line to Variance-Mean
-    # To calculate Darkcounts and gain of CCD per Electron and Pixel
-
-    f = lambda x, a, b: a * (x) + b
-    popt, pcov = scipy.optimize.curve_fit(f, mean, var)
-    a, b = popt
-    x0 = -b / a
-    gain = np.sqrt(a)
-    err = np.sqrt(np.diag(pcov))
-    print(popt, err)
-    print(f"Dark Counts={x0}±{(err[0]/a-err[1]/b)*gain}")
-    print(f"gain={gain}±{0.5*err[0]/a*gain}")
-
-    if plot:
-        plt.scatter(mean, var)
-        plt.plot(mean, f(mean, *popt), color="r")
-        plt.xlabel("Mean")
-        plt.ylabel("Variance")
-        plt.show()
-
-    # Return Poission corrected line. Intensity is now electrons per pixel.
+# Commented out 2026-08-04: experimental, and broken -- falls off the end returning None
+# (its own `return (line - x0) / gain` was stranded, unreachable, after fit_fermi_edge's
+# return -- moved back here as a comment for reference). See CLAUDE.md and the
+# coverage-improvement plan discussion.
+# def poisson_correction(line: IntensityLine, plot=False) -> IntensityLine:
+#     stack = line.stack
+#     roi = line.roi
+#
+#     # mask image for each image in stack, so mean and variance can be calulated
+#     mstack = LEEMStack([roi.apply(img) for img in stack])
+#     mean = np.array([np.mean((img.image)) for img in mstack])
+#     var = np.array([np.var((img.image)) / np.sum(~img.image.mask) for img in mstack])
+#
+#     # Fit line to Variance-Mean
+#     # To calculate Darkcounts and gain of CCD per Electron and Pixel
+#
+#     f = lambda x, a, b: a * (x) + b
+#     popt, pcov = scipy.optimize.curve_fit(f, mean, var)
+#     a, b = popt
+#     x0 = -b / a
+#     gain = np.sqrt(a)
+#     err = np.sqrt(np.diag(pcov))
+#     print(popt, err)
+#     print(f"Dark Counts={x0}±{(err[0]/a-err[1]/b)*gain}")
+#     print(f"gain={gain}±{0.5*err[0]/a*gain}")
+#
+#     if plot:
+#         plt.scatter(mean, var)
+#         plt.plot(mean, f(mean, *popt), color="r")
+#         plt.xlabel("Mean")
+#         plt.ylabel("Variance")
+#         plt.show()
+#
+#     # Return Poisson corrected line. Intensity is now electrons per pixel.
+#     return (line - x0) / gain
 
 
 def fermi_edge(
@@ -980,8 +1004,11 @@ def fermi_edge(
 def fit_fermi_edge(x, y, temp, **kwargs):
     kb = 8.617e-5  # eV/K
 
+    # A Fermi-Dirac occupation factor needs the "+ 1" denominator (see fermi_edge above,
+    # of which this is meant to be a temperature-parameterized reparametrization) -- without
+    # it, fe diverges instead of stepping between 0 and 1.
     def fe(x, ef):
-        return 1 / np.exp((x - ef) / (kb * temp))
+        return 1 / (np.exp((x - ef) / (kb * temp)) + 1)
 
     def bg(x, a, b, ef):
         return np.array([a * xx + b if xx <= ef else 0 for xx in x])
@@ -991,11 +1018,11 @@ def fit_fermi_edge(x, y, temp, **kwargs):
 
         return (
             scipy.ndimage.gaussian_filter(
-                c * (fe(x, ef) + bg(x, ef, a, b)), sigma=conv_width / x_scaling
+                # bg's signature is (x, a, b, ef); call args must follow that order, not
+                # (x, ef, a, b), or a/b/ef get silently swapped against each other.
+                c * (fe(x, ef) + bg(x, a, b, ef)), sigma=conv_width / x_scaling
             )
             + offset
         )
 
     return curve_fit(fermi_edge_func, x, y, **kwargs)
-
-    return (line - x0) / gain

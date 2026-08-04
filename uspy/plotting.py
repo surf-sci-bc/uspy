@@ -25,7 +25,6 @@ import uspy.dataobject as do
 import uspy.derived as derived
 import uspy.roi as rois
 from uspy.leem.utility import stackify, imgify
-from uspy.leem.processing import RSM
 from scipy.interpolate import RegularGridInterpolator
 
 
@@ -302,9 +301,11 @@ def make_video(
     elif isinstance(contrast, int):
         # Single read (not two) of `stack[contrast].image` -- a virtual stack's pixel data is
         # never cached, so a second `.image` access would re-read the file from scratch.
+        # np.ma.min/max (not np.ma.nanmin/nanmax, which don't exist -- this branch raised
+        # AttributeError on every call), matching the "maximum" branch above.
         masked = np.ma.array(stack[contrast].image, mask=inv_mask)
-        c0 = np.ma.nanmin(masked)
-        c1 = np.ma.nanmax(masked)
+        c0 = np.ma.min(masked)
+        c1 = np.ma.max(masked)
         contrast = sorted((c0, c1))
         print(f"Set contrast to [{contrast[0]}, {contrast[1]}]")
         contrast_type = "static"
@@ -868,60 +869,63 @@ def plot_rois(rois, img=None, ax=None, **kwargs):
     return ax
 
 
-def plot_rsm(
-    stack=None,
-    profile=None,
-    rsm=None,
-    log=True,
-    figsize=(5, 8),
-    rasterized=True,
-    dpi=150,
-    ax=None,
-    cmap="gray",
-    vmin=None,
-    vmax=None,
-    **kwargs,
-):
-    """Plot an RSM along a cut specified by profile.
-    Arguments:
-        - stack     the LEED stack
-        - profile   see help(leem.processing.Profile)
-                    can be plotted like a ROI with plot_rois()
-        - gamma     position of the specular beam (default: profile center)
-        - BZ_pix    Brillouin zone size in pixels
-        - d         lattice spacing associated with BZ_pix (in meters!)
-        - Vi        inner potential (default: 0)
-    """
-    if stack is None or profile is None:
-        assert isinstance(rsm, RSM)
-    elif rsm is None:
-        rsm = RSM(stack, profile, **kwargs)
-    else:
-        assert rsm.stack == stack and rsm.profile == profile
-    kx, ky, z = rsm()
-    kx = kx * 1e-10
-    ky = ky * 1e-10
-    if log:
-        z = np.log(z)
-        if vmin is not None:
-            vmin = np.log(vmin)
-        if vmax is not None:
-            vmax = np.log(vmax)
-    if ax is None:
-        _, ax = plt.subplots(figsize=figsize, dpi=dpi)
-        ax.set_xlabel("kx in A^-1")
-        ax.set_ylabel("ky in A^-1")
-        secax = ax.secondary_xaxis(
-            "top",
-            functions=(
-                lambda x: x * 100 / (rsm.k_BZ * 1e-10),
-                lambda x: x / 100 * (rsm.k_BZ * 1e-10),
-            ),
-        )
-        secax.set_xlabel("BZ in %")
-    ax.pcolormesh(kx, ky, z, cmap=cmap, rasterized=rasterized, vmin=vmin, vmax=vmax)
-    ax.set_aspect("equal")
-    return rsm, ax
+# Commented out 2026-08-04 alongside uspy.leem.processing.RSM (not in use, and RSM.__call__
+# itself no longer works with the current uspy.roi.Profile -- see RSM's own comment for
+# why). See CLAUDE.md and the coverage-improvement plan discussion.
+# def plot_rsm(
+#     stack=None,
+#     profile=None,
+#     rsm=None,
+#     log=True,
+#     figsize=(5, 8),
+#     rasterized=True,
+#     dpi=150,
+#     ax=None,
+#     cmap="gray",
+#     vmin=None,
+#     vmax=None,
+#     **kwargs,
+# ):
+#     """Plot an RSM along a cut specified by profile.
+#     Arguments:
+#         - stack     the LEED stack
+#         - profile   see help(leem.processing.Profile)
+#                     can be plotted like a ROI with plot_rois()
+#         - gamma     position of the specular beam (default: profile center)
+#         - BZ_pix    Brillouin zone size in pixels
+#         - d         lattice spacing associated with BZ_pix (in meters!)
+#         - Vi        inner potential (default: 0)
+#     """
+#     if stack is None or profile is None:
+#         assert isinstance(rsm, RSM)
+#     elif rsm is None:
+#         rsm = RSM(stack, profile, **kwargs)
+#     else:
+#         assert rsm.stack == stack and rsm.profile == profile
+#     kx, ky, z = rsm()
+#     kx = kx * 1e-10
+#     ky = ky * 1e-10
+#     if log:
+#         z = np.log(z)
+#         if vmin is not None:
+#             vmin = np.log(vmin)
+#         if vmax is not None:
+#             vmax = np.log(vmax)
+#     if ax is None:
+#         _, ax = plt.subplots(figsize=figsize, dpi=dpi)
+#         ax.set_xlabel("kx in A^-1")
+#         ax.set_ylabel("ky in A^-1")
+#         secax = ax.secondary_xaxis(
+#             "top",
+#             functions=(
+#                 lambda x: x * 100 / (rsm.k_BZ * 1e-10),
+#                 lambda x: x / 100 * (rsm.k_BZ * 1e-10),
+#             ),
+#         )
+#         secax.set_xlabel("BZ in %")
+#     ax.pcolormesh(kx, ky, z, cmap=cmap, rasterized=rasterized, vmin=vmin, vmax=vmax)
+#     ax.set_aspect("equal")
+#     return rsm, ax
 
 
 # Utility:
@@ -931,11 +935,6 @@ _MPL_IMG_POS = {  # (verticalalignment, horizontalalignment, x, y)
     1: ("top", "right", 1, 1),
     2: ("bottom", "left", 0.01, 0.01),
     3: ("bottom", "right", 1, 0.01),
-}
-
-
-_CV2_CONTRASTS = {
-    "auto": cv.NORM_MINMAX,
 }
 
 
@@ -982,10 +981,13 @@ def get_max_variance_idx(stack):
     max_var = 0
     max_index = 0
     for i, img in enumerate(stack):
-        var = np.var(
-            (img.image.flatten() - np.amin(img.image))
-            / (np.amax(img.image) - np.amin(img.image))
-        )
+        vmin, vmax = np.amin(img.image), np.amax(img.image)
+        if vmax == vmin:
+            # A constant frame has zero variance -- guard against the 0/0 division below,
+            # which would otherwise produce nan and always lose to max_var's initial 0.
+            var = 0.0
+        else:
+            var = np.var((img.image.flatten() - vmin) / (vmax - vmin))
         if var > max_var:
             max_var = var
             max_index = i

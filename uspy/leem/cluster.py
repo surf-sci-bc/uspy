@@ -64,12 +64,12 @@ def vectors2stack(X, h, w, mask_outer=0):
 
 def cutout_stack(stack, mask_outer=0.2):
     stack = stackify(stack)
-    _, h0, w0 = len(stack), stack[0].data.shape[0], stack[0].data.shape[1]
+    _, h0, w0 = len(stack), stack[0].image.shape[0], stack[0].image.shape[1]
     dy, dx = (int(mask_outer * h0), int(mask_outer * w0))
     if mask_outer == 0:
-        data = np.array([img.data for img in stack])
+        data = np.array([img.image for img in stack])
     else:
-        data = np.array([img.data[dy:-dy, dx:-dx] for img in stack])
+        data = np.array([img.image[dy:-dy, dx:-dx] for img in stack])
     return LEEMStack(data)
 
 
@@ -77,7 +77,7 @@ def enforce_clustershape(mask_outer=0):
     def enforcer(wrapped):
         def wrapper(X, *args, **kwargs):
             if isinstance(X, LEEMStack):
-                X = stack2vectors(X, mask_outer=mask_outer)
+                X, _, _ = stack2vectors(X, mask_outer=mask_outer)
             return wrapped(X, *args, **kwargs)
 
         return wrapper
@@ -211,9 +211,9 @@ def cluster_analysis(X, algorithm="pc-kmeans", **params_):
 
     if algorithm.startswith("nltk-"):
         model = constructor(**params)
-        labels = model.cluster(X, True)
+        labels = np.array(model.cluster(X, True))
 
-    if algorithm.startswith("pc-"):
+    elif algorithm.startswith("pc-"):
         if algorithm.startswith("pc-k") or algorithm == "pc-xmeans":
             if callable(metric_type):
                 metric = pc_metric.distance_metric(
@@ -279,8 +279,11 @@ def elbow_cluster_analysis(X, algorithm="pc-kmeans", start=2, end=15, **params_)
     labels_list = []
     models = []
     for n_clusters in range(start, end + 1):
+        # n_clusters must override any n_clusters in params_ -- it's this loop's own sweep
+        # variable, not a passthrough default.
+        iter_params = dict(params_, n_clusters=n_clusters)
         with silence():
-            labels, model = cluster_analysis(X, algorithm=algorithm, **params_)
+            labels, model = cluster_analysis(X, algorithm=algorithm, **iter_params)
         labels_list.append(labels)
         models.append(model)
         print(f"\033[KDid model with n_clusters={n_clusters}", end="\r")
@@ -340,7 +343,7 @@ def smooth_pendry_y(I, dE, V0i_sq, eps=1e-5, wl=17, p=4, both=True):
 def smoothen(X, energy=None, wl=17, p=4):
     if energy is None or np.isnan(energy).any():
         print("WARNING: NaN values in energy, guessing 3eV + 0.2eV * idx")
-        energy = np.linspace(3.0, 3.0 + len(energy) * 0.2, len(energy))
+        energy = np.linspace(3.0, 3.0 + X.shape[1] * 0.2, X.shape[1])
     S = np.zeros_like(X)
     for i, spectrum in enumerate(progress_bar(X, "Smoothing...")):
         S[i] = savgol_filter(spectrum, window_length=wl, polyorder=p)
@@ -415,7 +418,6 @@ def plot_single_clusters(clustermap, cmap="brg"):
     n_clusters = int(clustermap.max()) + 1
     nrows = int(np.ceil(n_clusters / 4))
     fig, axes = plt.subplots(nrows, 4, figsize=(20, 5 * nrows))
-    print(axes.flatten())
     for i, ax in enumerate(axes.flatten()):
         if i < n_clusters:
             single_map = np.zeros_like(clustermap)
@@ -515,7 +517,8 @@ def _remodel_optics(model, target="xi", **kwargs):
         xi = kwargs.get("xi", 0.03)
         min_cluster_size = kwargs.get("min_cluster_size", 0.01)
         min_samples = kwargs.get("min_samples", 0.03)
-        labels = sk_cluster.cluster_optics_xi(
+        # cluster_optics_xi returns (labels, clusters); only the labels are of interest here.
+        labels, _ = sk_cluster.cluster_optics_xi(
             min_samples=min_samples,
             min_cluster_size=min_cluster_size,
             xi=xi,

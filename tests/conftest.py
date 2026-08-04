@@ -6,6 +6,15 @@
 
 import os
 
+import matplotlib
+
+# Headless test runs must never resolve to a GUI backend (macosx/qt/tk...) -- set before any
+# module under test gets the chance to `import matplotlib.pyplot` and trigger backend
+# resolution. Individual test files (e.g. test_plotting.py) also set this themselves; doing
+# it once here too covers modules like uspy.leem.cluster that import pyplot as a side effect
+# of module import, before any test-local `matplotlib.use("Agg")` would run.
+matplotlib.use("Agg")
+
 import pytest
 import numpy as np
 import tifffile
@@ -285,3 +294,71 @@ def dark_counts(request):
 @pytest.fixture(scope="module", params=(LEEMImg(MCP_IMG_FNAME),))
 def mcp(request):
     return request.param
+
+
+@pytest.fixture()
+def synthetic_leem_stack():
+    """Factory building a small in-memory LEEMStack from synthetic pixel data, with metadata
+    fields settable by keyword. Complements `single_stack`/`short_stack` (which only set
+    `energy`): `uspy.leem.cluster`/`uspy.leem.processing`/`uspy.plotting` tests often need
+    `pressure1`, `rel_time`, or `binding_energy` too, none of which those real-data fixtures
+    carry.
+
+    Parameters (all keyword, passed to the returned factory)
+    ----------
+    n : int
+        Number of frames (default 5).
+    shape : tuple[int, int]
+        Per-frame pixel shape (default (20, 24)).
+    data : np.ndarray, optional
+        Explicit (n, *shape) pixel array; overrides `n`/`shape` if given.
+    **meta
+        Extra metadata, broadcast onto every element per
+        `DataObjectStack.__setattr__`'s scalar/length-matched-sequence rules (see
+        uspy/dataobject/base.py) -- e.g. `energy=np.linspace(...)`, `pressure1=1e-6`.
+
+    Returns
+    -------
+    callable
+        `factory(n=5, shape=(20, 24), data=None, **meta) -> LEEMStack`
+    """
+
+    def _make(n=5, shape=(20, 24), data=None, **meta):
+        if data is None:
+            data = np.random.default_rng(0).normal(size=(n, *shape)).astype(np.float64)
+        stack = LEEMStack(np.asarray(data, dtype=np.float64))
+        for key, value in meta.items():
+            setattr(stack, key, value)
+        return stack
+
+    return _make
+
+
+@pytest.fixture()
+def blob_vectors():
+    """Factory for a deterministic (n_pixels, n_frames) design matrix with well-separated,
+    known clusters -- for uspy.leem.cluster tests that need clustering/decomposition to
+    recover a ground truth. Each cluster's rows are a shared base curve plus a per-cluster
+    offset far larger than the added noise, plus a small per-cluster label array.
+
+    Returns
+    -------
+    callable
+        `factory(n_clusters=3, n_per_cluster=40, n_frames=6, spacing=50.0, seed=0)
+        -> (X, labels)`
+    """
+
+    def _make(n_clusters=3, n_per_cluster=40, n_frames=6, spacing=50.0, seed=0):
+        rng = np.random.default_rng(seed)
+        base = np.linspace(1.0, 2.0, n_frames)
+        rows, labels = [], []
+        for k in range(n_clusters):
+            cluster_rows = base + k * spacing + rng.normal(
+                scale=0.01, size=(n_per_cluster, n_frames)
+            )
+            rows.append(cluster_rows)
+            labels.extend([k] * n_per_cluster)
+        X = np.vstack(rows)
+        return X, np.array(labels)
+
+    return _make

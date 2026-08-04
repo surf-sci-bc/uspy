@@ -25,6 +25,7 @@ from uspy.leem.readers import (
     reset_default_mask,
 )
 from uspy.roi import ROI
+from uspy.leem.readers.base import LEEMReader
 from uspy.leem.readers.elmitec import parse_dat, ATTR_NAMES
 from uspy.leem.readers.smart import SmartReader
 from uspy.utility import parse_bytes
@@ -502,6 +503,25 @@ def test_elettra_module_shim_still_works():
     assert isinstance(img._reader, ElettraReader)
 
 
+def test_elettra_module_shim_leemstack_still_works():
+    with pytest.deprecated_call():
+        stack = elettra.LEEMStack([ELETTRA_DAT])
+    assert isinstance(stack, base.LEEMStack)
+    assert isinstance(stack[0]._reader, ElettraReader)
+
+
+def test_elettra_getattr_lazily_resolves_processing_functions():
+    from uspy.leem import processing
+
+    assert elettra.fermi_edge is processing.fermi_edge
+    assert elettra.fit_fermi_edge is processing.fit_fermi_edge
+
+
+def test_elettra_getattr_unknown_name_raises_attribute_error():
+    with pytest.raises(AttributeError):
+        elettra.not_a_real_attribute  # pylint: disable=pointless-statement
+
+
 ### Real XPEEM fixture (testdata/elettra/2024_09_26_004_XPS): 51 .dat files, 51 .tif
 ### files, and all four sidecar files (camera/microscope/beamline/trace) from a real
 ### measurement at the Nanospectroscopy beamline -- an end-to-end check of the reading
@@ -856,3 +876,47 @@ def test_parse_bytes_position_offset():
     # a leading pad byte before the real value must be skipped via pos
     buffer = b"\x00" + struct.pack("<h", 42)
     assert parse_bytes(buffer, 1, "short") == 42
+
+
+### LEEMReader base-class default implementations (uspy/leem/readers/base.py) #######
+### -- every concrete reader overrides these, so only the base class itself exercises
+### them; a plain (unnamed, unregistered) subclass is enough since nothing here needs
+### the reader registry.
+
+
+def test_leem_reader_parse_image_default_raises_not_implemented():
+    with pytest.raises(NotImplementedError):
+        LEEMReader().parse_image("some/path.dat")
+
+
+def test_leem_reader_list_files_default_returns_empty_list():
+    # the documented sentinel meaning "not recognized by this reader" -- the caller then
+    # falls back to generic ImageStack source-splitting.
+    assert LEEMReader().list_files("some/path") == []
+
+
+def test_leem_reader_parse_metadata_falls_back_to_parse_image():
+    class _ImageOnlyReader(LEEMReader):
+        # no `name` set -> not registered, avoids any registry collision
+        def parse_image(self, source):
+            return {"image": np.zeros((2, 2)), "energy": 3.5, "fov": "10 um"}
+
+    metadata = _ImageOnlyReader().parse_metadata("unused")
+
+    assert metadata == {"energy": 3.5, "fov": "10 um"}
+    assert "image" not in metadata
+
+
+def test_leem_reader_parse_pixels_falls_back_to_parse_image():
+    class _ImageOnlyReader(LEEMReader):
+        def parse_image(self, source):
+            return {"image": np.full((2, 2), 7.0), "energy": 3.5}
+
+    pixels = _ImageOnlyReader().parse_pixels("unused")
+
+    np.testing.assert_array_equal(pixels, np.full((2, 2), 7.0))
+
+
+def test_leem_reader_post_process_stack_default_is_a_noop():
+    # must not raise for any argument -- it's a no-op hook by default
+    assert LEEMReader().post_process_stack(object()) is None

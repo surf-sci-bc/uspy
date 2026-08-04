@@ -1264,6 +1264,107 @@ def test_line_derivative(quad_line):
     assert_almost_equal(dydx, diff.y)
 
 
+def test_line_smooth_int_kernel_matches_explicit_average_kernel(quad_line):
+    """smooth(int) must be exactly equivalent to smooth(np.ones(int)/int) -- the doc example
+    in Line.smooth's own docstring -- and preserve the first/last y unmodified."""
+    smoothed_int = quad_line.smooth(3)
+    smoothed_array = quad_line.smooth(np.ones(3) / 3)
+    assert_array_equal(smoothed_int.y, smoothed_array.y)
+
+    expected = np.convolve(quad_line.y, np.ones(3) / 3, mode="same")
+    expected[0], expected[-1] = quad_line.y[0], quad_line.y[-1]
+    assert_array_equal(smoothed_int.y, expected)
+    assert_array_equal(smoothed_int.x, quad_line.x)
+    # endpoints are untouched by the convolution
+    assert smoothed_int.y[0] == quad_line.y[0]
+    assert smoothed_int.y[-1] == quad_line.y[-1]
+
+
+def test_line_smooth_explicit_kernel_weights_neighbors_as_given():
+    x = np.arange(5, dtype=float)
+    y = np.array([0.0, 10.0, 0.0, 10.0, 0.0])
+    line = Line(np.array([x, y]))
+    kernel = np.array([1.0, 2.0, 1.0]) / 4
+
+    smoothed = line.smooth(kernel)
+
+    expected = np.convolve(y, kernel, mode="same")
+    expected[0], expected[-1] = y[0], y[-1]
+    assert_array_equal(smoothed.y, expected)
+
+
+def test_line_is_compatible_same_type_and_length():
+    a = Line(np.array([[0.0, 1.0, 2.0], [0.0, 1.0, 4.0]]))
+    b = Line(np.array([[0.0, 1.0, 2.0], [1.0, 2.0, 3.0]]))
+    assert a.is_compatible(b)
+
+
+def test_line_is_compatible_false_for_mismatched_length():
+    a = Line(np.array([[0.0, 1.0, 2.0], [0.0, 1.0, 4.0]]))
+    b = Line(np.array([[0.0, 1.0], [0.0, 1.0]]))
+    assert not a.is_compatible(b)
+
+
+def test_line_is_compatible_false_for_non_line():
+    a = Line(np.array([[0.0, 1.0, 2.0], [0.0, 1.0, 4.0]]))
+    assert not a.is_compatible(object())
+
+
+def test_line_save_tsf_writes_tab_separated_no_header(tmp_path):
+    line = Line(np.array([[0.0, 1.0, 2.0], [0.0, 1.0, 4.0]]))
+    line.xdim, line.ydim = "a", "b"
+    fname = tmp_path / "test.tsf"
+
+    line.save(str(fname))
+
+    content = fname.read_text()
+    assert "\t" in content
+    assert "a" not in content.splitlines()[0]  # no header row
+    lines = content.splitlines()
+    assert lines[0] == "0.0\t0.0"
+    assert lines[1] == "1.0\t1.0"
+
+
+@pytest.mark.parametrize("ext", [".csv", ".tsf"])
+def test_line_save_rejects_unexpected_kwargs_for_text_formats(tmp_path, ext):
+    line = Line(np.array([[0.0, 1.0], [0.0, 1.0]]))
+    with pytest.raises(TypeError):
+        line.save(str(tmp_path / f"test{ext}"), some_hdf5_only_kwarg=True)
+
+
+def test_line_parse_csv_with_wrong_column_count_raises(tmp_path):
+    fname = tmp_path / "three_cols.csv"
+    pd.DataFrame({"a": [0.0, 1.0], "b": [0.0, 1.0], "c": [0.0, 1.0]}).to_csv(fname, index=False)
+    with pytest.raises(ValueError):
+        Line(str(fname))
+
+
+def test_line_parse_csv_header_without_unit_separator_falls_back_to_raw_names(tmp_path):
+    """A CSV whose headers are plain names (no "<dim> in <unit>" convention) must still
+    parse: xdim/ydim fall back to the raw header text, and x_unit/y_unit fall back to the
+    class default ("a.u.") rather than raising."""
+    fname = tmp_path / "plain_headers.csv"
+    pd.DataFrame({"voltage": [0.0, 1.0, 2.0], "current": [0.0, 2.0, 4.0]}).to_csv(
+        fname, index=False
+    )
+
+    line = Line(str(fname))
+
+    assert line.xdim == "voltage"
+    assert line.ydim == "current"
+    assert line._units["x"] == "a.u."
+    assert line._units["y"] == "a.u."
+
+
+def test_line_interpolate_integer_order_matches_named_equivalent(quad_line):
+    x_data = np.linspace(1, 9, 5)
+    by_int = quad_line.interpolate(x_data, order=2)
+    by_name = quad_line.interpolate(x_data, order="quad")
+    assert_array_equal(by_int, by_name)
+    # quad_line is exactly x**2, so a quadratic (order=2) spline reproduces it exactly
+    assert_almost_equal(by_int, x_data**2)
+
+
 def test_line_calc(quad_line):
     # calc with Numbers
     assert_array_equal((2 * quad_line).y, 2 * quad_line.y)
@@ -1277,3 +1378,25 @@ def test_line_calc(quad_line):
     assert_array_equal(
         np.nan_to_num((quad_line / quad_line).y, nan=1), np.ones(quad_line.length)
     )
+
+
+### uspy.dataobject module __getattr__ deprecation shim (uspy/dataobject/__init__.py) ###
+### -- IntensityLine/StitchedLine/ProfileLine/Waterfall moved to uspy.derived but stay
+### accessible as uspy.dataobject.X for backward compatibility, with a DeprecationWarning.
+
+
+@pytest.mark.parametrize("name", ["IntensityLine", "StitchedLine", "ProfileLine", "Waterfall"])
+def test_dataobject_moved_names_warn_and_resolve_to_derived(name):
+    import uspy.dataobject as do
+    import uspy.derived as derived
+
+    with pytest.deprecated_call():
+        obj = getattr(do, name)
+    assert obj is getattr(derived, name)
+
+
+def test_dataobject_unknown_attribute_raises_attribute_error():
+    import uspy.dataobject as do
+
+    with pytest.raises(AttributeError):
+        do.not_a_real_name  # pylint: disable=pointless-statement
