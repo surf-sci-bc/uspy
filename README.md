@@ -1,9 +1,8 @@
 # µSPY
 
-[![Python 3.10](https://github.com/surf-sci-bc/uspy/actions/workflows/py310.yml/badge.svg?branch=master)](https://github.com/surf-sci-bc/uspy/actions/workflows/py310.yml)
-[![Python 3.11](https://github.com/surf-sci-bc/uspy/actions/workflows/py311.yml/badge.svg?branch=master)](https://github.com/surf-sci-bc/uspy/actions/workflows/py311.yml)
-[![Python 3.12](https://github.com/surf-sci-bc/uspy/actions/workflows/py312.yml/badge.svg?branch=master)](https://github.com/surf-sci-bc/uspy/actions/workflows/py312.yml)
-[![Python 3.13](https://github.com/surf-sci-bc/uspy/actions/workflows/py313.yml/badge.svg?branch=master)](https://github.com/surf-sci-bc/uspy/actions/workflows/py313.yml)
+[![Tests](https://github.com/surf-sci-bc/uspy/actions/workflows/tests.yml/badge.svg?branch=master)](https://github.com/surf-sci-bc/uspy/actions/workflows/tests.yml)
+[![Python 3.10–3.13](docs/badges/python.svg)](https://github.com/surf-sci-bc/uspy/actions/workflows/tests.yml)
+[![License: MIT](docs/badges/license.svg)](LICENSE.md)
 
 <p align="center">
 <img src="docs/source/_static/uspy_128.jpg">
@@ -15,7 +14,7 @@ For deployment information, refer to [this](deployment/README.md).
 
 ## Get source
 
-Simply clone the github repo (it is a private repo, so you need access). Use either the first or the second line. For the second, you need [ssh access to git](https://docs.github.com/en/free-pro-team@latest/github/authenticating-to-github/connecting-to-github-with-ssh).
+Simply clone the github repo. Use either the first or the second line. For the second, you need [ssh access to git](https://docs.github.com/en/free-pro-team@latest/github/authenticating-to-github/connecting-to-github-with-ssh).
 
 ```sh
 $ git clone https://github.com/surf-sci-bc/uspy.git
@@ -83,8 +82,7 @@ For running the tests, just go into `uspy` venv and do
 (venv) $ pytest
 ```
 
-CI (see badges above) runs `pytest tests/` on Python 3.10–3.13 for every push and pull request
-against `master`.
+CI runs `pytest tests/` on Python 3.10–3.13 for every push and pull request against `master`.
 
 ### Versioning
 
