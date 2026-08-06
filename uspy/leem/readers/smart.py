@@ -17,11 +17,8 @@ no extension) or a "<base>*.hdf" glob to load a whole split scan as one stack (`
 sorts "." before "_", so parts concatenate in order). The exact "<base>.hdf" path loads
 only that one file.
 
-Uses the optional `pyhdf` package (wraps the HDF4 C library) when installed; otherwise
-falls back to the pure-Python `uspy.leem.readers._hdf4` reader, which only covers
-uncompressed contiguous/linked-block storage (all SMART actually writes) -- a compressed
-or chunked file needs `pyhdf` (`conda install -c conda-forge pyhdf`, then
-`pip install uspy[smart]`).
+HDF4 files are read with the built-in pure-Python parser `uspy.leem.readers._hdf4`, which
+covers uncompressed contiguous and linked-block storage -- everything SMART actually writes.
 
 SMART records only one wall-clock time per file ("DATE"/"TIME", acquisition start); with
 no true per-frame clock, `_metadata_dict` estimates per-frame `timestamp` as
@@ -44,9 +41,6 @@ import natsort
 from uspy.leem.readers.base import LEEMReader
 from uspy.leem.readers._hdf4 import Hdf4File
 
-# The name of the (only) Scientific Data Set in a SMART HDF4 file.
-SDS_NAME = "Range0"
-
 _MONTHS = {
     "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "mai": 5, "jun": 6, "jul": 7,
     "aug": 8, "sep": 9, "oct": 10, "okt": 10, "nov": 11, "dec": 12, "dez": 12,
@@ -56,25 +50,10 @@ _MONTHS = {
 _FD_ENTRY_RE = re.compile(r"([A-Za-z0-9_]+)\s*=\s*([^;]*);")
 
 
-@lru_cache(maxsize=1)
-def _pyhdf():
-    """`(HDF, SD, AN_FILE_LABEL, AN_FILE_DESC)` from pyhdf if importable, else `None`
-    (callers then fall back to `uspy.leem.readers._hdf4`). Lazy so `SmartReader` imports
-    whether or not pyhdf is installed."""
-    # pylint: disable=import-outside-toplevel,invalid-name
-    try:
-        from pyhdf.HDF import HDF
-        from pyhdf.SD import SD
-        from pyhdf.AN import AN_FILE_LABEL, AN_FILE_DESC
-    except ImportError:
-        return None
-    return HDF, SD, AN_FILE_LABEL, AN_FILE_DESC
-
-
 @lru_cache(maxsize=8)
-def _hdf4_fallback(path: str, _mtime: float) -> Hdf4File:
-    """A parsed pure-Python `Hdf4File` for `path`, cached on `(path, mtime)` so a stack's file
-    structure (DD table, linked-block layout) is parsed once, not once per frame."""
+def _hdf4_file(path: str, _mtime: float) -> Hdf4File:
+    """A parsed `Hdf4File` for `path`, cached on `(path, mtime)` so a stack's file structure
+    (DD table, linked-block layout) is parsed once, not once per frame."""
     return Hdf4File(path)
 
 
@@ -87,31 +66,8 @@ def _parse_fd_text(text: str) -> dict:
 def _read_smart_annotations(path: str, _mtime: float) -> tuple:
     """Return `(file_label, file_description_dict)` for `path`. Cached on `(path, mtime)` so
     a multi-frame stack file's metadata is only read/parsed once, not once per frame."""
-    pyhdf = _pyhdf()
-    if pyhdf is None:  # pure-Python fallback
-        hdf4 = _hdf4_fallback(path, _mtime)
-        return hdf4.file_label(), _parse_fd_text(hdf4.file_description())
-    hdf_cls, _sd_cls, an_file_label, an_file_desc = pyhdf
-    hdf_file = hdf_cls(path)
-    try:
-        annot = hdf_file.astart()
-        try:
-            n_file_label, n_file_desc, _n_data_label, _n_data_desc = annot.fileinfo()
-            label = ""
-            if n_file_label:
-                ann = annot.select(0, an_file_label)
-                label = ann.annotation()
-                ann.endaccess()
-            desc = ""
-            if n_file_desc:
-                ann = annot.select(0, an_file_desc)
-                desc = ann.annotation()
-                ann.endaccess()
-        finally:
-            annot.end()
-    finally:
-        hdf_file.close()
-    return label, _parse_fd_text(desc)
+    hdf4 = _hdf4_file(path, _mtime)
+    return hdf4.file_label(), _parse_fd_text(hdf4.file_description())
 
 
 def _read_smart_metadata(path: str) -> dict:
@@ -120,25 +76,11 @@ def _read_smart_metadata(path: str) -> dict:
     return meta
 
 
-@lru_cache(maxsize=128)
 def _read_smart_dims(path: str, _mtime: float) -> tuple:
     """``(height, width)`` of the "Range0" dataset's frames, from the file header only --
-    no pixel data touched. Cached on `(path, mtime)` since a multi-frame scan file calls
-    this once per frame."""
-    pyhdf = _pyhdf()
-    if pyhdf is None:  # pure-Python fallback -- already parses dims, not pixels, in __init__
-        return _hdf4_fallback(path, _mtime).shape[1:]
-    _hdf_cls, sd_cls, _an_file_label, _an_file_desc = pyhdf
-    sd_file = sd_cls(path)
-    try:
-        sds = sd_file.select(SDS_NAME)
-        try:
-            _name, _rank, dims, _type, _nattrs = sds.info()  # no data read
-        finally:
-            sds.endaccess()
-    finally:
-        sd_file.end()
-    return tuple(dims[1:])  # dims is (n_frames, height, width)
+    no pixel data touched. `Hdf4File` (cached via `_hdf4_file` on `(path, mtime)`) already
+    parses dims, not pixels, in its constructor, so no separate cache is needed here."""
+    return _hdf4_file(path, _mtime).shape[1:]
 
 
 def _n_frames(fd: dict) -> int:
@@ -224,20 +166,7 @@ def _metadata_dict(fd: dict, index: int, height: int, width: int) -> dict[str, A
 
 def _read_smart_frame(path: str, index: int) -> np.ndarray:
     """Read a single frame (as `(height, width)` float32) from the "Range0" dataset."""
-    pyhdf = _pyhdf()
-    if pyhdf is None:  # pure-Python fallback
-        frame = _hdf4_fallback(path, os.path.getmtime(path)).read_frame(index)
-        return np.asarray(frame, dtype=np.float32)
-    _hdf_cls, sd_cls, _an_file_label, _an_file_desc = pyhdf
-    sd_file = sd_cls(path)
-    try:
-        sds = sd_file.select(SDS_NAME)
-        try:
-            frame = sds[index, :, :]
-        finally:
-            sds.endaccess()
-    finally:
-        sd_file.end()
+    frame = _hdf4_file(path, os.path.getmtime(path)).read_frame(index)
     return np.asarray(frame, dtype=np.float32)
 
 

@@ -1,7 +1,5 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
 ## What this is
 
 `uspy` (µSPY) is a Python library for analyzing surface-science microscopy/spectroscopy data: LEEM
@@ -21,98 +19,29 @@ Priorities:
 
 ## Setup
 
-```sh
-python3 -m venv venv
-source venv/bin/activate          # Windows: venv\Scripts\activate
-python3 -m pip install --upgrade pip   # avoids broken opencv installs
-python3 -m pip install -e .
-```
-
-`uspy` is installed in editable mode; `import uspy` should then work from anywhere in the venv.
-
-Versioning is handled by `setuptools_scm` from git tags (`MAJOR.MINOR.PATCH`, see `uspy/version.py`).
-There's no separate build step beyond the editable install.
+Editable install (`pip install -e .`); upgrade pip first — avoids broken opencv installs.
+Versioning is via `setuptools_scm` from git tags, see `uspy/version.py`.
 
 ## Tests
 
-Tests live in `tests/` and use real binary fixture files from the `testdata` git submodule (a
-separate repo, since binary data doesn't belong in the main history). If you need to run tests:
-
-```sh
-git submodule init
-git submodule update
-```
-
-Then, from within the venv:
-
-```sh
-pytest                        # skips tests marked "slow"
-pytest --runslow               # include slow tests
-pytest tests/test_leembase.py  # single file
-pytest tests/test_leembase.py::test_name  # single test
-```
-
-Test fixtures (fixture image/stack filenames, `pytest_addoption` for `--runslow`) are centralized in
-`tests/conftest.py`. Test modules roughly mirror source modules (`test_leembase.py` ↔
-`uspy/leem/base.py`, etc.); `tests/conftest.py` sets `collect_ignore = ["legacy"]` since
-`tests/legacy/` targets `uspy/legacy/`.
-
-Linting config exists at `.pylintrc` (pylint) but there's no enforced CI for it currently.
+Tests use real binary fixture files from the `testdata` git submodule — run `git submodule init &&
+git submodule update` before testing. By default `pytest` skips tests marked "slow"; use
+`--runslow` to include them.
 
 ## Architecture
 
 ### Core abstraction: `uspy/dataobject/`
 
-Nearly everything in this codebase is built on a small set of base classes defined here:
+Nearly everything is built on `Loadable` (pickle/json_tricks dump/load), `DataObject` (single image/
+line: `_data`/`_meta`/`_units` dicts, populated from `parse(source)`), and `DataObjectStack` (ordered
+collection of one `DataObject` type, with `virtual=True` mode — see below). `__getattr__`/
+`__setattr__` are overridden so `obj.temperature` reads `_meta`, `obj.image` reads `_data`, etc. —
+**this dynamic attribute dispatch is the trickiest part of the codebase**; when adding fields, add
+them to `_meta_defaults`/`_data_keys` rather than assuming a plain instance attribute is picked up.
 
-- **`Loadable`**: mixin providing `dump`/`dumps`/`save`/`load` — objects can be pickled (optionally
-  bz2-compressed, `.pickle`/`.pickle.bz2`) or serialized with `json_tricks` (`.json`).
-- **`DataObject`**: base class for a single piece of data (an image, a line/spectrum). Holds three
-  dicts under the hood: `_data` (numeric arrays), `_meta` (metadata like temperature, energy,
-  timestamps), `_units` (unit strings per meta/data key). Subclasses declare `_data_keys`,
-  `_meta_defaults`, `_unit_defaults` as class attributes; `parse(source)` (implemented per subclass)
-  turns a raw source (file path, ndarray, tuple of upstream objects) into a dict that populates those
-  three stores. `__getattr__`/`__setattr__` are overridden so `obj.temperature` transparently reads
-  from `_meta`, `obj.image`/`obj.x`/`obj.y` from `_data`, etc. — **this dynamic attribute dispatch is
-  the trickiest part of the codebase**; when adding fields, add them to `_meta_defaults`/`_data_keys`
-  rather than assuming a plain instance attribute will be picked up.
-- **`DataObjectStack`**: an ordered collection of `DataObject`s of one `_type` (e.g. `ImageStack` of
-  `Image`s). Supports slicing (`__getitem__`/`__setitem__` return more stacks or single elements),
-  arithmetic (`+`, `-`, `*`, `/` broadcast elementwise across the stack), and a **virtual mode**
-  (`virtual=True`): elements are built via `_construct_virtual`/`_single_construct(defer=True)`
-  with deferred (not-yet-loaded) data and only read from `source` on access. This matters for
-  large stacks of images that don't all fit in memory.
-- Concrete `DataObject` types: **`Image`** (2D array, arithmetic ops, `.filter()`, `.contrast()`),
-  **`ImageStack`** (stack of `Image`, `.average()`), **`Line`** (x/y data, `.interpolate()`,
-  `.integral()`, `.derivative()`, `.smooth()`, CSV/TSF-file save/load), plus derived line types
-  (`IntensityLine` — mean intensity inside a ROI per stack image; `StitchedLine` — stitches several
-  `IntensityLine`s together with overlap-based rescaling; `ProfileLine`, `Waterfall`).
-
-Domain-specific subpackages build on these bases rather than replacing them:
-
-- **`uspy/config.py`**: shared `uspy.toml` machinery — locating config files (data folder → parent
-  → cwd → global `$XDG_CONFIG_HOME/uspy` dir), parsing them (`tomllib`/`tomli`, cached on
-  path+mtime), and resolving a `[uspy.paths]` table (`datadir`, `leemdir`, and arbitrary
-  site-specific keys via `get_path(name)`) with `~`/env-var expansion and a session-override API
-  (`set_datadir`/`set_leemdir`/`set_path`/`reset_paths`). Backs `uspy.DATADIR`/`LEEMDIR` (see "Data
-  location convention" below) and is reused by `uspy/leem/readers/` for `[uspy] reader`/
-  `[uspy.options]`/`[uspy.plotting]` resolution.
-- **`uspy/leem/base.py`**: `LEEMImg(Image)` and `LEEMStack(ImageStack)` — the Elmitec `.dat` binary
-  format parser (`parse_dat`) lives at the bottom of this file. `LEEMStack` loads a directory/glob of
-  `.dat` files, tracks a `TimeOrigin` shared across images, and provides `.align()` for image
-  registration (ECC-based via `do_ecc_align`, with outlier sanity-checking/spline interpolation of
-  shift values) and `.normalize()` (dark-count and MCP flat-field correction). `IVCurve(StitchedLine)`
-  stitches I(V) curves from multiple stacks/ROIs. `uspy/leem/processing.py`, `cluster.py`,
-  `elettra.py`: further LEEM processing (clustering analysis, beamline-specific parsing).
-  `uspy/leem/plotting.py` (thin) plus `uspy/plotting.py` (the bulk of plotting code) hold
-  matplotlib-based visualization: image/movie plotting, metadata plots, video export (`make_video`,
-  uses CRF/level video-encoding options).
-- **`uspy/casaxps.py`**: reads CasaXPS `.tsf` files for XPEEM/analyzer data (including analyzer
-  dispersion correction).
-- **`uspy/roi.py`**: `ROI` (boolean-mask regions on images: circle/ellipse/square/rectangle/point/
-  polygon, built from geometric params or an explicit array) and `Profile`/line-profile classes,
-  used by `IntensityLine`, `Waterfall`, `.align()` masking, etc. `StyledObject` is the shared base for
-  matplotlib style dicts (auto-cycles through the color cycle when no color is given).
+Domain-specific subpackages build on these bases rather than replacing them. Note the layout is
+inverted from what the directory names suggest: `uspy/plotting.py` holds the bulk of matplotlib-based
+visualization code, while `uspy/leem/plotting.py` is a thin wrapper.
 
 ### Memory: large stacks and `virtual=True`
 
@@ -177,51 +106,23 @@ survive.
 
 ### Data flow pattern
 
-The typical construction path across all subpackages is: raw file(s) or an upstream `DataObject` →
-`parse()` returns a flat dict → base `__init__` sorts dict keys into `_data`/`_meta`/`_units` by
-name convention (keys ending in `_unit` become units; keys in `_data_keys` become data; everything
-else becomes meta). Derived types like `IntensityLine`/`Waterfall`/`ProfileLine` take *tuples of
-upstream objects* (stack, ROI, axis name, etc.) as their `source`, so `parse()` there is really doing
-extraction/aggregation rather than file I/O — check `parse()` before assuming a class only reads
-from disk.
+Construction always goes through `parse(source)` → a flat dict → sorted into `_data`/`_meta`/`_units`.
+Derived types like `IntensityLine`/`Waterfall`/`ProfileLine` take *tuples of upstream objects* (stack,
+ROI, axis name, etc.) as `source`, so their `parse()` does extraction/aggregation, not file I/O —
+check `parse()` before assuming a class only reads from disk.
 
 ### Archival export: `uspy/hdf5.py`
 
-`obj.save("deposit.h5")` / `.hdf5` / `.nxs` (any `DataObject`/`DataObjectStack`, via the
-`Loadable.save`/`load` dispatch in `uspy/serialize.py`) writes/reads a NeXus-flavoured HDF5 file —
-the only *self-contained and archivable* format uspy has (`.pickle` is self-contained but
-Python-version-fragile; `.json`/`.tif`/`.zarr` are either lossy or re-read from the original
-source on load). See the `uspy/hdf5.py` module docstring for the full file layout and
-type-coercion rules; the two things worth knowing before touching it:
-
-- **Derived types export as their parent class.** `IntensityLine`/`StitchedLine`/`ProfileLine`/
-  `IVCurve` all archive as a plain `Line`; `Waterfall` archives as a plain `Image`; the lazy
-  stacks archive as their eager equivalent. An archive holds *data*, not the analysis object
-  graph — an upstream `ImageStack`/`ROI`/`Profile` reference can't be represented and is simply
-  not written (a `DroppedFieldWarning` at `save()` time says so).
-- **The archive is deliberately uspy-agnostic**, not just uspy-loadable: two content groups
-  (`/entry/data`, `/entry/metadata`) plus standard NeXus scaffolding, and exactly three
-  `uspy_*` attributes in the whole file. There's no per-field type tag — the Python type of a
-  metadata value is inferred from its HDF5 dtype on read, and even the one class-identity
-  attribute (`uspy_class`) is optional (missing/unrecognized falls back to structural
-  inference: 2-D signal → `Image`, 3-D → `ImageStack`, `y`-over-`x` → `Line`). This is a design
-  choice, not an accident — resist the urge to add bookkeeping attributes/groups back in.
+See `.claude/rules/hdf5.md` for the archive format contracts (derived-type export behavior,
+uspy-agnostic file layout) — loaded automatically when working on that file.
 
 ### Data location convention
 
-`uspy/__init__.py` exposes `DATADIR`/`LEEMDIR`, defaulting to `~/data/...` — real experimental
-data is conventionally kept under the user's home directory, separate from the `testdata`
-submodule used for automated tests. They're resolved lazily on every access (module `__getattr__`,
-not frozen at import time) from a `[uspy.paths]` table in a `uspy.toml` (search order: current
-working directory, then `$XDG_CONFIG_HOME/uspy`/`~/.config/uspy`), or from a session override —
-see `uspy/config.py`, which also holds the `uspy.toml` search/parse machinery shared with
-`uspy/leem/readers/`'s reader-selection config. This makes the data root configurable per
-site/project instead of hardcoded, while keeping the historical `~/data/...` default and the
-trailing-slash `str` type notebooks rely on (`LEEMDIR + "file.dat"`).
+`uspy.DATADIR`/`LEEMDIR` default to `~/data/...` — real experimental data lives under the user's
+home directory, separate from the `testdata` submodule used for tests. Both are plain trailing-slash
+`str`s that notebooks rely on (`LEEMDIR + "file.dat"`) — don't change the type.
 
 ### Notebooks
 
-`examples/*.ipynb` are outdated usage demos (one per topic: base usage, dose calculation, cluster analysis,
-norm/align, plotting, ROIs, video export) and double as informal documentation for how the classes
-above are meant to be used together. `dev/` contains scratch/experimental notebooks and scripts, not maintained
-code.
+`examples/*.ipynb` are outdated usage demos that double as informal documentation. `dev/` contains
+scratch/experimental notebooks and scripts — not maintained code.

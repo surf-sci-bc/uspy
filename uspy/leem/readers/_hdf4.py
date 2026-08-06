@@ -1,9 +1,8 @@
 """
 Minimal, dependency-free HDF4 reader for SMART/BESSY `.hdf` files.
 
-Fallback used by `uspy.leem.readers.smart` when the optional `pyhdf` package (native HDF4
-C library, painful to install on macOS/Windows) is unavailable. Not a general-purpose HDF4
-library -- only the sliver SMART files actually use:
+Used by `uspy.leem.readers.smart` to read HDF4 files without any native HDF4 library. Not a
+general-purpose HDF4 library -- only the sliver SMART files actually use:
 
 * the file-description/file-label annotations (`DFTAG_FD`/`DFTAG_FID`), storing metadata as
   free-text "KEY = VALUE;" pairs, and
@@ -11,8 +10,7 @@ library -- only the sliver SMART files actually use:
   ``(n_frames, height, width)``), stored contiguously or -- as in every real SMART file --
   as an HDF4 *linked-block* special element.
 
-Compressed/chunked storage is not supported and raises, asking to install `pyhdf`; SMART
-never writes those.
+Compressed/chunked storage is not supported and raises; SMART never writes those.
 
 An HDF4 file is a magic number followed by a linked list of *data descriptor* (DD) blocks;
 each DD is ``tag(2) ref(2) offset(4) length(4)`` (big-endian), pointing at a raw byte range
@@ -65,10 +63,9 @@ class Hdf4Error(RuntimeError):
 
 
 class Hdf4File:
-    """Read SMART's metadata and image frames from an HDF4 file without `pyhdf`. File
-    structure (DD table, annotations, dimensions/type, block layout) is parsed once up
-    front; pixel data isn't read until `read_frame`, which touches only the blocks for the
-    requested frame."""
+    """Read SMART's metadata and image frames from an HDF4 file. File structure (DD table,
+    annotations, dimensions/type, block layout) is parsed once up front; pixel data isn't
+    read until `read_frame`, which touches only the blocks for the requested frame."""
 
     def __init__(self, path: Union[str, os.PathLike]) -> None:
         self._path = os.fspath(path)
@@ -191,9 +188,9 @@ class Hdf4File:
             return self._read_linked_blocks(f, dd)
         if sp_code in (_SPECIAL_COMP, _SPECIAL_CHUNKED, _SPECIAL_EXT):
             raise Hdf4Error(
-                "this SMART file uses compressed/chunked/external HDF4 storage, which the "
-                "built-in fallback reader cannot read -- install the optional 'pyhdf' package "
-                "(e.g. 'conda install -c conda-forge pyhdf', then 'pip install uspy[smart]')."
+                "this SMART file uses compressed/chunked/external HDF4 storage, which this "
+                "reader does not support -- SMART only ever writes contiguous or linked-block "
+                "storage."
             )
         raise Hdf4Error(f"unsupported HDF4 special element code {sp_code}.")
 
