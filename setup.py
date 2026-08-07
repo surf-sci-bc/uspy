@@ -55,7 +55,15 @@ setup(
     ],
     package_data={"uspy.legacy.xps": ["rsf.db"]},
     python_requires=">=3.10",
-    extras_require={"test": ["pytest", "pytest-cov"]},
+    extras_require={
+        "test": ["pytest", "pytest-cov"],
+        # interactive ROI/Profile picker (uspy.interactive) -- not needed for the
+        # rest of uspy, so kept out of install_requires. matplotlib>=3.6 is only
+        # required here (bare "matplotlib" above stays unpinned): that's where
+        # Patch's rotation_point= and the "rotate" state_modifier_keys entry landed,
+        # both needed to keep the picker's rotate handle in sync with ROI's masks.
+        "interactive": ["ipywidgets>=8.0", "ipympl>=0.9", "matplotlib>=3.6"],
+    },
 )
 
 ### Additional packages
