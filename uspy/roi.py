@@ -26,6 +26,18 @@ def _apply_mask(full_mask: np.ndarray, arr: np.ndarray) -> np.ndarray:
     return np.ma.masked_array(arr, mask=~full_mask)
 
 
+def palette_color(index: int) -> str:
+    """The `index`-th color of matplotlib's `axes.prop_cycle`, wrapping around.
+
+    The single source of truth for "what color comes next" -- used both by
+    `StyledObject`'s implicit-color counter below and by `uspy.interactive.canvas.Canvas`'s
+    auto-cycling (which needs to compute a color for a given position without mutating any
+    shared counter).
+    """
+    colors = mpl.rc_params()["axes.prop_cycle"].by_key()["color"]
+    return colors[index % len(colors)]
+
+
 class StyledObject:  # do.Loadable):
     """Contains a style dictionary that can have class-wise defaults. The dictionary
     is intended for matplotlib keyword arguments."""
@@ -42,12 +54,9 @@ class StyledObject:  # do.Loadable):
         if color is not None:
             style_["color"] = color
         if "color" not in style_:
-            cycler = mpl.rc_params()["axes.prop_cycle"]
-            color = cycler.by_key()["color"][StyledObject._idx]
-            StyledObject._idx += 1
-            if StyledObject._idx + 1 > len(cycler):
-                StyledObject._idx = 0
-            style_["color"] = color
+            n_colors = len(mpl.rc_params()["axes.prop_cycle"])
+            style_["color"] = palette_color(StyledObject._idx)
+            StyledObject._idx = (StyledObject._idx + 1) % n_colors
         self.style = style_
 
     @property
@@ -92,6 +101,9 @@ class ROI(StyledObject):
         self._ref_point = np.array([0, 0])
         self.params = kwargs
         self.label = label
+        # the shape name, kept for __repr__: a plain "array" for from_array/__add__
+        # results, which have no parametric form to reconstruct.
+        self.shape_name = source if isinstance(source, str) else "array"
 
         if isinstance(source, str):
             self._apply_params(shape=source, **self.params)
@@ -146,11 +158,25 @@ class ROI(StyledObject):
             mask = np.zeros((int(np.ceil(height)), int(np.ceil(width))), dtype=bool)
 
         rotation = kwargs.pop("rotation", 0)
+        if shape in ("circle", "ellipse", "square", "rectangle"):
+            # Unrotated shapes are drawn flush against the canvas origin (r0=c0=0), as
+            # before -- that placement is already correct, so rotation=0 stays byte-for-
+            # -byte identical to the pre-fix behavior. A rotated shape instead needs to
+            # sit at the canvas's own center: skimage's draw_ellipse rotates about the
+            # center point it's given, so an off-center ellipse simply runs out of margin
+            # on whichever side is closer to the edge and gets clipped there; scipy's
+            # ndimage.rotate(reshape=False) always rotates about the *array's* geometric
+            # center regardless of where the shape sits in it, so an off-center rectangle
+            # doesn't just clip -- it orbits around the array center as it rotates.
+            if rotation:
+                r0, c0 = (max_extent - height) // 2, (max_extent - width) // 2
+            else:
+                r0 = c0 = 0
+            self._ref_point = np.array([c0 + width / 2, r0 + height / 2])
         if shape in ("circle", "ellipse"):
-            self._ref_point = np.array([width / 2, height / 2])
             rows, cols = draw_ellipse(
-                height / 2,
-                width / 2,
+                r0 + height / 2,
+                c0 + width / 2,
                 height / 2,
                 width / 2,
                 shape=mask.shape,
@@ -158,8 +184,7 @@ class ROI(StyledObject):
             )
             mask[rows, cols] = True
         elif shape in ("square", "rectangle"):
-            self._ref_point = np.array([width / 2, height / 2])
-            rows, cols = draw_rectangle((0, 0), extent=(height, width), shape=mask.shape)
+            rows, cols = draw_rectangle((r0, c0), extent=(height, width), shape=mask.shape)
             mask[rows, cols] = True
             if rotation:
                 mask = ndimage.rotate(mask.astype(float), rotation, reshape=False) > 0.5
@@ -186,8 +211,7 @@ class ROI(StyledObject):
     @classmethod
     def point(cls, x0: int, y0: int, **kwargs) -> ROI:
         """Construct a point ROI."""
-        array = np.array([[True]])
-        return cls(x0, y0, source=array, **kwargs)
+        return cls(x0, y0, source="point", **kwargs)
 
     @classmethod
     def circle(cls, x0: int, y0: int, **kwargs) -> ROI:
@@ -370,6 +394,39 @@ class ROI(StyledObject):
         x0, y0 = low
         return ROI.from_array(canvas, x0=x0, y0=y0)
 
+    def __repr__(self) -> str:
+        """A call that reconstructs this ROI, e.g. `ROI.circle(300, 350, radius=40,
+        color="#1f77b4", label="Cu")`. `self.params` keeps exactly the shape kwargs the
+        caller originally gave (see __init__), so this reproduces them verbatim -- a
+        `radius=` stays `radius=`, an omitted `rotation` stays omitted, etc.
+
+        `shape_name == "array"` (from_array, or a `__add__` union) has no parametric
+        form, so the repr says so explicitly instead of pretending to be eval-able.
+        """
+        x0, y0 = int(self.position[0]), int(self.position[1])
+        color_kw = f"color={self.color!r}"
+        label_kw = f", label={self.label!r}" if self.label is not None else ""
+
+        if self.shape_name == "array":
+            h, w = self.array.shape
+            return (
+                f"ROI.from_array(<bool array {h}x{w}>, x0={x0}, y0={y0}, "
+                f"{color_kw}{label_kw})"
+            )
+        if self.shape_name == "point":
+            return f"ROI.point({x0}, {y0}, {color_kw}{label_kw})"
+        if self.shape_name == "polygon":
+            corners = np.asarray(self.params["corners"]) + self.position
+            corners_repr = "[" + ", ".join(f"({int(x)}, {int(y)})" for x, y in corners) + "]"
+            return f"ROI.polygon({corners_repr}, {color_kw}{label_kw})"
+
+        params_repr = ", ".join(f"{k}={v!r}" for k, v in self.params.items())
+        params_kw = f", {params_repr}" if params_repr else ""
+        if self.shape_name in ("circle", "ellipse"):
+            return f"ROI.{self.shape_name}({x0}, {y0}{params_kw}, {color_kw}{label_kw})"
+        # square/rectangle have no ROI.<shape> factory -- use the raw constructor.
+        return f"ROI({x0}, {y0}, source={self.shape_name!r}{params_kw}, {color_kw}{label_kw})"
+
 
 class Profile(StyledObject):
     """Extract profiles from images."""
@@ -380,10 +437,12 @@ class Profile(StyledObject):
         width: int = 1,
         style: dict[str, Any] = None,
         color: Optional[str] = None,
+        label: Optional[str] = None,
         **kwargs,
     ) -> None:
         self.points = points
         self.width = width
+        self.label = label
 
         super().__init__(style=style, color=color)
 
@@ -459,3 +518,11 @@ class Profile(StyledObject):
         xvalues = [point[0] for point in self.points]
         yvalues = [point[1] for point in self.points]
         ax.plot(xvalues, yvalues, color=self.color, linewidth=1, alpha=alpha)
+
+    def __repr__(self) -> str:
+        """A call that reconstructs this Profile, e.g. `Profile([(100, 100), (400, 300)],
+        width=10, color="#9467bd", label="step edge")`."""
+        points_repr = "[" + ", ".join(f"({int(x)}, {int(y)})" for x, y in self.points) + "]"
+        color_kw = f"color={self.color!r}"
+        label_kw = f", label={self.label!r}" if self.label is not None else ""
+        return f"Profile({points_repr}, width={self.width!r}, {color_kw}{label_kw})"

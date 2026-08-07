@@ -11,13 +11,14 @@ purely geometric class, so Image inputs are built directly from numpy arrays
 
 import numpy as np
 import matplotlib
+import pytest
 
 matplotlib.use("Agg")  # headless backend for plot smoke tests
 import matplotlib.pyplot as plt
 from numpy.testing import assert_array_equal
 
 import uspy.dataobject as do
-from uspy.roi import ROI, Profile, StyledObject
+from uspy.roi import ROI, Profile, StyledObject, palette_color
 
 
 ### StyledObject ###################################################
@@ -28,6 +29,23 @@ def test_styled_object_default_color_cycles():
     o1 = StyledObject()
     o2 = StyledObject()
     assert o1.color != o2.color
+
+
+def test_palette_color_wraps():
+    n = len(matplotlib.rcParams["axes.prop_cycle"])
+    assert palette_color(0) == palette_color(n)
+    assert palette_color(1) == palette_color(n + 1)
+
+
+def test_styled_object_default_colors_unchanged_regression():
+    """Pins the exact first-12-implicit-colors sequence across the palette_color
+    refactor (StyledObject._idx bookkeeping used to be inlined; see uspy.roi.palette_color)
+    -- CLAUDE.md #3: never silently change what's drawn."""
+    StyledObject._idx = 0
+    colors = [StyledObject().color for _ in range(12)]
+    cycle = matplotlib.rcParams["axes.prop_cycle"].by_key()["color"]
+    expected = [cycle[i % len(cycle)] for i in range(12)]
+    assert colors == expected
 
 
 def test_styled_object_explicit_color():
@@ -180,10 +198,13 @@ def test_from_spec_polygon_corners_scaled_per_component():
 
 
 def test_from_spec_rotation_not_scaled():
-    spec = {"shape": "rectangle", "x0": 0, "y0": 0, "width": 10, "height": 4, "rotation": 30}
+    # rotation must reach the constructor completely unscaled (unlike x0/width/etc,
+    # which do scale from percent strings) -- compare against a direct construction
+    # with the same (unscaled) angle.
+    spec = {"shape": "rectangle", "x0": 0, "y0": 0, "width": "20%", "height": 4, "rotation": 30}
     r = ROI.from_spec(spec, shape=(50, 50))
-    # no exception, and area roughly preserved under rotation
-    assert r.area > 0
+    direct = ROI(0, 0, source="rectangle", width=10, height=4, rotation=30)
+    assert_array_equal(r.array, direct.array)
 
 
 def test_from_spec_percent_without_shape_raises():
@@ -618,3 +639,151 @@ def test_profile_plot_uses_color_for_band_and_centerline():
     (line,) = ax.lines
     assert line.get_color() == "red"
     plt.close(fig)
+
+
+def test_profile_stores_label():
+    # regression: Profile.__init__ took **kwargs but never read `label` out of it, so
+    # Profile(..., label="x") was a silent no-op.
+    p = Profile(points=[(0, 0), (10, 0)], label="step edge")
+    assert p.label == "step edge"
+
+
+def test_profile_label_defaults_to_none():
+    p = Profile(points=[(0, 0), (10, 0)])
+    assert p.label is None
+
+
+### ROI: rotation ####################################################
+# Regression coverage for the rotation bug in _apply_params: unrotated shapes are
+# drawn flush against the canvas origin, but a rotated one used to stay there too,
+# which is wrong on two counts. skimage's draw_ellipse rotates about the center point
+# it is given, so an off-center ellipse simply runs out of margin on whichever side is
+# closer to the edge and gets clipped there. scipy's ndimage.rotate(reshape=False)
+# always rotates about the *array's* geometric center regardless of where the shape
+# sits in it, so an off-center rectangle doesn't just clip -- it orbits around the
+# array center as it turns. The single pre-existing rotation test only asserted
+# `r.area > 0`, which passes for either failure mode, so nothing caught this.
+
+
+@pytest.mark.parametrize("shape", ["ellipse", "rectangle"])
+@pytest.mark.parametrize("rotation", [0, 30, 45, 90, 180])
+@pytest.mark.parametrize("width,height", [(60, 20), (40, 40)])
+def test_rotation_preserves_area(shape, rotation, width, height):
+    r = ROI(200, 200, source=shape, width=width, height=height, rotation=rotation)
+    if shape == "ellipse":
+        expected_area = np.pi * (width / 2) * (height / 2)
+    else:
+        expected_area = width * height
+    assert abs(r.area - expected_area) / expected_area < 0.05
+
+
+@pytest.mark.parametrize("shape", ["ellipse", "rectangle"])
+@pytest.mark.parametrize("rotation", [30, 45, 90, 180])
+def test_rotation_keeps_center_on_ref_point(shape, rotation):
+    # the rectangle-orbits-around-the-array-center failure: before the fix, a 60x20
+    # rectangle rotated 90 degrees had its center of mass ~10px away from ref_point.
+    r = ROI(200, 200, source=shape, width=60, height=20, rotation=rotation)
+    assert np.linalg.norm(r.center_of_mass - r.ref_point) < 1.5
+
+
+@pytest.mark.parametrize("rotation", [30, 45, 90, 180])
+def test_rotation_not_massively_clipped(rotation):
+    # the ellipse-runs-out-of-margin failure: before the fix, a 60x20 ellipse rotated
+    # 90 degrees lost ~30% of its area to clipping against the canvas edge.
+    exact_area = np.pi * 30 * 10
+    r = ROI(200, 200, source="ellipse", width=60, height=20, rotation=rotation)
+    assert abs(r.area - exact_area) / exact_area < 0.05
+
+
+def test_rotation_zero_masks_unchanged():
+    # the regression guard: rotation=0 must stay on the pre-fix (flush-against-origin)
+    # code path exactly, since that placement was already correct. Pinned against a
+    # baseline captured from the code before the rotation fix.
+    baseline_shapes = {
+        ("ellipse", 60, 20): (63, 63),
+        ("ellipse", 61, 21): (64, 64),
+        ("ellipse", 40, 40): (56, 56),
+        ("ellipse", 41, 41): (57, 57),
+        ("rectangle", 60, 20): (63, 63),
+        ("rectangle", 41, 41): (57, 57),
+        ("rectangle", 40, 40): (56, 56),
+        ("rectangle", 7, 100): (100, 100),
+    }
+    for (shape, width, height), expected_canvas in baseline_shapes.items():
+        r = ROI(200, 200, source=shape, width=width, height=height)
+        assert r.array.shape == expected_canvas
+        assert_array_equal(r.ref_point, [width / 2, height / 2])
+
+
+def test_rotation_90_swaps_extents():
+    r = ROI(200, 200, source="rectangle", width=60, height=20, rotation=90)
+    ys, xs = np.nonzero(r.pad_to(400, 400))
+    row_extent, col_extent = ys.max() - ys.min() + 1, xs.max() - xs.min() + 1
+    assert col_extent < row_extent  # was wide (60x20); rotated 90 deg, now tall
+
+
+### ROI.__repr__ ######################################################
+
+
+def _eval_repr(r):
+    return eval(repr(r), {"ROI": ROI})  # pylint: disable=eval-used
+
+
+@pytest.mark.parametrize(
+    "roi",
+    [
+        ROI.point(3, 4, color="red", label="hotspot"),
+        ROI.circle(300, 350, radius=40, color="b", label="Cu"),
+        ROI(200, 350, source="ellipse", width=80, height=40, color="g"),
+        ROI(300, 300, source="rectangle", width=20, height=80, color="orange"),
+        ROI(300, 300, source="square", width=20, color="purple", label="sq"),
+        ROI.polygon([(210, 140), (268, 150), (250, 200)], color="r", label="graphene"),
+        ROI(200, 200, source="ellipse", width=60, height=20, rotation=30, color="c"),
+    ],
+)
+def test_repr_roundtrips(roi):
+    rebuilt = _eval_repr(roi)
+    assert_array_equal(rebuilt.array, roi.array)
+    assert rebuilt.color == roi.color
+    assert rebuilt.label == roi.label
+
+
+def test_repr_of_array_roi_is_marked_non_evalable():
+    r = ROI.from_array([[True, False], [False, True]], x0=5, y0=3, color="b")
+    text = repr(r)
+    assert "from_array" in text
+    assert "<bool array" in text  # not a valid Python literal -- deliberately so
+    with pytest.raises(SyntaxError):
+        eval(text, {"ROI": ROI})  # pylint: disable=eval-used
+
+
+def test_repr_omits_rotation_when_not_given():
+    r = ROI.circle(300, 350, radius=40)
+    assert "rotation" not in repr(r)
+
+
+def test_repr_includes_rotation_when_given():
+    r = ROI(200, 200, source="ellipse", width=60, height=20, rotation=30)
+    assert "rotation=30" in repr(r)
+
+
+def test_repr_omits_label_when_none():
+    r = ROI.circle(300, 350, radius=40)
+    assert "label=" not in repr(r)
+
+
+### Profile.__repr__ ##################################################
+
+
+def test_profile_repr_roundtrips():
+    p = Profile([(100, 100), (400, 300)], width=10, color="#9467bd", label="step edge")
+    rebuilt = eval(repr(p), {"Profile": Profile})  # pylint: disable=eval-used
+    assert rebuilt.points == p.points
+    assert rebuilt.width == p.width
+    assert rebuilt.color == p.color
+    assert rebuilt.label == p.label
+
+
+def test_profile_repr_omits_label_when_none():
+    p = Profile([(0, 0), (10, 0)])
+    assert "label=" not in repr(p)
