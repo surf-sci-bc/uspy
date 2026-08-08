@@ -258,7 +258,7 @@ class ProfileLine(Line):
         img, profile = source
 
         y = profile.apply(img)
-        x = np.linspace(0, len(y), len(y))
+        x = np.arange(len(y), dtype=float)
 
         self._source = source
 
@@ -270,6 +270,7 @@ class ProfileLine(Line):
             "x_unit": "px",
             "img": img,
             "profile": profile,
+            "label": profile.label,
         }
 
 
@@ -287,7 +288,7 @@ class Waterfall(Image):
 
         return {
             "image": wf,
-            "x": ProfileLine(stack[0], profile).x,
+            "x": np.arange(wf.shape[1], dtype=float),
             "y": yval,
             "stack": stack,
             "profile": profile,

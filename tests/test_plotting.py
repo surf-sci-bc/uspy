@@ -757,6 +757,49 @@ def test_waterfall_non_default_yaxis_sets_ylabel():
     plt.close(ax.figure)
 
 
+def test_waterfall_interpolate_without_npoints_raises():
+    # regression: the ValueError was constructed but never raised, so this used to
+    # die deep inside np.linspace(..., None) instead of with an actionable message.
+    from uspy.roi import Profile
+
+    frames = np.tile(np.arange(8.0), (3, 10, 1))
+    stack = base.LEEMStack(frames)
+    stack.timestamp = np.arange(3, dtype=float)
+    stack.time_origin = 0.0
+    profile = Profile([(0, 5), (7, 5)], width=1)
+
+    with pytest.raises(ValueError, match="npoints"):
+        base_plotting.waterfall(stack, profile, interpolate=True)
+
+
+def test_draw_waterfall_does_not_mutate_the_waterfall_object():
+    # _draw_waterfall is reused by the interactive profile picker to redraw a *cached*
+    # Waterfall repeatedly (different contrast/cmap) -- it must operate on a local copy,
+    # not clobber wf.image the way the original all-in-one waterfall() body used to.
+    from uspy.derived import Waterfall
+    from uspy.roi import Profile
+
+    n_frames = 3
+    width = 8
+    frames = np.tile(np.arange(width, dtype=float), (n_frames, 10, 1))
+    stack = base.LEEMStack(frames)
+    stack.energy = np.array([1.0, 2.0, 3.0])
+    profile = Profile([(0, 5), (width - 1, 5)], width=1)
+
+    wf = Waterfall(stack, profile, "energy")
+    before = wf.image.copy()
+    fig, ax = plt.subplots()
+    base_plotting._draw_waterfall(wf, ax)
+    np.testing.assert_array_equal(wf.image, before)
+
+    # a second draw on the same (untouched) object must reproduce the same pixels
+    fig2, ax2 = plt.subplots()
+    base_plotting._draw_waterfall(wf, ax2)
+    np.testing.assert_array_equal(ax.images[0].get_array(), ax2.images[0].get_array())
+    plt.close(fig)
+    plt.close(fig2)
+
+
 ### plot_mov ######################################################################
 
 

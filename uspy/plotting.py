@@ -657,6 +657,90 @@ def plot_intensity_img(
     return ax1, ax2
 
 
+def _draw_waterfall(
+    wf: derived.Waterfall,
+    ax: mpl.axes.Axes,
+    *,
+    interpolate: bool = False,
+    npoints: Optional[tuple] = None,
+    cmap: str = "inferno",
+    contrast=None,
+    invert: bool = False,
+    log: bool = False,
+    extent: Optional[Sequence] = None,
+    aspect="auto",
+) -> mpl.axes.Axes:
+    """Render an already-built `Waterfall` onto `ax`, without mutating it.
+
+    Split out of `waterfall()` so a caller holding onto a `Waterfall` (e.g. the
+    interactive profile picker's cache, see `uspy.interactive.profile`) can redraw it
+    repeatedly -- different contrast/cmap/frame range -- without recomputing
+    `profile.apply()` over the whole stack each time. `wf.image`/`wf.x`/`wf.y` are read
+    into local variables and never written back; the contrast/log/invert normalization
+    below operates entirely on the local copy.
+
+    Parameters
+    ----------
+    wf : uspy.derived.Waterfall
+    ax : matplotlib.axes.Axes
+    interpolate : bool, optional
+        Regrid onto a `npoints`-shaped regular grid via `RegularGridInterpolator`.
+    npoints : tuple[int, int], optional
+        Required when `interpolate` is True.
+    cmap, invert, log : as in `waterfall`.
+    contrast : tuple[float, float], optional
+        Clip range before normalizing to uint8; `None`/"auto"/"maximum" uses the data's
+        own min/max.
+    extent : sequence, optional
+        Passed to `imshow`; defaults to `[0, wf.width, wf.y[-1], wf.y[0]]` (y inverted
+        so frame 0 is drawn at the top, matching a monotonically increasing `wf.y`).
+    aspect : as in `imshow`.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+    """
+    image, x, y = wf.image, wf.x, wf.y
+
+    if interpolate:
+        nx, ny = npoints or (None, None)
+        if not all((nx, ny)):
+            raise ValueError(
+                "For interpolation the number of points in the interpolation grid "
+                "need to be specified npoints=(nx,ny)."
+            )
+        XX, YY = np.meshgrid(np.linspace(min(x), max(x), nx), np.linspace(min(y), max(y), ny))
+        image = RegularGridInterpolator(
+            (x, y), image.T, bounds_error=False, fill_value=None
+        )((XX, YY))
+
+    if extent is None:
+        extent = [0, wf.width, y[-1], y[0]]
+
+    if log:
+        image = np.log(image)
+        try:
+            contrast = np.log(contrast)
+        except (TypeError, ValueError):
+            pass
+
+    if contrast is None or contrast in ("auto", "maximum"):
+        contrast = image.min(), image.max()
+
+    image = np.clip(image, contrast[0], None) - contrast[0]
+    image = image / (contrast[1] - contrast[0]) * 255
+    image = np.clip(image, 0, 255).astype(np.uint8)
+
+    if invert:
+        image = -image + 255
+
+    ax.imshow(image, extent=extent, cmap=cmap, aspect=aspect)
+    ax.set_ylabel(_axis_label(wf.yaxis, wf.stack[0]._units.get(wf.yaxis, "")))
+    ax.set_xlabel("Pixel")
+
+    return ax
+
+
 def waterfall(
     stack,
     profile,
@@ -669,78 +753,35 @@ def waterfall(
     log=False,
     **kwargs,
 ):
-    """_summary_
+    """Plot a `uspy.derived.Waterfall`: a profile's intensity, sampled per frame and
+    stacked along `yaxis` -- e.g. an ARPES/LEED cut across the energy axis.
 
     Parameters
     ----------
-    stack : _type_
-        _description_
-    profile : _type_
-        _description_
+    stack : ImageStack
+    profile : uspy.roi.Profile
     yaxis : str, optional
-        _description_, by default "rel_time"
+        Stack metadata field for the y axis, by default "rel_time".
+    interpolate : bool, optional
+        Regrid onto a `npoints`-shaped regular grid; requires `npoints=(nx, ny)`.
     cmap : str, optional
-        _description_, by default "inferno"
-    ax : _type_, optional
-        _description_, by default None
+    contrast : tuple[float, float] or "auto", optional
+    invert, log : bool, optional
+    ax : matplotlib.axes.Axes, optional
 
     Returns
     -------
-    _type_
-        _description_
+    matplotlib.axes.Axes
     """
-
     ax = _get_ax(ax, **kwargs)
-
-    # wf = np.stack([profile.apply(img) for img in stack])
-    # y = getattr(stack, yaxis)
-
     wf = derived.Waterfall(stack, profile, yaxis)
-
-    if interpolate:
-        nx, ny = kwargs.pop("npoints", (None, None))
-        if not all((nx, ny)):
-            ValueError(
-                "For interpolation the number of points in the interpolation grid need to be specified npoints=(nx,ny)."
-            )
-
-        XX, YY = np.meshgrid(
-            np.linspace(min(wf.x), max(wf.x), nx), np.linspace(min(wf.y), max(wf.y), ny)
-        )
-        wf.image = RegularGridInterpolator(
-            (wf.x, wf.y), wf.image.T, bounds_error=False, fill_value=None
-        )((XX, YY))
-
-    extent = kwargs.pop("extent", [0, wf.width, wf.y[-1], wf.y[0]])
+    npoints = kwargs.pop("npoints", None)
+    extent = kwargs.pop("extent", None)
     aspect = kwargs.pop("aspect", "auto")
-
-    if log:
-        wf.image = np.log(wf.image)
-        try:
-            contrast = np.log(contrast)
-        except:
-            pass
-
-    if contrast is None or contrast in ("auto", "maximum"):
-        contrast = wf.image.min(), wf.image.max()
-
-    wf.image = np.clip(wf.image, contrast[0], None) - contrast[0]
-    wf.image = wf.image / (contrast[1] - contrast[0]) * 255
-    wf.image = np.clip(wf.image, 0, 255).astype(np.uint8)
-
-    if invert:
-        wf.image = -wf.image + 255
-
-    ax.imshow(
-        wf.image,
-        extent=extent,
-        cmap=cmap,
-        aspect=aspect,
+    return _draw_waterfall(
+        wf, ax, interpolate=interpolate, npoints=npoints, cmap=cmap, contrast=contrast,
+        invert=invert, log=log, extent=extent, aspect=aspect,
     )
-    ax.set_ylabel(_axis_label(yaxis, wf.stack[0]._units.get(yaxis, "")))
-    ax.set_xlabel("Pixel")
-
-    return ax
 
 
 # def plot_intensity(stack, *args, xaxis="rel_time", ax=None, **kwargs):

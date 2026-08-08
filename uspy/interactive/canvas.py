@@ -19,7 +19,7 @@ from typing import Callable, Optional
 import matplotlib.colors as mcolors
 from matplotlib.axes import Axes
 from matplotlib.lines import Line2D
-from matplotlib.patches import Ellipse, Rectangle, Polygon
+from matplotlib.patches import Ellipse, Rectangle, Polygon, PathPatch
 
 from uspy.interactive.spec import (
     SHAPES,
@@ -37,6 +37,7 @@ from uspy.interactive.spec import (
     move_vertex,
     insert_vertex,
     remove_vertex,
+    with_width,
 )
 from uspy.roi import palette_color
 
@@ -46,6 +47,14 @@ HANDLE_DISTANCE = 30
 GRAB_RANGE = 8
 #: hit-test tolerance for a polygon edge (double-click-to-insert-vertex), data units
 EDGE_TOLERANCE = 6
+#: handle/vertex marker size, points (mpl markersize) -- adjust here to resize every
+#: handle at once. Independent of GRAB_RANGE, which is the hit-test radius in display
+#: pixels, not the marker's drawn size.
+HANDLE_SIZE = 4
+#: marker size for a "point" region, points
+POINT_MARKER_SIZE = 10
+#: default proximity tolerance for `_point_near_segment`, data units
+_SEGMENT_TOLERANCE = 4
 #: shift+arrow -> (dx, dy) nudge, in data units. Shift-modified so matplotlib's own
 #: left/right view-history bindings (rcParams["keymap.back"]/["keymap.forward"],
 #: matched against the exact event.key string) still fire on a *plain* arrow and never
@@ -283,6 +292,14 @@ class Canvas:
         self.redraw_overlays()
         self._fire_commit()
 
+    def set_width(self, index: int, width: int) -> None:
+        """Set an existing profile's linewidth to an exact value (e.g. from a typed-in
+        width box) -- the counterpart to `new_width`, which only affects a profile not
+        yet drawn."""
+        self.specs[index] = with_width(self.specs[index], width)
+        self.redraw_overlays()
+        self._fire_commit()
+
     def set_label(self, index: int, label: Optional[str]) -> None:
         spec = self.specs[index]
         self.specs[index] = Spec(spec.shape, spec.params, spec.color, label or None)
@@ -376,7 +393,11 @@ class Canvas:
     def _build_outline_for(self, key) -> list:
         if key == "_draft":
             if self._drag is not None and self._drag.get("draft") is not None:
-                return self._build_outline(self._drag["draft"], selected=True)
+                # skip the width band while dragging: it's not needed for the
+                # gesture and recomputing/re-filling a PathPatch on every throttled
+                # redraw is unnecessary work during the highest-frequency artist
+                # rebuild in the picker.
+                return self._build_outline(self._drag["draft"], selected=True, band=False)
             return []
         if key == "_pending":
             return self._build_pending_outline() if self._pending_points else []
@@ -390,12 +411,13 @@ class Canvas:
             return []
         return self._build_outline(self.specs[key], selected=(key == self._selected))
 
-    def _build_outline(self, spec: Spec, selected: bool) -> list:
+    def _build_outline(self, spec: Spec, selected: bool, band: bool = True) -> list:
         artists: list = []
         color = spec.color
         geom = dict(spec.params)
         if spec.shape == "point":
-            artists.append(self._marker(geom["x0"], geom["y0"], color, marker="+", size=10))
+            artists.append(self._marker(geom["x0"], geom["y0"], color, marker="+",
+                                        size=POINT_MARKER_SIZE))
         elif spec.shape in _SIZABLE:
             x0, y0 = geom["x0"], geom["y0"]
             rotation = geom.get("rotation", 0)
@@ -434,6 +456,16 @@ class Canvas:
                 self.ax.add_patch(patch)
                 artists.append(patch)
             else:
+                if band:
+                    # true-to-size preview of the averaging band `Profile.apply`
+                    # actually samples, in data coordinates -- reuses the same
+                    # geometry `uspy.roi.Profile.plot` draws outside the picker.
+                    band_path = spec.to_object().band_path()
+                    if band_path is not None:
+                        patch = PathPatch(band_path, facecolor=color, edgecolor="none",
+                                          alpha=0.5, zorder=1)
+                        self.ax.add_patch(patch)
+                        artists.append(patch)
                 line = Line2D(xs, ys, color=color, linewidth=1.5, zorder=2)
                 self.ax.add_line(line)
                 artists.append(line)
@@ -449,7 +481,8 @@ class Canvas:
         self.ax.add_line(line)
         return [line] + [self._marker(x, y, color) for x, y in self._pending_points]
 
-    def _marker(self, x: float, y: float, color: str, marker: str = "s", size: float = 4) -> Line2D:
+    def _marker(self, x: float, y: float, color: str, marker: str = "s",
+               size: float = HANDLE_SIZE) -> Line2D:
         line = Line2D([x], [y], marker=marker, color=color, markerfacecolor="white",
                       markersize=size, markeredgewidth=1.5, zorder=4)
         self.ax.add_line(line)
@@ -498,9 +531,13 @@ class Canvas:
         if spec.shape == "point":
             return self._display_distance(xy, (geom["x0"], geom["y0"])) <= GRAB_RANGE
         if spec.shape == "profile":
-            # a profile has no interior to speak of -- proximity to the polyline itself
+            # proximity to the polyline itself, widened to the visible band's
+            # half-width so a click anywhere inside the drawn band grabs it -- not
+            # just a precise hit on the centerline.
             points = vertex_positions(spec)
-            return any(self._point_near_segment(xy, a, b) for a, b in zip(points, points[1:]))
+            width = dict(spec.params).get("width", 1)
+            tol = max(_SEGMENT_TOLERANCE, width / 2)
+            return any(self._point_near_segment(xy, a, b, tol) for a, b in zip(points, points[1:]))
         # circle/ellipse/rectangle/polygon all have a rasterizable interior: reuse the
         # same mask the overlay is drawn from, so a click *anywhere inside* the visible
         # highlighted region grabs it -- not just a precise hit on its outline.
@@ -518,7 +555,7 @@ class Canvas:
         return None
 
     @staticmethod
-    def _point_near_segment(p: tuple, a: tuple, b: tuple, tol: float = 4) -> bool:
+    def _point_near_segment(p: tuple, a: tuple, b: tuple, tol: float = _SEGMENT_TOLERANCE) -> bool:
         px, py = p
         ax_, ay = a
         bx, by = b

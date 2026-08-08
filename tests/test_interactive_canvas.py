@@ -16,11 +16,12 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.backend_bases import MouseEvent, KeyEvent
 from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.patches import PathPatch
 import numpy as np
 import pytest
 from numpy.testing import assert_array_equal
 
-from uspy.interactive.canvas import Canvas
+from uspy.interactive.canvas import Canvas, HANDLE_DISTANCE
 from uspy.interactive.spec import ROI_SHAPES, Spec, vertex_positions
 from uspy.roi import palette_color
 
@@ -475,10 +476,11 @@ def test_drag_rotate_handle_sets_degrees(ax, canvas):
     canvas._selected = 0
     canvas._draw_outlines()
     from uspy.interactive.spec import handle_position
-    handle = handle_position(canvas.specs[0], 20)
+    handle = handle_position(canvas.specs[0], HANDLE_DISTANCE)
     _press(ax, handle)
     _move(ax, (100, 60))  # drag straight up -> screen angle -90 -> rotation 90
     _release(ax, (100, 60))
+    assert len(canvas.specs) == 1
     assert dict(canvas.specs[0].params).get("rotation") == 90
 
 
@@ -736,6 +738,80 @@ def test_set_rotation_sets_exact_value(ax, canvas):
     canvas.redraw_overlays()
     canvas.set_rotation(0, 45)
     assert dict(canvas.specs[0].params)["rotation"] == 45
+
+
+def test_set_width_updates_an_existing_profile(ax, canvas):
+    canvas.specs = [Spec("profile", (("points", ((10, 10), (50, 50))), ("width", 1)), "red")]
+    canvas.redraw_overlays()
+    canvas.set_width(0, 6)
+    assert dict(canvas.specs[0].params)["width"] == 6
+
+
+def test_set_width_fires_on_commit(ax):
+    calls = []
+    c = Canvas(ax, H, W, on_commit=lambda: calls.append(1), shapes=("profile",))
+    c.specs = [Spec("profile", (("points", ((10, 10), (50, 50))), ("width", 1)), "red")]
+    c.redraw_overlays()
+    c.set_width(0, 4)
+    assert calls == [1]
+    c.close()
+
+
+### profile width band ######################################################
+# Regression coverage: the picker used to draw every profile as a fixed-linewidth
+# Line2D regardless of `width`, giving no visual feedback for what region is
+# actually being averaged (uspy.roi.Profile.apply/profile_line). These pin the
+# picker reusing uspy.roi.Profile.band_path -- the same true-to-size band
+# Profile.plot draws outside the picker -- and the deliberate exception during a
+# drag (see plan: width need not be shown while dragging).
+
+
+def _band_patches(artists):
+    return [a for a in artists if isinstance(a, PathPatch)]
+
+
+def test_committed_wide_profile_draws_a_band_patch(ax, canvas):
+    canvas.specs = [Spec("profile", (("points", ((10, 50), (90, 50))), ("width", 20)), "red")]
+    canvas.redraw_overlays()
+    patches = _band_patches(canvas._outline_artists[0])
+    assert len(patches) == 1
+    verts = patches[0].get_path().vertices
+    assert verts[:, 1].max() - verts[:, 1].min() == pytest.approx(20, abs=0.01)
+
+
+def test_narrow_profile_band_is_thin(ax, canvas):
+    canvas.specs = [Spec("profile", (("points", ((10, 50), (90, 50))), ("width", 1)), "red")]
+    canvas.redraw_overlays()
+    verts = _band_patches(canvas._outline_artists[0])[0].get_path().vertices
+    assert verts[:, 1].max() - verts[:, 1].min() == pytest.approx(1, abs=0.01)
+
+
+def test_set_width_resizes_the_band(ax, canvas):
+    canvas.specs = [Spec("profile", (("points", ((10, 50), (90, 50))), ("width", 4)), "red")]
+    canvas.redraw_overlays()
+    canvas.set_width(0, 30)
+    verts = _band_patches(canvas._outline_artists[0])[0].get_path().vertices
+    assert verts[:, 1].max() - verts[:, 1].min() == pytest.approx(30, abs=0.01)
+
+
+def test_band_is_skipped_while_dragging(ax, canvas):
+    canvas.specs = [Spec("profile", (("points", ((10, 50), (90, 50))), ("width", 20)), "red")]
+    canvas.redraw_overlays()
+    _press(ax, (50, 50))  # body click -- selects + starts a "move" drag
+    _move(ax, (55, 55))
+    assert _band_patches(canvas._outline_artists.get("_draft", [])) == []
+    _release(ax, (55, 55))
+    # after release the real, committed outline (with its band) is back
+    assert len(_band_patches(canvas._outline_artists[0])) == 1
+
+
+def test_wide_profile_grabbable_off_centerline(ax, canvas):
+    canvas.specs = [Spec("profile", (("points", ((10, 50), (90, 50))), ("width", 20)), "red")]
+    canvas.redraw_overlays()
+    # 9 data units off the centerline, inside the width-20 band (half-width 10)
+    assert canvas._hit_body(canvas.specs[0], (50, 59))
+    # 15 off the centerline -- outside the band and the old fixed tolerance of 4
+    assert not canvas._hit_body(canvas.specs[0], (50, 65))
 
 
 def test_set_label_and_color(ax, canvas):

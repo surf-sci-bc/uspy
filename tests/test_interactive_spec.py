@@ -31,6 +31,7 @@ from uspy.interactive.spec import (
     move_vertex,
     insert_vertex,
     remove_vertex,
+    with_width,
     _screen_to_local,
     _local_to_screen,
 )
@@ -464,6 +465,28 @@ def test_vertex_ops_reject_non_vertex_shapes():
     spec = Spec("circle", (("x0", 0), ("y0", 0), ("radius", 5)), "red")
     with pytest.raises(ValueError):
         move_vertex(spec, 0, (1, 1))
+
+
+### with_width (profile linewidth editing) #################################
+
+
+def test_with_width_updates_a_profile_spec():
+    spec = Spec("profile", (("points", ((0, 0), (10, 10))), ("width", 1)), "red")
+    wider = with_width(spec, 5)
+    assert dict(wider.params)["width"] == 5
+    assert dict(wider.params)["points"] == ((0, 0), (10, 10))  # points untouched
+
+
+def test_with_width_round_trips_through_to_object():
+    spec = Spec("profile", (("points", ((0, 0), (10, 10))), ("width", 1)), "red")
+    wider = with_width(spec, 7)
+    assert wider.to_object().width == 7
+
+
+def test_with_width_rejects_non_profile_shapes():
+    spec = Spec("circle", (("x0", 0), ("y0", 0), ("radius", 5)), "red")
+    with pytest.raises(ValueError):
+        with_width(spec, 5)
 
 
 ### Spec.from_roi (seeding from existing ROIs) ############################

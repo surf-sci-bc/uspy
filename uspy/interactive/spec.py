@@ -322,6 +322,18 @@ def with_rotation(spec: Spec, degrees: float) -> Spec:
     return spec_from_bbox(base_shape, x0, y0, width, height, degrees, spec.color, spec.label)
 
 
+def with_width(spec: Spec, width: int) -> Spec:
+    """Set a profile's linewidth to an exact value (e.g. from a typed-in width box),
+    points unchanged -- the counterpart to `with_rotation` for a profile's one editable
+    non-vertex parameter. `Canvas.new_width` only affects a profile not yet drawn; this
+    is what lets an *existing* one be widened/narrowed after the fact."""
+    if spec.shape != "profile":
+        raise ValueError(f"cannot set width on a {spec.shape!r} region")
+    geom = dict(spec.params)
+    geom["width"] = int(width)
+    return _with_geom(spec, geom)
+
+
 def handle_position(spec: Spec, distance: float) -> tuple[float, float]:
     """Where to draw the rotate handle: `distance` px out from centre along the
     shape's local +x axis. The inverse of `rotation_from_handle`."""

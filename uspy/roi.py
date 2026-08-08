@@ -446,15 +446,30 @@ class Profile(StyledObject):
 
         super().__init__(style=style, color=color)
 
-    def apply(self, obj: do.DataObject):
-        ret_val = np.array([])
+    # def apply(self, obj: do.DataObject):
+    #     ret_val = np.array([])
+    #     for src, dst in zip(self.points, self.points[1:]):
+    #         ret_val = np.append(
+    #             ret_val,
+    #             profile_line(obj.image, src[::-1], dst[::-1], self.width),
+    #         )
+
+    #     return ret_val
+
+    def apply(self, obj):
+        profiles = []
+
         for src, dst in zip(self.points, self.points[1:]):
-            ret_val = np.append(
-                ret_val,
-                profile_line(obj.image, src[::-1], dst[::-1], self.width),
+            profiles.append(
+                profile_line(
+                    obj.image,
+                    src[::-1],
+                    dst[::-1],
+                    self.width,
+                )
             )
 
-        return ret_val
+        return np.concatenate(profiles)
 
     @staticmethod
     def _add_ring(all_verts: list, all_codes: list, ring_points: np.ndarray) -> None:
@@ -474,7 +489,7 @@ class Profile(StyledObject):
         all_codes.extend([MplPath.LINETO] * (len(ring_points) - 1))
         all_codes.append(MplPath.CLOSEPOLY)
 
-    def _band_path(self) -> Optional[MplPath]:
+    def band_path(self) -> Optional[MplPath]:
         """Build a single compound Path for the whole profile band: one rectangle per
         segment (width `self.width`) plus a disk at each interior vertex to round the
         join. One Path avoids gaps at corners and double-blended alpha seams that one
@@ -512,7 +527,7 @@ class Profile(StyledObject):
         `ax.plot(..., linewidth=self.width)`, thickness is in data/pixel units, so it
         stays true-to-size across zoom levels and figure sizes."""
         alpha = self.style.get("alpha", 0.5)
-        band_path = self._band_path()
+        band_path = self.band_path()
         if band_path is not None:
             ax.add_patch(PathPatch(band_path, facecolor=self.color, edgecolor="none", alpha=alpha))
         xvalues = [point[0] for point in self.points]

@@ -234,6 +234,98 @@ def test_live_motion_events_are_coalesced(picker):
     assert len(calls) == 1  # but it does eventually fire again
 
 
+def test_throttle_measured_from_completion_not_arrival(picker):
+    # regression: the throttle used to stamp _last_live_update *before* the
+    # recompute ran (at arrival time), so a slow recompute could still leave the
+    # very next motion event free to pass the check and re-trigger another one
+    # immediately, compounding into a stuck-looking widget for as long as the mouse
+    # kept moving. Stamping after completion means the next allowed call is always
+    # a full interval away from when the *previous one actually finished*.
+    picker.live = True
+    fake_time = [1.0]
+    picker._clock = lambda: fake_time[0]
+    calls = []
+
+    def slow_live_intensity(spec):
+        calls.append(fake_time[0])
+        fake_time[0] += 0.2  # simulate a recompute slower than the throttle interval
+        return np.zeros(N)
+
+    picker._live_intensity = slow_live_intensity
+    spec = Spec("circle", (("x0", 30), ("y0", 25), ("radius", 10)), "red")
+    picker.canvas.specs = [spec]
+
+    picker._on_drag(0, spec)  # first call: clears the throttle, "takes" 0.2s
+    assert len(calls) == 1
+
+    picker._on_drag(0, spec)  # arrives right after -- still within one interval of
+                              # completion (not arrival), so must stay throttled
+    assert len(calls) == 1
+
+    fake_time[0] += 0.05  # advance a full interval past the *completion* time
+    picker._on_drag(0, spec)
+    assert len(calls) == 2  # now it fires again
+
+
+### bounded live-drag preview for very large stacks (safety valve) ##########
+
+
+@pytest.fixture
+def big_stack():
+    return _stack(n=200)
+
+
+@pytest.fixture
+def big_picker(big_stack):
+    p = ROIPicker(big_stack, xaxis="energy")
+    yield p
+    p.canvas.close()
+    plt.close(p.fig)
+
+
+def test_live_frame_stride_is_none_at_or_under_the_cap(picker):
+    assert picker._live_frame_stride(picker._LIVE_MAX_FRAMES) is None
+    assert picker._live_frame_stride(1) is None
+
+
+def test_live_frame_stride_bounds_the_frame_count_above_the_cap(picker):
+    n = picker._LIVE_MAX_FRAMES * 3 + 7
+    stride = picker._live_frame_stride(n)
+    assert stride is not None and stride > 1
+    sampled = -(-n // stride)  # matches len(stack[::stride])
+    assert sampled <= picker._LIVE_MAX_FRAMES
+
+
+def test_drag_on_a_large_stack_samples_at_most_the_cap(big_picker):
+    spec = Spec("circle", (("x0", 30), ("y0", 25), ("radius", 10)), "red")
+    live_y = big_picker._live_intensity(
+        spec, big_picker._live_frame_stride(len(big_picker.stack)))
+    assert len(live_y) <= big_picker._LIVE_MAX_FRAMES
+    assert len(live_y) < len(big_picker.stack)
+
+
+def test_drag_preview_on_a_large_stack_annotates_the_title(big_picker):
+    big_picker.canvas.new_shape = "circle"
+    _drag(big_picker.ax_img, (20, 20), (30, 30))
+    big_picker.canvas.select(0)
+    spec = big_picker.canvas.specs[0]
+    _press(big_picker.ax_img, tuple(dict(spec.params)[k] for k in ("x0", "y0")))
+    _move(big_picker.ax_img, (35, 35))
+    assert "while dragging" in big_picker.ax_iv.get_title()
+    _release(big_picker.ax_img, (35, 35))
+    # released: the exact, full-resolution IntensityLine replaces the capped preview
+    assert "while dragging" not in big_picker.ax_iv.get_title()
+
+
+def test_small_stack_drag_is_never_capped(picker):
+    # no behavior change for the common case -- the 6-frame fixture stack is well
+    # under the cap, so the cap must never engage for it.
+    spec = Spec("circle", (("x0", 30), ("y0", 25), ("radius", 10)), "red")
+    picker.canvas.specs = [spec]
+    picker._update_iv_preview(drag=(0, spec))
+    assert "while dragging" not in picker.ax_iv.get_title()
+
+
 ### virtual-stack handling #################################################
 
 

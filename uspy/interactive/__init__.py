@@ -1,13 +1,15 @@
 """Interactive, notebook-only region picking for `uspy.roi.ROI`/`Profile`.
 
 Optional: `pip install 'uspy[interactive]'`, then `%matplotlib widget` in a notebook
-cell before calling `pick_rois`. Nothing in core `uspy` imports this package, and the
-picker never mutates the stack or writes into the notebook namespace -- its output is
-a paste-able code literal (`ROIPicker.code`) that the user copies into a permanent
-cell. That literal is the record of the analysis; the picker itself is throwaway.
+cell before calling `pick_rois`/`pick_profiles`. Nothing in core `uspy` imports this
+package, and neither picker ever mutates the source or writes into the notebook
+namespace -- their output is a paste-able code literal (`.code`) that the user copies
+into a permanent cell. That literal is the record of the analysis; the picker itself
+is throwaway. `pick_rois` drives a live I(V) panel over an `ROI`; `pick_profiles`
+drives a 1D intensity line (single image) or waterfall (stack) over a `Profile`.
 
 `uspy.interactive.spec` (geometry only, no matplotlib/ipywidgets) is always importable
-without the extra -- only `ROIPicker`/`pick_rois` need it.
+without the extra -- only the two pickers themselves need it.
 """
 from uspy.interactive.spec import (
     Spec,
@@ -18,6 +20,7 @@ from uspy.interactive.spec import (
     resize_from_handle,
     rotation_from_handle,
     with_rotation,
+    with_width,
     handle_position,
     corner_positions,
     vertex_positions,
@@ -35,6 +38,7 @@ __all__ = [
     "resize_from_handle",
     "rotation_from_handle",
     "with_rotation",
+    "with_width",
     "handle_position",
     "corner_positions",
     "vertex_positions",
@@ -43,23 +47,33 @@ __all__ = [
     "remove_vertex",
     "ROIPicker",
     "pick_rois",
+    "ProfilePicker",
+    "pick_profiles",
 ]
 
 _MISSING = (
-    "uspy.interactive's picker needs the optional 'interactive' extra:\n"
+    "uspy.interactive's pickers need the optional 'interactive' extra:\n"
     "    pip install 'uspy[interactive]'\n"
-    "then run `%matplotlib widget` in a notebook cell before calling pick_rois()."
+    "then run `%matplotlib widget` in a notebook cell before calling "
+    "pick_rois()/pick_profiles()."
 )
 
 
 def __getattr__(name):
     """PEP 562: keep this package importable with zero optional deps (spec.py needs
-    none), while ROIPicker/pick_rois raise an actionable error instead of a bare
-    ModuleNotFoundError if ipywidgets/ipympl aren't installed."""
+    none), while ROIPicker/pick_rois/ProfilePicker/pick_profiles raise an actionable
+    error instead of a bare ModuleNotFoundError if ipywidgets/ipympl aren't
+    installed."""
     if name in ("ROIPicker", "pick_rois"):
         try:
             from uspy.interactive import picker
         except ImportError as exc:
             raise ImportError(_MISSING) from exc
         return getattr(picker, name)
+    if name in ("ProfilePicker", "pick_profiles"):
+        try:
+            from uspy.interactive import profile
+        except ImportError as exc:
+            raise ImportError(_MISSING) from exc
+        return getattr(profile, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
