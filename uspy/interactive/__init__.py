@@ -1,15 +1,18 @@
-"""Interactive, notebook-only region picking for `uspy.roi.ROI`/`Profile`.
+"""Interactive, notebook-only region picking for `uspy.roi.ROI`/`Profile`, plus a
+plain stack viewer.
 
 Optional: `pip install 'uspy[interactive]'`, then `%matplotlib widget` in a notebook
-cell before calling `pick_rois`/`pick_profiles`. Nothing in core `uspy` imports this
-package, and neither picker ever mutates the source or writes into the notebook
-namespace -- their output is a paste-able code literal (`.code`) that the user copies
-into a permanent cell. That literal is the record of the analysis; the picker itself
-is throwaway. `pick_rois` drives a live I(V) panel over an `ROI`; `pick_profiles`
-drives a 1D intensity line (single image) or waterfall (stack) over a `Profile`.
+cell before calling `pick_rois`/`pick_profiles`/`view_stack`. Nothing in core `uspy`
+imports this package, and none of the three ever mutate the source or write into the
+notebook namespace -- the two pickers' output is a paste-able code literal (`.code`)
+that the user copies into a permanent cell; that literal is the record of the
+analysis, the picker itself is throwaway. `pick_rois` drives a live I(V) panel over an
+`ROI`; `pick_profiles` drives a 1D intensity line (single image) or waterfall (stack)
+over a `Profile`; `view_stack` is just an image and a frame slider/play button, for
+looking at a stack rather than picking anything from it.
 
 `uspy.interactive.spec` (geometry only, no matplotlib/ipywidgets) is always importable
-without the extra -- only the two pickers themselves need it.
+without the extra -- only the pickers and the viewer need it.
 """
 from uspy.interactive.spec import (
     Spec,
@@ -49,6 +52,8 @@ __all__ = [
     "pick_rois",
     "ProfilePicker",
     "pick_profiles",
+    "StackViewer",
+    "view_stack",
 ]
 
 _MISSING = (
@@ -76,4 +81,10 @@ def __getattr__(name):
         except ImportError as exc:
             raise ImportError(_MISSING) from exc
         return getattr(profile, name)
+    if name in ("StackViewer", "view_stack"):
+        try:
+            from uspy.interactive import viewer
+        except ImportError as exc:
+            raise ImportError(_MISSING) from exc
+        return getattr(viewer, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -1,7 +1,13 @@
-"""Shared ipywidgets shell for the interactive pickers: wires
-`uspy.interactive.canvas.Canvas` (the draggable-artist layer, pure matplotlib) to
-widget controls -- label/color, frame/contrast, live/auto preview -- and to a preview
-panel a subclass owns the content of.
+"""Shared ipywidgets shell for the interactive pickers and the stack viewer.
+
+`FrameView` owns everything about displaying one frame of a `DataObject`/
+`DataObjectStack` source: source resolution (`is_stack`/`stack`/`frames`/`height`/
+`width`), figure/backend setup, the frame-index/contrast/fields state and redraw
+(`_draw_frame`), and the frame-slider/contrast-dropdown widgets. `PickerBase` builds on
+it, adding `uspy.interactive.canvas.Canvas` (the draggable-artist layer, pure
+matplotlib), label/color/live-preview controls, and a preview panel a subclass owns the
+content of. `uspy.interactive.viewer.StackViewer` builds on `FrameView` directly --
+just the frame and nothing else.
 
 `uspy.interactive.picker.ROIPicker` (I(V) over an ROI) and `uspy.interactive.profile.
 ProfilePicker` (a 1D profile / waterfall over a `Profile`) are the two concrete
@@ -11,7 +17,7 @@ each hook's docstring below for the exact contract a subclass must satisfy.
 
 Needs the 'interactive' extra (`pip install 'uspy[interactive]'`) and `%matplotlib
 widget` run in an earlier notebook cell. `uspy.interactive.spec`/`.canvas` do not need
-either -- only this module (and its two picker subclasses) do.
+either -- only this module (and its subclasses) do.
 """
 from __future__ import annotations
 
@@ -19,6 +25,7 @@ import time
 import warnings
 from typing import Optional, Sequence
 
+import numpy as np
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.colors import to_hex
@@ -61,12 +68,126 @@ def _compact(width: str, description_width: str) -> dict:
             "style": {"description_width": description_width}}
 
 
-class PickerBase:
+class FrameView:
+    """Owns everything about displaying one frame of a `DataObject`/`DataObjectStack`
+    source on a matplotlib axes: source resolution (`is_stack`/`stack`/`frames`/
+    `height`/`width`), figure/backend setup, the frame-index/contrast/fields state and
+    redraw (`_draw_frame`), and the frame-slider/contrast-dropdown widgets
+    (construction/wiring only -- a subclass places them in its own layout).
+
+    `is_stack` is `isinstance(source, uspy.dataobject.DataObjectStack)`; for a single
+    `DataObject`, `self.stack` is None and `self.frames` is a length-1 sequence.
+
+    A subclass provides:
+
+    - `_setup()`: called once `self.stack`/`self.frames`/`self.height`/`self.width`
+      are set, before any figure exists -- the place to precompute/cache whatever else
+      the subclass needs (e.g. `ROIPicker`'s per-frame x-axis array).
+    - `_make_figure(figsize)`: create `self.fig` and its axes; must set `self.ax_img`.
+      Defaults to a single axes.
+    """
+
+    def __init__(
+        self, source, frame: Optional[int] = None, contrast: str = "auto",
+        fields: Optional[Sequence[str]] = None, figsize: tuple = (11, 4.5),
+    ):
+        _check_mpl_version()
+
+        self.is_stack = isinstance(source, do.DataObjectStack)
+        self.stack = source if self.is_stack else None
+        self.frames = source if self.is_stack else [source]
+        self.height, self.width = self.frames[0].shape
+        self._setup()
+
+        with plt.ioff():
+            self._make_figure(figsize)
+        _check_backend(self.fig)
+        self.fig.canvas.header_visible = False
+        self.fig.canvas.footer_visible = False
+
+        self._frame_idx = frame if frame is not None else (len(self.stack) // 2 if self.is_stack else 0)
+        self._contrast = contrast
+        self._fields = fields
+        self._base_artists: list = []
+        self._draw_frame()
+
+    # -- subclass hooks -----------------------------------------------------------
+
+    def _setup(self) -> None:
+        pass
+
+    def _make_figure(self, figsize: tuple) -> None:
+        self.fig, self.ax_img = plt.subplots(figsize=figsize)
+
+    # -- base frame -----------------------------------------------------------
+
+    def _draw_frame(self) -> None:
+        """(Re)draw the grayscale frame. Tracks exactly the artists `plot_img` adds
+        (same `_track`-style diffing `Canvas` uses for its own layers) so repeated
+        calls -- frame slider, contrast dropdown -- don't accumulate images/text on
+        top of each other. Never touches `Canvas`'s own overlay/outline artists,
+        which live on the same axes at a higher zorder."""
+        for artist in self._base_artists:
+            artist.remove()
+        before = {id(a) for a in self.ax_img.get_children()}
+        img = self.stack[self._frame_idx] if self.is_stack else self.frames[0]
+        plot.plot_img(img, ax=self.ax_img, ticks=True, contrast=self._contrast,
+                      fields=self._fields, title=False)
+        self._base_artists = [a for a in self.ax_img.get_children() if id(a) not in before]
+        self.fig.canvas.draw_idle()
+
+    # -- frame/contrast widgets -----------------------------------------------------
+
+    def _build_frame_controls(self) -> None:
+        """Construct (but do not place) the frame slider and contrast dropdown --
+        stack only; a subclass calls this behind its own `if self.is_stack` and places
+        the widgets in its own layout."""
+        w = widgets
+        # continuous_update=True: unlike a drag on the canvas (many motion events per
+        # second, throttled by Canvas._REDRAW_MIN_INTERVAL), a slider only fires one
+        # event per integer frame step, and each just re-reads one frame and re-plots
+        # it -- cheap enough to update live.
+        self.w_frame = w.IntSlider(
+            min=0, max=max(0, len(self.stack) - 1), value=self._frame_idx, description="frame",
+            continuous_update=True, layout=w.Layout(width="99%"),
+            style={"description_width": "initial"},
+        )
+        self.w_contrast = w.Dropdown(options=["auto", "inner", "fixed"], value="auto",
+                                     description="contrast", **_compact("140px", "60px"))
+
+    def _wire_frame_controls(self) -> None:
+        self.w_frame.observe(self._on_frame_change, "value")
+        self.w_contrast.observe(self._on_contrast_change, "value")
+
+    def _on_frame_change(self, change: dict) -> None:
+        self._frame_idx = change["new"]
+        self._draw_frame()
+
+    def _on_contrast_change(self, change: dict) -> None:
+        value = change["new"]
+        if value == "fixed":
+            # freeze *this* frame's range as a plain (lo, hi) plot_img already
+            # accepts -- computed from the one displayed frame, never the whole
+            # stack, so this stays cheap on a virtual stack.
+            img = self.stack[self._frame_idx] if self.is_stack else self.frames[0]
+            data = np.nan_to_num(img.image)
+            value = (float(data.min()), float(data.max()))
+        self._contrast = value
+        self._draw_frame()
+
+    def __repr__(self) -> str:
+        if self.is_stack:
+            return f"{type(self).__name__}({len(self.stack)} frames, frame {self._frame_idx})"
+        return f"{type(self).__name__}()"
+
+
+class PickerBase(FrameView):
     """Owns everything about the picker shell that is not specific to what shape is
-    being drawn or what the preview panel shows: the figure/axes pair, the frame/
-    contrast/live/auto/step controls (only relevant, and only built, for a stack --
-    see `is_stack` below), the region list, the code box + copy button, and the label/
-    color editing that applies to any region regardless of shape.
+    being drawn or what the preview panel shows: the second (preview) axes, the
+    live/auto/step controls (only relevant, and only built, for a stack -- see
+    `is_stack` on `FrameView`), the region list, the code box + copy button, and the
+    label/color editing that applies to any region regardless of shape. Frame display
+    itself (the image axes, the frame slider, the contrast dropdown) is `FrameView`'s.
 
     A subclass provides:
 
@@ -74,9 +195,7 @@ class PickerBase:
       `("profile",)`).
     - `_reject_seed(region)`: raise `ValueError` for a seed region of the wrong kind
       (an `ROI` handed to the profile picker, or vice versa). No-op by default.
-    - `_setup()`: called once `self.stack`/`self.frames`/`self.height`/`self.width`
-      are set, before any widget exists -- the place to precompute/cache whatever the
-      preview needs (e.g. `ROIPicker`'s per-frame x-axis array).
+    - `_setup()`: see `FrameView`.
     - `_update_preview(drag=None)`: (re)draw the preview panel (`self.ax_preview`).
       `drag=(index, draft_spec)` during an active live drag.
     - `_extra_controls() -> list[Widget]`: widgets appended to the shared label/color
@@ -86,11 +205,9 @@ class PickerBase:
     - `_wire_extra()` / `_sync_extra(spec_or_None)`: wiring/loading for whatever
       `_extra_controls` built.
 
-    `is_stack` is `isinstance(source, uspy.dataobject.DataObjectStack)`; for a single
-    `DataObject`, `self.stack` is None and `self.frames` is a length-1 sequence, and
-    every stack-only widget (frame slider, contrast, step, live, auto, update) is
-    simply never built -- code that reads them must be behind an `if self.is_stack`
-    (as `_draw_frame`/`_on_commit`/`_wire_widgets` here already are).
+    For a single `DataObject`, every stack-only widget (frame slider, contrast, step,
+    live, auto, update) is simply never built -- code that reads them must be behind
+    an `if self.is_stack` (as `_on_commit`/`_wire_widgets` here already are).
     """
 
     _shapes: tuple = ()
@@ -102,21 +219,22 @@ class PickerBase:
     #: release (_on_commit), so this only ever affects what's shown mid-drag.
     _LIVE_MAX_FRAMES = 150
 
+    def _make_figure(self, figsize: tuple) -> None:
+        self.fig, (self.ax_img, self.ax_preview) = plt.subplots(1, 2, figsize=figsize)
+        # legacy alias: ROIPicker's own test suite reaches into `.ax_iv` by name --
+        # both names point at the same Axes.
+        self.ax_iv = self.ax_preview
+
     def __init__(
         self, source, xaxis: str, regions: Optional[Sequence] = None,
         live: Optional[bool] = None, frame: Optional[int] = None, contrast: str = "auto",
         figsize: tuple = (11, 4.5),
     ):
-        _check_mpl_version()
         for region in regions or ():
             self._reject_seed(region)
+        self._axis_field = xaxis  # read by _setup(), called from FrameView.__init__
 
-        self.is_stack = isinstance(source, do.DataObjectStack)
-        self.stack = source if self.is_stack else None
-        self.frames = source if self.is_stack else [source]
-        self._axis_field = xaxis
-        self.height, self.width = self.frames[0].shape
-        self._setup()
+        super().__init__(source, frame=frame, contrast=contrast, figsize=figsize)
 
         is_virtual = bool(self.is_stack and getattr(source, "virtual", False))
         if live is None:
@@ -132,20 +250,6 @@ class PickerBase:
 
         self._clock = time.monotonic
         self._last_live_update = 0.0
-
-        with plt.ioff():
-            self.fig, (self.ax_img, self.ax_preview) = plt.subplots(1, 2, figsize=figsize)
-        # legacy alias: ROIPicker's own test suite reaches into `.ax_iv` by name --
-        # both names point at the same Axes.
-        self.ax_iv = self.ax_preview
-        _check_backend(self.fig)
-        self.fig.canvas.header_visible = False
-        self.fig.canvas.footer_visible = False
-
-        self._frame_idx = frame if frame is not None else (len(self.stack) // 2 if self.is_stack else 0)
-        self._contrast = contrast
-        self._base_artists: list = []
-        self._draw_frame()
 
         self._syncing = False  # guards widget<->canvas write-back loops, see _sync_controls
         self.canvas = Canvas(self.ax_img, self.height, self.width,
@@ -175,9 +279,6 @@ class PickerBase:
     def _reject_seed(self, region) -> None:
         pass
 
-    def _setup(self) -> None:
-        pass
-
     def _update_preview(self, drag: Optional[tuple] = None) -> None:
         raise NotImplementedError
 
@@ -192,22 +293,6 @@ class PickerBase:
 
     def _sync_extra(self, spec: Optional[Spec]) -> None:
         pass
-
-    # -- base frame -----------------------------------------------------------
-
-    def _draw_frame(self) -> None:
-        """(Re)draw the grayscale frame. Tracks exactly the artists `plot_img` adds
-        (same `_track`-style diffing `Canvas` uses for its own layers) so repeated
-        calls -- frame slider, contrast dropdown -- don't accumulate images/text on
-        top of each other. Never touches `Canvas`'s own overlay/outline artists,
-        which live on the same axes at a higher zorder."""
-        for artist in self._base_artists:
-            artist.remove()
-        before = {id(a) for a in self.ax_img.get_children()}
-        img = self.stack[self._frame_idx] if self.is_stack else self.frames[0]
-        plot.plot_img(img, ax=self.ax_img, ticks=True, contrast=self._contrast, title=False)
-        self._base_artists = [a for a in self.ax_img.get_children() if id(a) not in before]
-        self.fig.canvas.draw_idle()
 
     # -- Canvas callbacks -------------------------------------------------------
 
@@ -278,17 +363,7 @@ class PickerBase:
         extra = self._extra_controls()
 
         if self.is_stack:
-            # continuous_update=True: unlike a drag on the canvas (many motion events
-            # per second, throttled by Canvas._REDRAW_MIN_INTERVAL), a slider only
-            # fires one event per integer frame step, and each just re-reads one
-            # frame and re-plots it -- cheap enough to update live.
-            self.w_frame = w.IntSlider(
-                min=0, max=max(0, len(self.stack) - 1), value=self._frame_idx, description="frame",
-                continuous_update=True, layout=w.Layout(width="99%"),
-                style={"description_width": "initial"},
-            )
-            self.w_contrast = w.Dropdown(options=["auto", "inner"], value="auto", description="contrast",
-                                         **_compact("140px", "60px"))
+            self._build_frame_controls()
             self.w_step = w.BoundedIntText(min=1, max=max(1, len(self.stack)), value=1,
                                            description="every n-th", **_compact("150px", "75px"))
             _check_layout = w.Layout(width="auto", margin="0 12px 0 0")
@@ -333,8 +408,7 @@ class PickerBase:
         self.w_color.observe(self._on_color_change, "value")
 
         if self.is_stack:
-            self.w_frame.observe(self._on_frame_change, "value")
-            self.w_contrast.observe(self._on_contrast_change, "value")
+            self._wire_frame_controls()
             self.w_live.observe(lambda ch: setattr(self, "live", ch["new"]), "value")
             self.w_update.on_click(lambda _btn: self._update_preview())
 
@@ -364,14 +438,6 @@ class PickerBase:
             self.canvas.new_color = value
         else:
             self.canvas.set_color(index, value)
-
-    def _on_frame_change(self, change: dict) -> None:
-        self._frame_idx = change["new"]
-        self._draw_frame()
-
-    def _on_contrast_change(self, change: dict) -> None:
-        self._contrast = change["new"]
-        self._draw_frame()
 
     def _on_list_select(self, change: dict) -> None:
         if self._syncing:
