@@ -584,9 +584,9 @@ def test_xps_correct_recovers_known_energy_plane():
 
     plane_at_points = a * points[:, 0] + b * points[:, 1] + c0
     expected = (a * xx + b * yy + c0) - plane_at_points.mean()
-    # xps_correct returns -zz with zz shaped (width, height) (np.mgrid[0:width, 0:height]);
-    # expected is (height, width) to match the image/meshgrid convention used to build it.
-    np.testing.assert_allclose(-zz_neg.T, expected, atol=1e-6)
+    # xps_correct returns -zz indexed [row, col] == (height, width), like the image frames.
+    assert zz_neg.shape == expected.shape
+    np.testing.assert_allclose(-zz_neg, expected, atol=1e-6)
 
 
 def test_xps_correct_accepts_coordinate_list_and_uses_given_radius():
@@ -600,7 +600,7 @@ def test_xps_correct_accepts_coordinate_list_and_uses_given_radius():
 
     zz_neg = processing.xps_correct(stack, coords, radius=2, plot=False)
 
-    assert zz_neg.shape == (stack[0].width, stack[0].height)
+    assert zz_neg.shape == (stack[0].height, stack[0].width)
 
 
 def test_xps_correct_rejects_malformed_coordinates():
@@ -649,7 +649,7 @@ def test_xps_correct_duplet_recovers_known_plane():
 
     plane_at_points = a * points[:, 0] + b * points[:, 1] + c0
     expected = (a * xx + b * yy + c0) - plane_at_points.mean()
-    np.testing.assert_allclose(-zz_neg.T, expected, atol=1e-3)
+    np.testing.assert_allclose(-zz_neg, expected, atol=1e-3)
 
 
 ### calculate_dose #############################################################
@@ -836,27 +836,38 @@ def test_2gaussian_recovers_both_peak_positions():
 ### _shift_z_cols / correct_energies ############################################
 
 
+def test_shift_z_cols_zero_shift_is_identity():
+    stack = np.arange(1, 6, dtype=np.float64).reshape(5, 1, 1)
+
+    out = processing._shift_z_cols(stack, np.array([[0.0]]))
+
+    np.testing.assert_allclose(out, stack)
+
+
 def test_shift_z_cols_fractional_shift_matches_hand_computed_interpolation():
     stack = np.arange(5, dtype=np.float64).reshape(5, 1, 1)
-    z_corr = np.array([[0.5]])
 
-    out = processing._shift_z_cols(stack, z_corr)
+    out = processing._shift_z_cols(stack, np.array([[0.5]]))
 
-    # floor(0.5)=0, frac=0.5: out[zz] = 0.5*stack[zz] + 0.5*stack[zz+1] for zz=0..3;
-    # out[4] is never written (loop only runs zz in range(shape[0]-1)) and stays 0.
-    expected = np.array([0.5, 1.5, 2.5, 3.5, 0.0]).reshape(5, 1, 1)
+    # shift 0.5: out[k] = 0.5*stack[k] + 0.5*stack[k-1], stack[-1] is out of range (zero).
+    expected = np.array([0.0, 0.5, 1.5, 2.5, 3.5]).reshape(5, 1, 1)
     np.testing.assert_allclose(out, expected)
 
 
 def test_shift_z_cols_integer_shift_moves_values_up_by_one_index():
-    stack = np.arange(5, dtype=np.float64).reshape(5, 1, 1)
-    z_corr = np.array([[1.0]])
+    stack = np.arange(1, 6, dtype=np.float64).reshape(5, 1, 1)
 
-    out = processing._shift_z_cols(stack, z_corr)
+    out = processing._shift_z_cols(stack, np.array([[1.0]]))
 
-    # floor(1.0)=1, frac=0.0: out[zz+1] = stack[zz+1] exactly, for zz=0..3; out[0] unwritten.
-    expected = np.array([0.0, 1.0, 2.0, 3.0, 4.0]).reshape(5, 1, 1)
-    np.testing.assert_allclose(out, expected)
+    np.testing.assert_allclose(out.ravel(), [0, 1, 2, 3, 4])
+
+
+def test_shift_z_cols_negative_shift_moves_values_down_and_writes_last_frame():
+    stack = np.arange(1, 6, dtype=np.float64).reshape(5, 1, 1)
+
+    out = processing._shift_z_cols(stack, np.array([[-1.0]]))
+
+    np.testing.assert_allclose(out.ravel(), [2, 3, 4, 5, 0])
 
 
 def test_shift_z_cols_out_of_range_shift_skips_every_pixel():
@@ -868,6 +879,21 @@ def test_shift_z_cols_out_of_range_shift_skips_every_pixel():
     np.testing.assert_allclose(out, np.zeros_like(stack))
 
 
+def test_shift_z_cols_indexes_correction_plane_by_row_col_on_non_square_frames():
+    """z_corr is indexed [row, col]; a (width, height)-shaped plane would run out of bounds."""
+    n, h, w = 4, 6, 9
+    stack = np.arange(1, n + 1, dtype=np.float64)[:, None, None] * np.ones((n, h, w))
+    z_corr = np.zeros((h, w))
+    z_corr[2, 7] = 1.0  # row 2, col 7 shifted by one frame
+
+    out = processing._shift_z_cols(stack, z_corr)
+
+    np.testing.assert_allclose(out[:, 2, 7], [0, 1, 2, 3])
+    mask = np.ones((h, w), bool)
+    mask[2, 7] = False
+    np.testing.assert_allclose(out[:, mask], stack[:, mask])
+
+
 def test_correct_energies_applies_shift_per_pixel():
     stack = base.LEEMStack(np.arange(5, dtype=np.float64).reshape(5, 1, 1))
     stack.energy = np.array([5.0, 4.0, 3.0, 2.0, 1.0])  # dE = energy[0]-energy[1] = 1
@@ -875,5 +901,5 @@ def test_correct_energies_applies_shift_per_pixel():
 
     corrected = processing.correct_energies(stack, z_corr)
 
-    expected = np.array([0.5, 1.5, 2.5, 3.5, 0.0]).reshape(5, 1, 1)
+    expected = np.array([0.0, 0.5, 1.5, 2.5, 3.5]).reshape(5, 1, 1)
     np.testing.assert_allclose(corrected.image, expected)

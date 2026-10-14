@@ -787,3 +787,83 @@ def test_profile_repr_roundtrips():
 def test_profile_repr_omits_label_when_none():
     p = Profile([(0, 0), (10, 0)])
     assert "label=" not in repr(p)
+
+
+### pad_to cache must follow everything that determines the mask ####
+
+
+def test_pad_to_follows_position_change():
+    c = ROI.circle(10, 10, radius=3)
+    before = c.pad_to(30, 40).copy()
+    c.position = np.array([20, 5])
+    after = c.pad_to(30, 40)
+    expected = ROI.circle(20, 5, radius=3).pad_to(30, 40)
+    assert not np.array_equal(before, after)
+    np.testing.assert_array_equal(after, expected)
+
+
+def test_pad_to_follows_array_change():
+    c = ROI.from_array(np.ones((3, 3), dtype=bool), x0=5, y0=5)
+    before = c.pad_to(20, 20).copy()
+    c.array = np.ones((2, 2), dtype=bool)
+    after = c.pad_to(20, 20)
+    assert before.sum() == 9 and after.sum() == 4
+
+
+def test_pad_to_follows_ref_point_change():
+    c = ROI.circle(10, 10, radius=3)
+    before = c.pad_to(30, 30).copy()
+    c._ref_point = c._ref_point + 2
+    assert not np.array_equal(before, c.pad_to(30, 30))
+
+
+def test_apply_measures_moved_roi():
+    img = do.Image(np.arange(40 * 30, dtype=float).reshape(40, 30))
+    c = ROI.circle(5, 5, radius=3)
+    first = c.apply(img, return_array=True).mean()
+    c.position = np.array([20, 25])
+    moved = c.apply(img, return_array=True).mean()
+    assert moved == pytest.approx(ROI.circle(20, 25, radius=3).apply(img, return_array=True).mean())
+    assert moved != first
+
+
+def test_pad_to_fully_outside_then_moved_inside():
+    c = ROI.circle(-50, -50, radius=5)
+    assert c.pad_to(10, 10).sum() == 0
+    c.position = np.array([5, 5])
+    assert c.pad_to(10, 10).sum() > 0
+
+
+### __repr__ keeps float coordinates exactly (uspy-6rb.3) ####
+
+
+def test_profile_repr_keeps_float_points():
+    p = Profile([(100.5, 100.25), (400, 300.75)], width=10, label="edge")
+    rebuilt = eval(repr(p), {"Profile": Profile})  # pylint: disable=eval-used
+    assert rebuilt.points == p.points
+    assert "100.5" in repr(p) and "(400, " in repr(p)  # integral values stay ints
+
+
+def test_profile_repr_of_numpy_points_roundtrips():
+    p = Profile([np.array([1.5, 2.0]), np.array([3, 4])])
+    rebuilt = eval(repr(p), {"Profile": Profile})  # pylint: disable=eval-used
+    np.testing.assert_array_equal(np.asarray(rebuilt.points, dtype=float), np.asarray(p.points, dtype=float))
+
+
+@pytest.mark.parametrize(
+    "make",
+    [
+        lambda: ROI.circle(50.7, 20.25, radius=5),
+        lambda: ROI.point(3.5, 4),
+        lambda: ROI.polygon([(1.5, 2.25), (30, 2.25), (20.75, 40)]),
+        lambda: ROI(50.7, 20, source="rectangle", width=8, height=6, rotation=30),
+    ],
+)
+def test_roi_repr_keeps_float_position_and_corners(make):
+    roi = make()
+    rebuilt = eval(repr(roi), {"ROI": ROI})  # pylint: disable=eval-used
+    np.testing.assert_array_equal(rebuilt.position, roi.position)
+    np.testing.assert_array_equal(rebuilt.array, roi.array)
+    assert rebuilt.params.keys() == roi.params.keys()
+    for key, value in roi.params.items():
+        np.testing.assert_array_equal(rebuilt.params[key], value)

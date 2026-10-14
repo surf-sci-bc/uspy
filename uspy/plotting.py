@@ -34,6 +34,54 @@ def _axis_label(name: str, unit: str) -> str:
     return f"{name} in {unit}" if unit else name
 
 
+def _display_data(image, keep=None, log=False):
+    """Masked float array of what gets displayed: NaN -> 0, pixels outside the boolean
+    array `keep` masked, and with `log` the natural log (non-positive pixels masked)."""
+    data = np.ma.array(np.nan_to_num(image).astype(float), mask=None if keep is None else ~keep)
+    return np.ma.log(data) if log else data
+
+
+def _resolve_contrast(data, contrast, log=False):
+    """Lower/upper display limits shared by `plot_img`, `make_video` and `waterfall`.
+
+    Parameters
+    ----------
+    data : np.ma.MaskedArray
+        Displayed data as from `_display_data` (log already applied, outside-mask pixels
+        masked); used for None/"auto"/"maximum" (its min/max) and "inner" (the same, over
+        the central 60 %). May be None for an explicit `contrast`.
+    contrast : None, str or sequence of two numbers
+        Explicit limits are in data units; with `log` they are converted to the log domain
+        (non-positive limits map to 0, i.e. a data value of 1).
+    log : bool, optional
+        Whether `data` is displayed logarithmically.
+
+    Returns
+    -------
+    tuple[float, float]
+    """
+    if contrast is None or (isinstance(contrast, str) and contrast in ("auto", "maximum")):
+        return data.min(), data.max()
+    if isinstance(contrast, str):
+        if contrast != "inner":
+            raise ValueError(f"Invalid '{contrast=}'")
+        dy, dx = (0.2 * np.array(data.shape)).astype(int)
+        inner = data[dy : data.shape[0] - dy, dx : data.shape[1] - dx]
+        return inner.min(), inner.max()
+    limits = np.asarray(contrast, dtype=float)
+    if limits.shape != (2,):
+        raise ValueError(f"Invalid '{contrast=}'")
+    if log:
+        limits = np.log(limits, out=np.zeros(2), where=limits > 0)
+    return limits[0], limits[1]
+
+
+def _to_uint8(data, lo, hi):
+    """Map [lo, hi] linearly onto 0..255 (clipping outside); masked pixels stay masked."""
+    span = hi - lo if hi > lo else 1.0
+    return ((np.clip(data, lo, hi) - lo) / span * 255).astype(np.uint8)
+
+
 def plot_img(
     img: Union[do.Image, str],
     fields: Optional[Union[str, Iterable[str]]] = None,
@@ -70,8 +118,10 @@ def plot_img(
     contrast : Union[str, Iterable[Number, Number]], optional
         Sets the lower and upper intensity value of the image. None and "auto" will use the
         full dynamical range. "inner" does the same but disregards the outer 20% of the image.
-        Alternatively, an iterable with two numbers for the lower and upper boundary is given
-        directly. Defaults to None.
+        Alternatively, an iterable with two numbers for the lower and upper boundary (in data
+        units, also with `log`) is given directly; such a fixed contrast maps a value to the same
+        gray level in every image. "inner" is evaluated on the displayed (log/mask-processed)
+        data. Defaults to None.
     invert : bool, optional
         If True, image intensity is inverted. By default False.
     log : bool, optional
@@ -119,36 +169,19 @@ def plot_img(
 
     ax = _get_ax(ax, figsize=figsize, dpi=dpi, ticks=ticks, title=title, axis_off=True)
 
-    data = np.nan_to_num(img.image)
     if mask is True:
         mask = img.default_mask
 
     mask_applied = isinstance(mask, rois.ROI)
-    if mask_applied:
-        data = mask.apply(img, return_array=True)
-
-    if log:
-        data = np.ma.log(data, where=(data > 0))
-
-    if contrast is None or contrast in ("auto", "maximum"):
-        contrast = data.min(), data.max()
-    elif contrast == "inner":
-        dy, dx = map(int, 0.2 * np.array(data.shape))
-        inner = img.image[dy:-dy, dx:-dx]
-        contrast = inner.min(), inner.max()
-    elif log:
-        # contrast = np.where(np.array(contrast) > 0, np.log(contrast), 0)
-        contrast = np.array(contrast)
-        contrast[contrast > 0] = np.log(contrast[contrast > 0])
-
-    data = np.clip(data, contrast[0], None) - contrast[0]
-    data = data / (contrast[1] - contrast[0]) * 255
-    data = np.clip(data, 0, 255).astype(np.uint8)
+    keep = mask.pad_to(*img.shape).astype(bool) if mask_applied else None
+    data = _display_data(img.image, keep, log)
+    data = _to_uint8(data, *_resolve_contrast(data, contrast, log))
 
     if invert:
-        data = data.max() - data
+        data = 255 - data
 
-    ax.imshow(data, cmap=cmap, clim=(np.nanmin(data), np.nanmax(data)), **kwargs)
+    # fixed 0..255 range: a static contrast must map a value to the same gray in every frame
+    ax.imshow(data, cmap=cmap, vmin=0, vmax=255, **kwargs)
 
     if fields is None:
         fields = img.default_fields
@@ -225,7 +258,8 @@ def make_video(
       "inner": Same as "auto", but it will only use the inner 60 % of each image.
       "maximum": Use the maximum dynamic range of the whole stack.
       n -- integer: Use the dynamic range of the n-th image in the stack
-      (n, m) -- two numbers: Use those values as lower/upper intensity boundary
+      (n, m) -- two numbers or an array: Use those values (data units, also with log) as
+      lower/upper intensity boundary; a value has the same gray level in every frame
     - invert:
       Invert grayscale
     - log:
@@ -274,7 +308,6 @@ def make_video(
     else:
         mask_array = np.ones(stack[0].shape, dtype=bool)
     inv_mask = ~mask_array
-    cv_mask = mask_array.astype(np.uint8)
 
     ## Mask is applied at each read below (`np.ma.array(img.image, mask=inv_mask)`), not
     ## written back into the stack: `img.image = ...` would replace a deferred element's
@@ -282,11 +315,11 @@ def make_video(
     ## virtual stack (see DataObject.__setattr__'s warning) -- and reading `img.image` is
     ## already uncached for a virtual stack, so wrapping at each read costs nothing extra.
 
-    # find the contrast values
-    if contrast in ("auto", "inner"):
-        contrast_type = contrast
+    # find the contrast values: "auto"/"inner" are resolved per frame, everything else is a
+    # fixed (lower, upper) pair in data units (log is applied by _resolve_contrast).
+    if isinstance(contrast, str) and contrast in ("auto", "inner"):
         print("WARNING: The video is on auto contrast.")
-    elif contrast == "maximum":
+    elif isinstance(contrast, str) and contrast == "maximum":
         # Streamed frame-by-frame rather than `np.ma.min/max(stack.image)`, which would
         # gather every frame into one full (N, H, W) array (twice) -- defeating a virtual
         # stack's whole point for a data-heavy stack.
@@ -297,28 +330,19 @@ def make_video(
             c1 = max(c1, np.ma.max(masked))
         contrast = sorted((c0, c1))
         print(f"Set contrast to [{contrast[0]}, {contrast[1]}]")
-        contrast_type = "static"
-    elif isinstance(contrast, int):
+    elif isinstance(contrast, (int, np.integer)):
         # Single read (not two) of `stack[contrast].image` -- a virtual stack's pixel data is
         # never cached, so a second `.image` access would re-read the file from scratch.
-        # np.ma.min/max (not np.ma.nanmin/nanmax, which don't exist -- this branch raised
-        # AttributeError on every call), matching the "maximum" branch above.
         masked = np.ma.array(stack[contrast].image, mask=inv_mask)
-        c0 = np.ma.min(masked)
-        c1 = np.ma.max(masked)
-        contrast = sorted((c0, c1))
+        contrast = sorted((np.ma.min(masked), np.ma.max(masked)))
         print(f"Set contrast to [{contrast[0]}, {contrast[1]}]")
-        contrast_type = "static"
-    elif isinstance(contrast, Iterable) and len(contrast) == 2:
-        contrast_type = "static"
+    elif not isinstance(contrast, str):
+        _resolve_contrast(None, contrast)  # validates: two numbers
     else:
         raise ValueError(f"Invalid '{contrast=}'")
 
-    if contrast_type == "static" and log:
-        c0 = min(np.log(contrast[0]), 1)
-        c1 = min(np.log(contrast[1]), 1)
-        contrast = sorted((c0, c1))
-        print(f"Contrast set to {c0} -- {c1}")
+    if log and not isinstance(contrast, str):
+        print("Contrast set to {} -- {}".format(*_resolve_contrast(None, contrast, log)))
 
     # set up ffmpeg
     ffmpeg_indict = {"-r": str(fps)}
@@ -336,7 +360,6 @@ def make_video(
 
     # loop through the images
     height, width = stack[0].shape
-    dy, dx = map(int, 0.2 * np.array(stack[0].shape))
 
     if field_color is None:
         field_color = "yellow"
@@ -345,33 +368,15 @@ def make_video(
     color = tuple(int(rgb * 255) for rgb in matplotlib.colors.to_rgb(field_color))
 
     for img in stack:
-        data = np.nan_to_num(np.ma.array(img.image, mask=inv_mask))
-
-        if log:
-            data = np.nan_to_num(np.log(data))
-        # set contrast
-        if contrast_type == "inner":
-            inner = data[dy:-dy, dx:-dx]
-            contrast = np.ma.min(inner), np.ma.max(inner)
-        if contrast_type == "auto":
-            contrast = np.ma.min(data), np.ma.max(data)
-
-        data = cv.normalize(
-            np.clip(data, contrast[0], contrast[1]),
-            None,
-            0,
-            255,
-            norm_type=cv.NORM_MINMAX,
-            mask=cv_mask,
-        )
+        data = _display_data(img.image, mask_array, log)
+        data = _to_uint8(data, *_resolve_contrast(data, contrast, log)).filled(0)
 
         data[inv_mask] = 255  # make outside of mask white
 
         if invert:
-            data = -data + data.max()
+            data = 255 - data
 
         if fields:
-            data = cv.normalize(data, None, 0, 255, cv.NORM_MINMAX, dtype=cv.CV_8U)
             data = cv.cvtColor(data, cv.COLOR_GRAY2RGB)
             for i, field in enumerate(fields):
                 if field is None:
@@ -508,6 +513,12 @@ def plot_line(
     line : Union[do.Line, Sequence[do.Line]]
     ax : Union[mpl.axes.Axes, None], optional
         mpl.Axes object to plot on, by default a new Axes is created (=None)
+    export_to : str, optional
+        If given, save each labelled line to this path, with "$" replaced by its label.
+    **kwargs :
+        `label` and `color` are either one value for all lines or one per line (a color
+        that is itself a tuple, e.g. RGB, counts as one value); they override the lines'
+        own `label`/`color` for this plot only. Everything else goes to `Axes.plot`.
 
     Returns
     -------
@@ -516,30 +527,36 @@ def plot_line(
     """
 
     line = line if isinstance(line, Sequence) else [line]
+    n = len(line)
 
-    if "label" in kwargs:
-        for li in line:
-            li.label = kwargs.pop("label")
-    if "color" in kwargs:
-        for li in line:
-            li.color = kwargs.pop("color")
+    def per_line(value, scalar, default):
+        """`value` for each line: a scalar applies to all, otherwise one entry per line."""
+        if value is None:
+            return default
+        if scalar(value):
+            return [value] * n
+        value = list(value)
+        if len(value) != n:
+            raise ValueError(f"Got {len(value)} values for {n} lines.")
+        return value
+
+    labels = per_line(kwargs.pop("label", None), lambda v: isinstance(v, str), [li.label for li in line])
+    colors = per_line(kwargs.pop("color", None), mpl.colors.is_color_like, [li.color for li in line])
 
     ax = _get_ax(ax, xlabel=line[0].xdim, ylabel=line[0].ydim)
-    for li in line:
+    for li, label, color in zip(line, labels, colors):
         ax.plot(
             li.x,
             li.y,
-            color=li.color,
-            label=(
-                "_" if li.label is None else li.label
-            ),  # underscore is ignoired by ax.legend
+            color=color,
+            label="_" if label is None else label,  # underscore is ignored by ax.legend
             **kwargs,
         )
         if export_to:
-            if li.label is None or "_" in li.label[0]:
+            if label is None or "_" in label[0]:
                 print("Line without label will not be exported.")
-            elif li.label:
-                li.save(f"{export_to}".replace("$", li.label))
+            elif label:
+                li.save(f"{export_to}".replace("$", label))
 
     for li in ax.lines:  # Check if a label is set, then generate legend
         if "_" not in li.get_label()[0]:
@@ -689,8 +706,8 @@ def _draw_waterfall(
         Required when `interpolate` is True.
     cmap, invert, log : as in `waterfall`.
     contrast : tuple[float, float], optional
-        Clip range before normalizing to uint8; `None`/"auto"/"maximum" uses the data's
-        own min/max.
+        Clip range (data units, also with `log`) before normalizing to uint8;
+        `None`/"auto"/"maximum" uses the data's own min/max, "inner" its central 60 %.
     extent : sequence, optional
         Passed to `imshow`; defaults to `[0, wf.width, wf.y[-1], wf.y[0]]` (y inverted
         so frame 0 is drawn at the top, matching a monotonically increasing `wf.y`).
@@ -717,24 +734,13 @@ def _draw_waterfall(
     if extent is None:
         extent = [0, wf.width, y[-1], y[0]]
 
-    if log:
-        image = np.log(image)
-        try:
-            contrast = np.log(contrast)
-        except (TypeError, ValueError):
-            pass
-
-    if contrast is None or contrast in ("auto", "maximum"):
-        contrast = image.min(), image.max()
-
-    image = np.clip(image, contrast[0], None) - contrast[0]
-    image = image / (contrast[1] - contrast[0]) * 255
-    image = np.clip(image, 0, 255).astype(np.uint8)
+    image = _display_data(image, None, log)
+    image = _to_uint8(image, *_resolve_contrast(image, contrast, log))
 
     if invert:
-        image = -image + 255
+        image = 255 - image
 
-    ax.imshow(image, extent=extent, cmap=cmap, aspect=aspect)
+    ax.imshow(image, extent=extent, cmap=cmap, aspect=aspect, vmin=0, vmax=255)
     ax.set_ylabel(_axis_label(wf.yaxis, wf.stack[0]._units.get(wf.yaxis, "")))
     ax.set_xlabel("Pixel")
 

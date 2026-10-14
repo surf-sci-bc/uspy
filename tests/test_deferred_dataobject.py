@@ -157,11 +157,12 @@ def test_image_iadd_composes_when_deferred():
     assert np.allclose(img.image, arr + 5)
 
 
-def test_image_iadd_mutates_resident_array_in_place():
+def test_image_iadd_rebinds_and_leaves_original_array_untouched():
     img = Image(np.array([[1.0, 1.0]], dtype=np.float32))
     original_array = img._data["image"]
 
     img += 1
 
-    assert img._data["image"] is original_array  # same object, mutated in place
+    assert img._data["image"] is not original_array  # rebound, never mutated in place
+    assert np.allclose(original_array, [[1.0, 1.0]])
     assert np.allclose(img.image, [[2.0, 2.0]])

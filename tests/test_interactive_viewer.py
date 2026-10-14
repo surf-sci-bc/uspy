@@ -221,3 +221,59 @@ def test_virtual_stack_stays_virtual_after_scrubbing():
         assert vstack.virtual is True
     finally:
         plt.close(v.fig)
+
+
+### close() / initial contrast ################################################
+
+
+def test_close_releases_stack():
+    import gc
+    import weakref
+
+    stack = _stack()
+    v = StackViewer(stack)
+    ref = weakref.ref(stack)
+    v.close()
+    del stack
+    gc.collect()
+    assert ref() is None
+    assert not plt.fignum_exists(v.fig.number)
+    assert not v.w_frame.comm  # widget closed
+    v.close()  # idempotent
+
+
+def test_close_stops_frame_observers_from_redrawing(stack):
+    v = StackViewer(stack)
+    v.close()
+    v.w_frame.value = 0  # must not raise on the dropped stack
+
+
+def test_fixed_contrast_in_constructor_freezes_displayed_frame(stack):
+    v = StackViewer(stack, contrast="fixed", frame=2)
+    try:
+        data = stack[2].image
+        assert v._contrast == (float(data.min()), float(data.max()))
+        assert v.w_contrast.value == "fixed"
+        frozen = v._contrast
+        v.w_frame.value = 3
+        assert v._contrast == frozen
+    finally:
+        plt.close(v.fig)
+
+
+@pytest.mark.parametrize("mode", ["auto", "inner"])
+def test_dropdown_reflects_initial_contrast(stack, mode):
+    v = StackViewer(stack, contrast=mode)
+    try:
+        assert v.w_contrast.value == mode
+    finally:
+        plt.close(v.fig)
+
+
+def test_tuple_contrast_in_constructor_shows_fixed(stack):
+    v = StackViewer(stack, contrast=(0.2, 0.8))
+    try:
+        assert v._contrast == (0.2, 0.8)
+        assert v.w_contrast.value == "fixed"
+    finally:
+        plt.close(v.fig)

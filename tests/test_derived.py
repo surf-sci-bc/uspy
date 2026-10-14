@@ -122,3 +122,38 @@ def test_waterfall_calls_apply_exactly_once_per_frame(monkeypatch):
     monkeypatch.setattr(Profile, "apply", counting)
     Waterfall(stack, profile, "energy")
     assert len(calls) == len(stack)
+
+
+### StitchedLine ##################################################################
+
+
+def _segment_stack(energies, scale):
+    """Stack whose frame at energy E is the constant image scale * (2 + E / 10)."""
+    stack = do.ImageStack([do.Image(np.full((6, 6), scale * (2 + e / 10))) for e in energies])
+    for img, e in zip(stack, energies):
+        img.energy = float(e)
+    return stack
+
+
+def _stitch(*segments):
+    from uspy.derived import StitchedLine
+    from uspy.roi import ROI
+
+    stacks = [_segment_stack(*segment) for segment in segments]
+    return StitchedLine(stacks, [ROI.from_array(np.ones((6, 6), dtype=bool))] * len(stacks), "energy")
+
+
+@pytest.mark.parametrize(
+    "segments",
+    [
+        # one-point overlaps (x of last == x of first of next), three segments scaled 1/.5/.25
+        [(range(0, 5), 1.0), (range(4, 9), 0.5), (range(8, 13), 0.25)],
+        # two segments, one-point overlap
+        [(range(0, 5), 1.0), (range(4, 9), 0.5)],
+        # genuine multi-point overlaps, three segments
+        [(range(0, 7), 1.0), (range(4, 11), 0.5), (range(8, 15), 0.25)],
+    ],
+)
+def test_stitched_line_rescales_segments_onto_the_first(segments):
+    line = _stitch(*segments)
+    np.testing.assert_allclose(line.y, 2 + line.x / 10, rtol=1e-6)

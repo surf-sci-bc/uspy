@@ -217,8 +217,10 @@ def correct_stack_distortion(stack, spline):
     except AttributeError:
         rdeform, cdeform = spline
     stack_warped = stack.copy()
-    stack_warped.image = sym.applyWarping(
-        stack.image, axis=0, warptype="deform_field", dfield=[rdeform, cdeform]
+    stack_warped.image = list(  # one 2D frame per element
+        sym.applyWarping(
+            stack.image, axis=0, warptype="deform_field", dfield=[rdeform, cdeform]
+        )
     )
 
     return stack_warped
@@ -226,7 +228,7 @@ def correct_stack_distortion(stack, spline):
 
 def calc_correlation(stack, line, threshold=None):
     data = stack.image
-    corr = np.zeros_like(stack[0].image)
+    corr = np.zeros(stack[0].image.shape, dtype=float)  # distances in [0, 2], not image dtype
     for ii in range(stack[0].height):
         for jj in range(stack[0].width):
             corr[ii, jj] = scipy.spatial.distance.correlation(data[:, ii, jj], line.y)
@@ -368,8 +370,8 @@ def xps_correct(stack, roi, radius=5, p0=None, plot=True, duplet=False):
     # _fit_plane was called with (points[:, 0], points[:, 1], shifts) == (x, y, z), so
     # normal_vector[0]/[1] are the x/y coefficients respectively -- must pair with xx/yy in
     # that same order (xx varies over width/x, yy over height/y; np.mgrid[0:width, 0:height]
-    # below), not swapped.
-    xx, yy = np.mgrid[0 : stack[0].width, 0 : stack[0].height]
+    # below), not swapped. Index [row, col] == [y, x] like the image frames.
+    yy, xx = np.mgrid[0 : stack[0].height, 0 : stack[0].width]
     zz = (
         -(normal_vector[0] * xx + normal_vector[1] * yy + constant_term)
         / normal_vector[2]
@@ -390,24 +392,31 @@ def xps_correct(stack, roi, radius=5, p0=None, plot=True, duplet=False):
 
 
 @jit(nopython=True, parallel=True)
-# shift pixel columns pixelwise in z direction
 def _shift_z_cols(stack, z_corr):
+    """Shift every pixel column along z by ``z_corr[row, col]`` frames (linear interpolation).
+
+    Parameters
+    ----------
+    stack : ndarray, shape (N, H, W)
+    z_corr : ndarray, shape (H, W)
+        Shift in frames; positive moves values to higher indices. Frames shifted
+        in from outside the stack are zero.
+    """
+    n = stack.shape[0]
     ret_val = np.zeros_like(stack)
 
-    for xx in numba.prange(stack.shape[1]):
-        for yy in numba.prange(stack.shape[2]):
-            shift = int(np.floor(z_corr[xx, yy]))  # integer shift
-            for zz in numba.prange(stack.shape[0] - 1):  # iterate over each column
-                if (
-                    zz + shift > stack.shape[0] - 1 or zz + shift < 0
-                ):  # if pixels are shifted out of range skip them
-                    continue
-                diff = z_corr[xx, yy] - shift  # fractional shift
-                ret_val[zz + shift, xx, yy] = (diff) * stack[zz, xx, yy] + (
-                    1 - diff
-                ) * stack[
-                    zz + 1, xx, yy
-                ]  # caluclate shifted pixel by weighting
+    for row in numba.prange(stack.shape[1]):
+        for col in numba.prange(stack.shape[2]):
+            shift = int(np.floor(z_corr[row, col]))  # integer shift
+            diff = z_corr[row, col] - shift  # fractional shift
+            for zz in range(n):
+                src = zz - shift
+                val = 0.0
+                if 0 <= src < n:
+                    val += (1 - diff) * stack[src, row, col]
+                if 0 <= src - 1 < n:
+                    val += diff * stack[src - 1, row, col]
+                ret_val[zz, row, col] = val
     return ret_val
 
 
@@ -415,7 +424,7 @@ def correct_energies(stack, z_corr):
     corr = stack.copy()
     dE = stack[0].energy - stack[1].energy
     z_corr = z_corr / dE
-    corr.image = _shift_z_cols(corr.image, z_corr)
+    corr.image = list(_shift_z_cols(corr.image, z_corr))  # one 2D frame per element
     return corr
 
 

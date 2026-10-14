@@ -74,7 +74,10 @@ def progress_bar(it, suffix="", total=None, size=25, fill="▇", empty="░", si
 def parse_cp1252_until_null(fd, debug=False):
     buffer = b""
     while b"\x00" not in buffer:
-        buffer += fd.read(1)
+        byte = fd.read(1)
+        if not byte:
+            raise EOFError("Unexpected end of file while reading a null-terminated string.")
+        buffer += byte
     if debug:
         print("\t" + str(buffer))
     try:

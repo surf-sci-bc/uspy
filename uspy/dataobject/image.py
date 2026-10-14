@@ -9,6 +9,7 @@ from collections.abc import Iterable
 from functools import partial
 import glob
 import os
+import warnings
 
 import numpy as np
 import imageio
@@ -19,6 +20,28 @@ import cv2 as cv
 
 from uspy.dataobject.base import DataObject, DataObjectStack, _ArithmeticMixin
 from uspy.dataobject.deferred import DeferredArray, is_deferred, materialize
+
+
+def _as_float(image: np.ndarray) -> np.ndarray:
+    """Integer pixel arrays as float32 (as the LEEM readers do), so arithmetic can neither wrap
+    nor fail on true division. Float arrays are returned unchanged."""
+    if np.issubdtype(image.dtype, np.integer):
+        return image.astype(np.float32)
+    return image
+
+
+def _to_uint(image: np.ndarray, dtype: type) -> np.ndarray:
+    """Cast `image` to unsigned integer `dtype`, clipping to its range (a plain `astype` would
+    wrap) and warning if any value had to be clipped."""
+    info = np.iinfo(dtype)
+    if np.nanmin(image) < info.min or np.nanmax(image) > info.max:
+        warnings.warn(
+            UserWarning(
+                f"Image values outside [{info.min}, {info.max}] were clipped for conversion "
+                f"to {np.dtype(dtype).name}."
+            )
+        )
+    return np.clip(np.nan_to_num(image), info.min, info.max).astype(dtype)
 
 
 def _apply_filter(method: str, params: dict, arr: np.ndarray) -> np.ndarray:
@@ -95,10 +118,10 @@ class Image(_ArithmeticMixin, DataObject):
     def parse(self, source: Union(str, np.ndarray)) -> dict[str, Any]:
         if isinstance(source, np.ndarray):
             # if the object given already is a numpy array:
-            image = source
+            image = _as_float(source)
             self._source = None
         elif source.lower().endswith((".tiff", ".tif")):
-            image = tifffile.imread(source)
+            image = _as_float(tifffile.imread(source))
             self._source = source
         else:
             image = np.float32(imageio.imread(source))
@@ -119,7 +142,7 @@ class Image(_ArithmeticMixin, DataObject):
             self._source = None
             self._meta_store["width"] = source.shape[1]
             self._meta_store["height"] = source.shape[0]
-            return {"image": source}
+            return {"image": _as_float(source)}
         return super().parse_deferred(source)
 
     def save(self, fname: str, **kwargs) -> Image:
@@ -138,7 +161,7 @@ class Image(_ArithmeticMixin, DataObject):
         elif _IMAGEIO_KNOWN_EXTENSIONS is None or _ext(fname) in _IMAGEIO_KNOWN_EXTENSIONS:
             # kwargs forwarded (e.g. PNG compress_level=/JPEG quality=); unlike the
             # tifffile/HDF5 branches, imageio silently ignores a typo'd kwarg.
-            imageio.imwrite(fname, np.uint16(self.image), **kwargs)
+            imageio.imwrite(fname, _to_uint(self.image, np.uint16), **kwargs)
         else:
             raise ValueError(
                 f"Unrecognized file extension for {fname!r}: expected an HDF5 (.h5/.hdf5/"
@@ -230,14 +253,12 @@ class Image(_ArithmeticMixin, DataObject):
 
     def contrast(self, method="equal"):
         if method == "equal":
-            adjusted = cv.equalizeHist(self.image.astype(np.uint8))
+            adjusted = cv.equalizeHist(_to_uint(self.image, np.uint8))
         elif method == "clahe":
             clahe = cv.createCLAHE()
-            adjusted = clahe.apply(self.image)
+            adjusted = clahe.apply(_to_uint(self.image, np.uint16))
         else:
-            # "auto" (unimplemented) or any other value: mirror the original's
-            # copy-only fallback (an independent array, not shared with self.image).
-            return self.copy()
+            raise ValueError(f"Unknown contrast method {method!r}: use 'equal' or 'clahe'.")
 
         return self._with_data(image=adjusted)
 
@@ -338,6 +359,18 @@ class ImageStack(DataObjectStack):
 
         return [images[i, :, :] for i in range(images.shape[0])]
 
+    def _construct_virtual(self, sources: list) -> list:
+        elements = super()._construct_virtual(sources)
+        if not all(element.is_virtual for element in elements):
+            warnings.warn(
+                UserWarning(
+                    "virtual=True has no effect here: a multi-page TIFF or ndarray source is "
+                    "already fully in memory, so the stack is resident. Use one file per frame "
+                    "for an out-of-core stack."
+                )
+            )
+        return elements
+
     def average(self, avg: int) -> ImageStack:
         """Averages over consecutive images in a stack.
 
@@ -407,7 +440,7 @@ class ImageStack(DataObjectStack):
         # full (N, H, W) copy alongside the already-resident per-frame arrays.
         first = self[0]
         dtype = first.image.dtype
-        for image in self[1:]:
+        for image in self.elements[1:]:  # not self[1:]: empty for a one-frame stack
             dtype = np.promote_types(dtype, image.image.dtype)
         shape = (len(self),) + first.image.shape
 

@@ -21,6 +21,7 @@ either -- only this module (and its subclasses) do.
 """
 from __future__ import annotations
 
+import json
 import time
 import warnings
 from typing import Optional, Sequence
@@ -68,6 +69,17 @@ def _compact(width: str, description_width: str) -> dict:
             "style": {"description_width": description_width}}
 
 
+def _close_widget(widget) -> None:
+    """Recursively close `widget` and its children, dropping every observer/click
+    handler first -- they hold bound methods of the owning view (hence its stack)."""
+    for child in getattr(widget, "children", ()):
+        _close_widget(child)
+    widget.unobserve_all()
+    if isinstance(widget, widgets.Button):
+        widget._click_handlers.callbacks.clear()  # pylint: disable=protected-access
+    widget.close()
+
+
 class FrameView:
     """Owns everything about displaying one frame of a `DataObject`/`DataObjectStack`
     source on a matplotlib axes: source resolution (`is_stack`/`stack`/`frames`/
@@ -106,7 +118,8 @@ class FrameView:
         self.fig.canvas.footer_visible = False
 
         self._frame_idx = frame if frame is not None else (len(self.stack) // 2 if self.is_stack else 0)
-        self._contrast = contrast
+        self._contrast_mode = contrast
+        self._contrast = self._resolve_contrast(contrast)
         self._fields = fields
         self._base_artists: list = []
         self._draw_frame()
@@ -118,6 +131,31 @@ class FrameView:
 
     def _make_figure(self, figsize: tuple) -> None:
         self.fig, self.ax_img = plt.subplots(figsize=figsize)
+
+    def close(self) -> None:
+        """Tear down: close every widget (dropping observers), the figure and its
+        canvas, and release the source and any cached data so the stack can be
+        garbage-collected. Idempotent; the view is unusable afterwards."""
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
+        for name in ("widget", "canvas_out"):
+            if getattr(self, name, None) is not None:
+                _close_widget(getattr(self, name))
+        self.fig.canvas.close()
+        plt.close(self.fig)
+        self.stack = self.frames = None
+        self._base_artists = []
+
+    def _resolve_contrast(self, mode):
+        """`plot_img` contrast for a dropdown/constructor `mode`: "fixed" freezes
+        *this* frame's range as a plain `(lo, hi)` -- computed from the one displayed
+        frame, never the whole stack, so this stays cheap on a virtual stack."""
+        if mode != "fixed":
+            return mode
+        img = self.stack[self._frame_idx] if self.is_stack else self.frames[0]
+        data = np.nan_to_num(img.image)
+        return (float(data.min()), float(data.max()))
 
     # -- base frame -----------------------------------------------------------
 
@@ -152,7 +190,13 @@ class FrameView:
             continuous_update=True, layout=w.Layout(width="99%"),
             style={"description_width": "initial"},
         )
-        self.w_contrast = w.Dropdown(options=["auto", "inner", "fixed"], value="auto",
+        options = ["auto", "inner", "fixed"]
+        # a constructor `contrast` tuple is a fixed range; any other plot_img string
+        # (e.g. "maximum") is listed as-is so the dropdown never contradicts the plot.
+        mode = self._contrast_mode if isinstance(self._contrast_mode, str) else "fixed"
+        if mode not in options:
+            options.append(mode)
+        self.w_contrast = w.Dropdown(options=options, value=mode,
                                      description="contrast", **_compact("140px", "60px"))
 
     def _wire_frame_controls(self) -> None:
@@ -164,15 +208,8 @@ class FrameView:
         self._draw_frame()
 
     def _on_contrast_change(self, change: dict) -> None:
-        value = change["new"]
-        if value == "fixed":
-            # freeze *this* frame's range as a plain (lo, hi) plot_img already
-            # accepts -- computed from the one displayed frame, never the whole
-            # stack, so this stays cheap on a virtual stack.
-            img = self.stack[self._frame_idx] if self.is_stack else self.frames[0]
-            data = np.nan_to_num(img.image)
-            value = (float(data.min()), float(data.max()))
-        self._contrast = value
+        self._contrast_mode = change["new"]
+        self._contrast = self._resolve_contrast(change["new"])
         self._draw_frame()
 
     def __repr__(self) -> str:
@@ -273,6 +310,15 @@ class PickerBase(FrameView):
         # One explicit, synchronous draw() here, after display(), guarantees a real
         # frame is sent once the frontend can actually receive it.
         self.fig.canvas.draw()
+
+    def close(self) -> None:
+        """See `FrameView.close`; additionally disconnects the `Canvas` and clears the
+        preview cache (its `IntensityLine`/`Waterfall`s reference the stack)."""
+        if getattr(self, "_closed", False):
+            return
+        self.canvas.close()
+        self._cache.clear()
+        super().close()
 
     # -- subclass hooks -----------------------------------------------------------
 
@@ -410,7 +456,7 @@ class PickerBase(FrameView):
         if self.is_stack:
             self._wire_frame_controls()
             self.w_live.observe(lambda ch: setattr(self, "live", ch["new"]), "value")
-            self.w_update.on_click(lambda _btn: self._update_preview())
+            self.w_update.on_click(self._on_update)
 
         self.w_delete.on_click(lambda _btn: self._delete_selected())
         self.w_clear.on_click(lambda _btn: self._clear_all())
@@ -418,6 +464,12 @@ class PickerBase(FrameView):
         self.w_copy.on_click(self._on_copy)
 
         self._wire_extra()
+
+    def _on_update(self, _btn) -> None:
+        """Recompute the preview from scratch: the cache is keyed on geometry alone, so
+        it cannot see in-place edits of the stack made since it was filled."""
+        self._cache.clear()
+        self._update_preview()
 
     def _on_label_change(self, change: dict) -> None:
         if self._syncing:
@@ -455,10 +507,11 @@ class PickerBase(FrameView):
 
     def _on_copy(self, _btn) -> None:
         from IPython.display import Javascript  # local: optional, browser-only feature
-        text = self.w_code.value.replace("\\", "\\\\").replace("`", "\\`")
+        # json.dumps -> a plain JS string literal: nothing in the text is evaluated
+        # (a template literal would run `${...}` found in a label).
         with self._copy_out:
             self._copy_out.clear_output()
-            display(Javascript(f"navigator.clipboard.writeText(`{text}`)"))
+            display(Javascript(f"navigator.clipboard.writeText({json.dumps(self.w_code.value)})"))
         self.w_status.value = ("copied -- if your browser blocked it, select the "
                                "code box and press Ctrl+C")
 
@@ -472,11 +525,17 @@ class PickerBase(FrameView):
             label = f" ({spec.label})" if spec.label else ""
             return f"{i}: {spec.shape}{label}"
         selected = self.canvas.selected
-        # rebuilding .options resets .value to None -- restore the selection so the
-        # list doesn't visibly deselect on every commit (add/edit/delete all rebuild).
-        self.w_list.options = [(entry(i, s), i) for i, s in enumerate(self.canvas.specs)]
-        if selected is not None and selected < len(self.w_list.options):
-            self.w_list.value = selected
+        # rebuilding .options resets .value (to the first entry or None) -- restore the
+        # selection so the list doesn't visibly deselect on every commit. Guarded by
+        # `_syncing` so that reset never reaches `_on_list_select` -> `canvas.select`,
+        # which would bounce the selection through region 0 and clear a selected vertex.
+        was_syncing, self._syncing = self._syncing, True
+        try:
+            self.w_list.options = [(entry(i, s), i) for i, s in enumerate(self.canvas.specs)]
+            self.w_list.value = (selected if selected is not None
+                                 and selected < len(self.canvas.specs) else None)
+        finally:
+            self._syncing = was_syncing
 
     def _sync_controls(self) -> None:
         """Point the label/color row (and, via `_sync_extra`, whatever a subclass

@@ -652,14 +652,13 @@ def test_stack_setitem(source, source_add, virtual):
 
     # set one element to element
     stack = load_stack.copy()
-    stack[-1] = add_obj
     if virtual:
-        assert stack[-1].source == add_obj.source
-        with pytest.raises(ValueError):
-            add_obj._source = None
-            assert add_obj.source is None
+        with pytest.raises(ValueError, match="deferred"):  # resident element refused
             stack[-1] = add_obj
+        stack[-1] = add_obj.deferred()
+        assert stack[-1].source == add_obj.source
     else:
+        stack[-1] = add_obj
         assert stack[-1] is add_obj
 
     add_obj._source = -10
@@ -671,9 +670,8 @@ def test_stack_setitem(source, source_add, virtual):
 
     # set list to element
     stack = load_stack.copy()
-    print(add_obj.source)
     with pytest.raises(TypeError):
-        stack[:] = add_obj
+        stack[:] = add_obj.deferred() if virtual else add_obj
 
     # set list to list
 
@@ -927,8 +925,9 @@ def test_image_filter_unknown_method_raises(testimgpng):
 def test_image_contrast_equal(testimgpng):
     orig = testimgpng.image.copy()
 
-    result = testimgpng.contrast("equal")
-    expected = cv.equalizeHist(orig.astype(np.uint8))
+    with pytest.warns(UserWarning, match="clipped"):  # 16-bit fixture exceeds uint8
+        result = testimgpng.contrast("equal")
+    expected = cv.equalizeHist(np.clip(orig, 0, 255).astype(np.uint8))
 
     assert np.allclose(result.image, expected)
     assert result is not testimgpng
@@ -948,7 +947,7 @@ def test_image_contrast_clahe():
     orig = img.image.copy()
 
     result = img.contrast("clahe")
-    expected = cv.createCLAHE().apply(orig)
+    expected = cv.createCLAHE().apply(orig.astype(np.uint16))
 
     assert np.allclose(result.image, expected)
     assert result is not img
@@ -958,19 +957,9 @@ def test_image_contrast_clahe():
     assert result.meta is not img.meta
 
 
-def test_image_contrast_fallback_returns_independent_copy(testimgpng):
-    # "auto" (and any other unrecognized method) hits contrast()'s fallback, which mirrors
-    # the pre-_with_data behavior of returning an unmodified but independent copy.
-    orig = testimgpng.image.copy()
-
-    result = testimgpng.contrast("auto")
-
-    assert result is not testimgpng
-    assert result.image is not testimgpng.image
-    assert np.array_equal(result.image, orig)
-    assert np.array_equal(testimgpng.image, orig)
-    assert result.data is not testimgpng.data
-    assert result.meta is not testimgpng.meta
+def test_image_contrast_unknown_method_raises(testimgpng):
+    with pytest.raises(ValueError, match="auto"):
+        testimgpng.contrast("auto")
 
 
 def test_dataobject_with_data_independent_of_original():

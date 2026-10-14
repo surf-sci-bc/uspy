@@ -173,7 +173,7 @@ def test_plot_img_ndarray_mask_does_not_raise():
 def test_plot_img_explicit_fields_overrides_default(img_fname, monkeypatch):
     captured = {}
 
-    def fake_plot_img(img, *args, fields=None, **kwargs):  # pylint: disable=unused-argument
+    def fake_plot_img(img, fields=None, *args, **kwargs):  # mirrors uspy.plotting.plot_img
         captured["fields"] = fields
 
     monkeypatch.setattr(base_plotting, "plot_img", fake_plot_img)
@@ -186,7 +186,7 @@ def test_plot_img_omitted_fields_passes_none_through(img_fname, monkeypatch):
     # so the wrapper should just pass None through unchanged when fields isn't given.
     captured = {}
 
-    def fake_plot_img(img, *args, fields=None, **kwargs):  # pylint: disable=unused-argument
+    def fake_plot_img(img, fields=None, *args, **kwargs):  # mirrors uspy.plotting.plot_img
         captured["fields"] = fields
 
     monkeypatch.setattr(base_plotting, "plot_img", fake_plot_img)
@@ -556,7 +556,7 @@ def test_make_video_log_with_static_contrast_takes_log_of_contrast_bounds(tmp_pa
     )
 
     printed = capsys.readouterr().out
-    c0_expected, c1_expected = min(np.log(2.0), 1), min(np.log(8.0), 1)
+    c0_expected, c1_expected = np.log(2.0), np.log(8.0)  # not capped at 1
     assert f"Contrast set to {c0_expected} -- {c1_expected}" in printed
 
 

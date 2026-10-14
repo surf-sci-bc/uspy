@@ -415,3 +415,35 @@ def test_picker_does_not_mutate_the_stack(stack):
         assert_array_equal(im.image, before)
     p.canvas.close()
     plt.close(p.fig)
+
+
+### close() / Update #########################################################
+
+
+def test_close_releases_stack_and_waterfall_cache():
+    import gc
+    import weakref
+
+    stack = _stack()
+    p = ProfilePicker(stack, yaxis="energy",
+                      profiles=[Profile([(10, 10), (60, 40)], width=3, color="r")])
+    p.canvas.select(0)
+    assert p._cache
+    ref = weakref.ref(stack)
+    p.close()
+    del stack
+    gc.collect()
+    assert ref() is None
+    assert not plt.fignum_exists(p.fig.number)
+
+
+def test_update_button_invalidates_waterfall_cache(stack):
+    p = ProfilePicker(stack, yaxis="energy",
+                      profiles=[Profile([(10, 10), (60, 40)], width=3, color="r")])
+    try:
+        p.canvas.select(0)
+        key, wf = next(iter(p._cache.items()))
+        p.w_update.click()
+        assert p._cache.get(key) is not wf
+    finally:
+        p.close()

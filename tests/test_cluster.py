@@ -618,3 +618,78 @@ def test_plot_ivs2_draws_one_line_per_curve():
 
 if __name__ == "__main__":
     main()
+
+
+### --- Audit regressions: noise handling, defaults, elbow, unsupported algorithms ---------
+
+
+def _blobs_with_noise(blob_vectors):
+    """Two tight blobs (20 + 10 pixels) plus 3 isolated outliers DBSCAN calls noise."""
+    X, _ = blob_vectors(n_clusters=2, n_per_cluster=10, n_frames=3, spacing=50.0)
+    X = np.vstack([X, X[:10] + 0.0])  # blob 0 doubled -> 20 vs 10 pixels
+    outliers = np.array([[500.0] * 3, [-500.0] * 3, [900.0, -900.0, 900.0]])
+    return np.vstack([X, outliers])
+
+
+def test_sort_labels_masks_noise_instead_of_ranking_it():
+    labels = np.array([5, 5, 5, 5, 2, 2, 7, -1, -1, -1])  # noise is the most frequent "label"
+    out = cluster.sort_labels(labels)
+    assert list(np.ma.getmaskarray(out)) == [False] * 7 + [True] * 3
+    np.testing.assert_array_equal(out[:7].data, [2, 2, 2, 2, 1, 1, 0])
+    np.testing.assert_array_equal(labels[-3:], [-1, -1, -1])  # input untouched
+
+
+def test_cluster_analysis_masks_noise_and_keeps_model_labels(blob_vectors):
+    X = _blobs_with_noise(blob_vectors)
+    labels, model = cluster.cluster_analysis(X, "sk-dbscan", eps=1.0, min_samples=3)
+
+    assert (model.labels_ == -1).sum() == 3  # model.labels_ not mutated
+    assert list(np.ma.getmaskarray(labels)) == list(model.labels_ == -1)
+    # noise must not inflate cluster 0 (the smallest real cluster, 10 pixels)
+    assert np.count_nonzero(labels == 0) == 10
+
+
+def test_load_cluster_model_sklearn_masks_noise_and_keeps_model_labels(tmp_path, blob_vectors):
+    X = _blobs_with_noise(blob_vectors)
+    _, model = cluster.cluster_analysis(X, "sk-dbscan", eps=1.0, min_samples=3)
+    fname = str(tmp_path / "db.model")
+    cluster.save_model(model, fname)
+
+    labels, loaded = cluster.load_cluster_model(fname)
+
+    assert (loaded.labels_ == -1).sum() == 3
+    assert np.ma.getmaskarray(labels).sum() == 3
+    assert np.count_nonzero(labels == 0) == 10
+
+
+def test_component_analysis_does_not_mutate_defaults():
+    X = np.random.default_rng(0).normal(size=(30, 12))
+    before = cluster.COMPONENTS_DEFAULTS["pca"][1]["n_components"]
+    cluster.component_analysis(X, "pca", n_components=3)
+    assert cluster.COMPONENTS_DEFAULTS["pca"][1]["n_components"] == before
+    _, _, model = cluster.component_analysis(X, "pca")
+    assert model.n_components_ == before
+
+
+def test_elbow_cluster_analysis_finds_true_cluster_count_of_four_blobs():
+    """-WCE rises concavely with k; the knee of that curve is the true k (4), whereas
+    curve='convex' picks the sweep end (15)."""
+    rng = np.random.default_rng(0)
+    centers = np.array([[0, 0], [10, 0], [0, 10], [10, 10]], dtype=float)
+    X = np.vstack([c + rng.normal(scale=0.5, size=(60, 2)) for c in centers])
+
+    labels, _ = cluster.elbow_cluster_analysis(X, "pc-kmeans", start=2, end=15)
+
+    assert len(np.unique(labels)) == 4
+
+
+def test_cluster_analysis_sk_kmeans_auto_runs(blob_vectors):
+    X, _ = blob_vectors(n_clusters=3, n_per_cluster=20, n_frames=4, spacing=80.0)
+    labels, _ = cluster.cluster_analysis(X, "sk-kmeans-auto", do_plot=False)
+    assert len(labels) == X.shape[0]
+
+
+def test_cluster_analysis_pc_kmeans_elbow_raises_value_error(blob_vectors):
+    X, _ = blob_vectors(n_clusters=2, n_per_cluster=10, n_frames=3)
+    with pytest.raises(ValueError, match="elbow_cluster_analysis"):
+        cluster.cluster_analysis(X, "pc-kmeans-elbow")

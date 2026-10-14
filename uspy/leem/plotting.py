@@ -21,10 +21,10 @@ import uspy.plotting
 from uspy.plotting import *
 
 
-def plot_img(img, *args, fields=None, **kwargs):
+def plot_img(img, fields=None, *args, **kwargs):
     """See uspy.plotting"""
     img = imgify(img)
-    return uspy.plotting.plot_img(img, fields=fields, *args, **kwargs)
+    return uspy.plotting.plot_img(img, fields, *args, **kwargs)
 
 
 _UNSET = object()

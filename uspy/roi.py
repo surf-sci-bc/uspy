@@ -38,6 +38,13 @@ def palette_color(index: int) -> str:
     return colors[index % len(colors)]
 
 
+def _num(value: Any) -> str:
+    """Exact source text of a coordinate for a `__repr__`: integral values as ints, anything
+    else as a round-trippable float (never truncated)."""
+    value = float(value)
+    return repr(int(value)) if value.is_integer() else repr(value)
+
+
 class StyledObject:  # do.Loadable):
     """Contains a style dictionary that can have class-wise defaults. The dictionary
     is intended for matplotlib keyword arguments."""
@@ -86,6 +93,7 @@ class ROI(StyledObject):
     # take care: OpenCV-points are given as (x, y),
     # but numpy 2d image arrays are in (y, x)-coordinates
     shapes = ("circle", "ellipse", "square", "rectangle", "point", "polygon")
+    _mask_cache = None  # (key, padded mask) -- class default so older pickles still work
 
     def __init__(
         self,
@@ -113,7 +121,7 @@ class ROI(StyledObject):
         assert self.array.ndim == 2
 
         super().__init__(style=style, color=color)
-        self._mask_buffer = np.zeros((0, 0), dtype=bool)
+        self._mask_cache = None  # (key, padded mask), see pad_to
         self._center_buffer = True
 
     def _apply_params(self, shape: Optional[str] = "circle", **kwargs):
@@ -318,9 +326,11 @@ class ROI(StyledObject):
         return result
 
     def pad_to(self, width: int, height: int) -> np.ndarray:
-        """Return the the mask padded to a given extent."""
-        if self._mask_buffer.shape == (width, height):
-            return self._mask_buffer
+        """Return the the mask padded to a given extent. The result is cached per call
+        signature: extent, origin and mask content (any change recomputes)."""
+        key = (width, height, tuple(self.origin), self._array_shape, self._packed_array.tobytes())
+        if self._mask_cache is not None and self._mask_cache[0] == key:
+            return self._mask_cache[1]
         # find sizes and corners. The low corner is the difference between the mask's
         # reference point and the position:
         mask_size = self.array.shape
@@ -333,6 +343,7 @@ class ROI(StyledObject):
         crop_low = np.clip(-low_corner, 0, None)
         crop_high = mask_size - np.clip(-high_corner, 0, None)
         if any(crop_low > mask_size) or any(crop_high < 0):
+            self._mask_cache = (key, result)
             return result
         mask = self.array[crop_low[0] : crop_high[0], crop_low[1] : crop_high[1]]
 
@@ -340,8 +351,7 @@ class ROI(StyledObject):
         pad_low = np.clip(low_corner, 0, None)
         pad_high = pad_size - np.clip(high_corner, 0, None)
         result[pad_low[0] : pad_high[0], pad_low[1] : pad_high[1]] = mask
-        # put results in the buffer variables
-        self._mask_buffer = result
+        self._mask_cache = (key, result)
 
         return result
 
@@ -403,7 +413,7 @@ class ROI(StyledObject):
         `shape_name == "array"` (from_array, or a `__add__` union) has no parametric
         form, so the repr says so explicitly instead of pretending to be eval-able.
         """
-        x0, y0 = int(self.position[0]), int(self.position[1])
+        x0, y0 = _num(self.position[0]), _num(self.position[1])
         color_kw = f"color={self.color!r}"
         label_kw = f", label={self.label!r}" if self.label is not None else ""
 
@@ -417,7 +427,7 @@ class ROI(StyledObject):
             return f"ROI.point({x0}, {y0}, {color_kw}{label_kw})"
         if self.shape_name == "polygon":
             corners = np.asarray(self.params["corners"]) + self.position
-            corners_repr = "[" + ", ".join(f"({int(x)}, {int(y)})" for x, y in corners) + "]"
+            corners_repr = "[" + ", ".join(f"({_num(x)}, {_num(y)})" for x, y in corners) + "]"
             return f"ROI.polygon({corners_repr}, {color_kw}{label_kw})"
 
         params_repr = ", ".join(f"{k}={v!r}" for k, v in self.params.items())
@@ -537,7 +547,7 @@ class Profile(StyledObject):
     def __repr__(self) -> str:
         """A call that reconstructs this Profile, e.g. `Profile([(100, 100), (400, 300)],
         width=10, color="#9467bd", label="step edge")`."""
-        points_repr = "[" + ", ".join(f"({int(x)}, {int(y)})" for x, y in self.points) + "]"
+        points_repr = "[" + ", ".join(f"({_num(x)}, {_num(y)})" for x, y in self.points) + "]"
         color_kw = f"color={self.color!r}"
         label_kw = f", label={self.label!r}" if self.label is not None else ""
         return f"Profile({points_repr}, width={self.width!r}, {color_kw}{label_kw})"

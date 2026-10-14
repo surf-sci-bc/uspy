@@ -51,7 +51,7 @@ class ElettraReader(LEEMReader):
         the actual pixel read while returning the same metadata `parse_image` would."""
         folder = Path(source).parent
 
-        if source.endswith(".tif"):
+        if source.endswith((".tif", ".tiff")):
             if read_image:
                 idict = {"image": tifffile.imread(source).astype(np.float32)}
             else:
@@ -142,6 +142,11 @@ class ElettraReader(LEEMReader):
         if not fname:  # no tracefile -- e.g. a stack of .dat files
             return
         df = pd.read_csv(fname[0], delimiter=" ")
+        if len(df) != len(stack):
+            raise ValueError(
+                f"Tracefile {fname[0]} has {len(df)} rows but the stack has {len(stack)} "
+                "images; load the complete set of images (and slice the stack afterwards)."
+            )
 
         has_time_column = False
         for header, vals in df.items():

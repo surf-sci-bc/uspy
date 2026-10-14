@@ -108,8 +108,7 @@ class ROIPicker(PickerBase):
     see `uspy.roi.ROI.__repr__`). That pasted literal is the permanent record of the
     analysis; this picker and its live state are throwaway. `.rois` gives the same
     objects for same-session convenience, but always as *fresh* objects (never the
-    picker's own, to avoid `ROI.pad_to`'s stale-mask-cache hazard from a
-    mutated-and-reused ROI). Profiles are not offered here -- a profile over a stack is
+    picker's own, so nothing the caller does to them can alias picker state). Profiles are not offered here -- a profile over a stack is
     a `Waterfall`, not an I(V) curve; see `uspy.interactive.pick_profiles` for that.
 
     The label/color/rotation row is contextual: with a region selected (click it, or

@@ -161,7 +161,7 @@ class Line(_ArithmeticMixin, DataObject):
     @property
     def area(self) -> float:
         "Area under the line integrated by simpson rule"
-        return scipy.integrate.simpson(self.y, self.x)
+        return scipy.integrate.simpson(self.y, x=self.x)
 
     @property
     def dataframe(self) -> pd.DataFrame:
@@ -234,6 +234,8 @@ class Line(_ArithmeticMixin, DataObject):
         kernel : np.ndarray, int
             Kernel that will be convolved with the line data.
             If ``int`` an equaly distributed kernel of size ``kernel`` will be applied.
+            The data is extended by its end values at the edges; the first and last point
+            of the line are kept unchanged.
 
         Returns
         -------
@@ -262,8 +264,12 @@ class Line(_ArithmeticMixin, DataObject):
             kernel = np.ones(kernel) / kernel
 
         line = self.copy()
+        # Edge-padded so points within the kernel's reach of an edge average real neighbours
+        # (a zero-padded "same" convolution drags them towards 0); end points stay unchanged.
+        pad = len(kernel)
+        padded = np.pad(self.y, pad, mode="edge")
         # pylint: disable=attribute-defined-outside-init
-        line.x, line.y = self.x, np.convolve(self.y, kernel, mode="same")
+        line.y = np.convolve(padded, kernel, mode="same")[pad:-pad]
         line.y[0], line.y[-1] = self.y[0], self.y[-1]
 
         return line

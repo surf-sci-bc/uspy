@@ -362,12 +362,16 @@ class TestObjectRoundtrip:
         "dtype", [np.uint8, np.uint16, np.int32, np.float32, np.float64]
     )
     def test_image_pixel_dtype_preserved(self, tmp_path, dtype):
+        """Float dtypes roundtrip unchanged; integer input is float32 from Image parse on
+        (by design), and that float32 pixel array roundtrips with identical values."""
         arr = np.arange(20, dtype=dtype).reshape(4, 5)
         img = Image(arr)
+        expected_dtype = dtype if np.issubdtype(dtype, np.floating) else np.float32
+        assert img.image.dtype == expected_dtype
         target = tmp_path / "x.h5"
         img.save(str(target))
         reloaded = Image.load(str(target))
-        assert reloaded.image.dtype == dtype
+        assert reloaded.image.dtype == expected_dtype
         np.testing.assert_array_equal(reloaded.image, arr)
 
     def test_leemimg_full_meta_defaults_roundtrip(self, tmp_path):
@@ -941,3 +945,78 @@ def test_real_leem_stack_roundtrip(tmp_path, stack_fname):
     np.testing.assert_array_equal(reloaded[0].image, stack[0].image)
     np.testing.assert_array_equal(reloaded[-1].image, stack[-1].image)
     np.testing.assert_allclose(reloaded.energy, stack.energy, equal_nan=True)
+
+
+######### Section I: overwrite safety, stack source/time_origin/'frame' (uspy-w7a.6/.11) ########
+
+
+class TestOverwriteAndAtomicity:
+    def test_existing_target_raises_and_is_untouched(self, tmp_path, line):
+        target = tmp_path / "x.h5"
+        target.write_bytes(b"precious")
+        with pytest.raises(FileExistsError):
+            line.save(str(target))
+        assert target.read_bytes() == b"precious"
+
+    def test_overwrite_true_replaces_file(self, tmp_path, line):
+        target = tmp_path / "x.h5"
+        line.save(str(target))
+        other = make_line(n=7)
+        other.save(str(target), overwrite=True)
+        assert len(Loadable.load(str(target)).x) == 7
+
+    def test_failed_overwrite_keeps_old_file_and_leaves_no_temp(self, tmp_path, line, monkeypatch):
+        target = tmp_path / "x.h5"
+        line.save(str(target))
+        before = target.read_bytes()
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("disk full")
+
+        monkeypatch.setattr(h5mod, "_write_object", boom)
+        with pytest.raises(RuntimeError):
+            line.save(str(target), overwrite=True)
+        assert target.read_bytes() == before
+        assert [p.name for p in tmp_path.iterdir()] == ["x.h5"]
+
+    def test_new_file_permissions_follow_umask_not_mkstemp(self, tmp_path, line):
+        plain = tmp_path / "plain.txt"
+        plain.write_bytes(b"")
+        target = tmp_path / "x.h5"
+        line.save(str(target))
+        assert target.stat().st_mode & 0o777 == plain.stat().st_mode & 0o777
+
+
+class TestStackRoundtripGaps:
+    def test_per_frame_source_roundtrips(self, tmp_path, tiff_frame_stack):
+        stack = ImageStack(tiff_frame_stack["paths"])
+        target = tmp_path / "x.h5"
+        stack.save(str(target))
+        reloaded = ImageStack.load(str(target))
+        assert [e._meta["source"] for e in reloaded] == tiff_frame_stack["paths"]
+
+    def test_time_origin_roundtrips(self, tmp_path, leem_stack):
+        leem_stack.time_origin = leem_stack[0].timestamp - 123.5  # not the first frame
+        target = tmp_path / "x.h5"
+        leem_stack.save(str(target))
+        reloaded = LEEMStack.load(str(target))
+        assert reloaded.time_origin == pytest.approx(leem_stack.time_origin)
+        np.testing.assert_allclose(reloaded.rel_time, leem_stack.rel_time)
+        assert "rel_time" not in reloaded[0]._meta
+
+    def test_archive_still_has_exactly_three_uspy_attrs(self, tmp_path, leem_stack):
+        target = tmp_path / "x.h5"
+        leem_stack.save(str(target))
+        names = []
+        with h5py.File(target, "r") as f:
+            f.visititems(lambda n, o: names.extend(k for k in o.attrs if k.startswith("uspy_")))
+            names.extend(k for k in f.attrs if k.startswith("uspy_"))
+        assert sorted(names) == ["uspy_class", "uspy_format_version", "uspy_version"]
+
+    def test_user_metadata_column_named_frame_roundtrips(self, tmp_path):
+        stack = ImageStack([Image(np.full((3, 3), float(i))) for i in range(3)])
+        stack.frame = ["a", "b", "c"]
+        target = tmp_path / "x.h5"
+        stack.save(str(target))
+        reloaded = ImageStack.load(str(target))
+        assert [e._meta["frame"] for e in reloaded] == ["a", "b", "c"]

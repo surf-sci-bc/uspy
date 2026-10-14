@@ -1027,17 +1027,21 @@ def test_stack_add_and_iadd_operators_rebind_time_origin(op):
         assert element._time_origin is combined._time_origin
 
 
-def test_stack_extend_virtual_self_nonvirtual_other_no_crash():
-    """Regression test: DataObjectStack.extend previously left `elements` unassigned (an
-    UnboundLocalError) when self was virtual and other was not; it should fall back to
-    other's element sources, same as defer() does."""
+def test_stack_extend_virtual_self_refuses_resident_elements():
+    """A virtual stack refuses resident elements (their in-memory edits would be lost) with a
+    ValueError pointing to `.deferred()`; extending with `other.deferred()` works."""
     stack_a = base.LEEMStack(GCU_STACK_DIR, virtual=True)
     stack_b = base.LEEMStack(GCU_STACK_DIR, virtual=False)
     n_a = len(stack_a)
 
-    stack_a.extend(stack_b)
+    with pytest.raises(ValueError, match="deferred"):
+        stack_a.extend(stack_b)
+    assert len(stack_a) == n_a
+
+    stack_a.extend(stack_b.deferred())
 
     assert len(stack_a) == n_a + len(stack_b)
+    assert stack_a.virtual
 
 
 def test_img_isotime_nan_for_missing_timestamp():

@@ -210,10 +210,10 @@ class StitchedLine(Line):
 
             if start_x > end_x:
                 print("No Overlap detected.")
-                coeffs.append(1)
+                factor = 1
             elif start_x == end_x:
                 print("One Point overlap")
-                coeffs.append(next_line.y[0] / curr_line.y[-1])
+                factor = curr_line.y[-1] / next_line.y[0]
             else:
                 curr_line_points = np.array(
                     [
@@ -231,7 +231,11 @@ class StitchedLine(Line):
                     func, curr_line_points[:, 0], curr_line_points[:, 1]
                 )
 
-                coeffs.append(popt)
+                factor = popt[0]
+
+            # factor maps next_line onto curr_line as given; chain it onto curr_line's own
+            # coefficient so every segment ends up on the scale of the first one.
+            coeffs.append(coeffs[-1] * factor)
 
         x_data = np.array([])
         y_data = np.array([])

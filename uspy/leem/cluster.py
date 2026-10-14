@@ -32,7 +32,6 @@ from pyclustering.cluster.center_initializer import (
     kmeans_plusplus_initializer,
     random_center_initializer,
 )
-from pyclustering.cluster.elbow import elbow as pc_elbow
 from pyclustering.utils import metric as pc_metric
 
 # measuring clustering quality
@@ -86,13 +85,20 @@ def enforce_clustershape(mask_outer=0):
 
 
 def sort_labels(labels):
-    labellist = list(np.unique(labels))
+    """Relabel by ascending population; negative/masked labels (noise) stay masked.
+
+    Returns
+    -------
+    numpy.ma.MaskedArray
+        Same shape as `labels`; `labels` itself is never modified.
+    """
+    labels = np.ma.filled(labels, -1)
+    labellist = [l for l in np.unique(labels) if l >= 0]
     labellist.sort(key=lambda l: np.count_nonzero(labels == l))
     sorted_labels = np.zeros_like(labels) - 1
     for i, ul in enumerate(labellist):
         sorted_labels[labels == ul] = i
-    sorted_labels[sorted_labels < 0] = np.ma.masked
-    return sorted_labels
+    return np.ma.masked_less(sorted_labels, 0)
 
 
 def combine_labels(labels, combinations):
@@ -128,7 +134,7 @@ def make_cmap(phases, labels, default_phases=False):
 @enforce_clustershape(0)
 @timing_notification("component analysis")
 def component_analysis(X, algorithm="pca", **params_):
-    constructor, params = COMPONENTS_DEFAULTS[algorithm]
+    constructor, params = copy.deepcopy(COMPONENTS_DEFAULTS[algorithm])
     params.update(params_)
     model = constructor(**params)
     model.fit(X)
@@ -188,7 +194,6 @@ def cluster_analysis(X, algorithm="pc-kmeans", **params_):
     "sk-bgm":           "n_components": N_CLUSTERS, "n_init": 1, "max_iter": 200
     "sk-kmeans-auto":   "init": "k-means++", "n_init": 5, "max_iter": 300
     "pc-kmeans":        "init": "k-means++", "n_clusters": N_CLUSTERS
-    "pc-kmeans-elbow":  "init": "k-means++"
     "pc-kmeans-iter":   "init": "random"
     "pc-kmedoids":      "init": "k-means++", "n_clusters": N_CLUSTERS
     "pc-xmeans":        "init": "k-means++", "n_clusters": N_CLUSTERS
@@ -199,6 +204,11 @@ def cluster_analysis(X, algorithm="pc-kmeans", **params_):
     """
     # pylint: disable=too-many-locals
     algorithm = algorithm.lower()
+    if algorithm == "pc-kmeans-elbow":
+        raise ValueError(
+            "'pc-kmeans-elbow' is not supported (pyclustering's elbow yields no clusters); "
+            "use elbow_cluster_analysis(X, 'pc-kmeans') instead"
+        )
     constructor, params = copy.deepcopy(CLUSTERING_DEFAULTS[algorithm])
     params.update(params_)
     metric_type = params.pop("metric", "euclidean")
@@ -242,7 +252,6 @@ def cluster_analysis(X, algorithm="pc-kmeans", **params_):
         raise ValueError(f"Unknown algorithm {algorithm}")
 
     print(f"{algorithm.upper()}: Found {len(set(labels))} clusters")
-    labels[labels < 0] = np.ma.masked
     return sort_labels(labels), model
 
 
@@ -289,7 +298,7 @@ def elbow_cluster_analysis(X, algorithm="pc-kmeans", start=2, end=15, **params_)
         print(f"\033[KDid model with n_clusters={n_clusters}", end="\r")
     goodnesses = [goodness_of_model(model) for model in models]
     kl = kneed.KneeLocator(
-        range(start, end + 1), goodnesses, curve="convex", direction="increasing"
+        range(start, end + 1), goodnesses, curve="concave", direction="increasing"
     )
     n_clusters = kl.elbow
     print(
@@ -397,7 +406,6 @@ def load_cluster_model(fname):
             labels[cluster] = i
     except AttributeError:
         labels = model.labels_
-        labels[labels < 0] = np.ma.masked
     print(f"Loaded cluster model from {fname}")
     return sort_labels(labels), model
 
@@ -549,6 +557,11 @@ class AutoKMeans:
         for k in range(1, max_clusters):
             self.models.append(sk_cluster.KMeans(*args, n_clusters=k, **kwargs))
 
+    def fit_predict(self, X):
+        """Fit, keep the selected model's ``labels_`` on ``self`` and return them."""
+        self.labels_ = self.fit(X).labels_
+        return self.labels_
+
     def fit(self, X):
         for k, model in enumerate(self.models, 1):
             model.fit(X)
@@ -612,7 +625,6 @@ CLUSTERING_DEFAULTS = {
     ),
     "sk-kmeans-auto": (AutoKMeans, {"init": "k-means++", "n_init": 5, "max_iter": 300}),
     "pc-kmeans": (pc_kmeans, {"init": "k-means++", "n_clusters": N_CLUSTERS}),
-    "pc-kmeans-elbow": (pc_elbow, {"init": "k-means++"}),
     "pc-kmeans-iter": (pc_kmeans, {"init": "random"}),
     "pc-kmedoids": (pc_kmedoids, {"init": "k-means++", "n_clusters": N_CLUSTERS}),
     "pc-xmeans": (pc_xmeans, {"init": "k-means++", "n_clusters": N_CLUSTERS}),

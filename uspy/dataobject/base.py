@@ -31,7 +31,7 @@ class _ArithmeticMixin:
     """Mixin providing elementwise +, -, *, / for DataObject subclasses that hold a single
     numeric array. Subclasses set ``_op_attr`` to that array's attribute name (e.g. "image"
     for Image, "y" for Line). Accepts a same-shaped instance duck-typed on ``_op_attr``, a
-    plain Number, or an ndarray; in-place variants mutate the array in place."""
+    plain Number, or an ndarray; in-place variants rebind the result, never mutating the array."""
 
     _op_attr: Optional[str] = None
 
@@ -54,18 +54,20 @@ class _ArithmeticMixin:
         return operand
 
     def _iop(self, other: Any, op: Callable[[Any, Any], Any]) -> _ArithmeticMixin:
-        # Raw _data access, same reasoning as _operand: reading via getattr would materialize
-        # a deferred value just to add to it. operator.iadd on a DeferredArray (which defines
-        # no __iadd__) falls back to __add__, producing a new composed DeferredArray -- so a
-        # virtual DataObject's in-place op stays out-of-core, while a resident ndarray is
-        # still mutated in place (op.iadd calls ndarray.__iadd__, same object).
-        arr = self._data[self._op_attr]
-        arr = op(arr, self._operand(other))
-        self._data[self._op_attr] = arr
+        # `op` is the *out-of-place* operator, rebound onto `_data`: the stored array may alias
+        # the caller's own (`Image(arr)`, `ImageStack(arr)` frames, `Line(arr)` views), so it
+        # must never be mutated. Raw _data access (not getattr): reading would materialize a
+        # deferred value just to add to it; operator.add on a DeferredArray composes a new one.
+        current, operand = self._data[self._op_attr], self._operand(other)
+        if not is_deferred(current):
+            # A resident object stays resident: load a deferred operand (one frame) instead of
+            # composing the result into a DeferredArray with no source behind it.
+            operand = materialize(operand)
+        self._data[self._op_attr] = op(current, operand)
         return self
 
     def __iadd__(self, other: Any) -> _ArithmeticMixin:
-        return self._iop(other, operator.iadd)
+        return self._iop(other, operator.add)
 
     def __add__(self, other: Any) -> _ArithmeticMixin:
         result = self.copy()
@@ -78,7 +80,7 @@ class _ArithmeticMixin:
         return self.__add__(other)
 
     def __isub__(self, other: Any) -> _ArithmeticMixin:
-        return self._iop(other, operator.isub)
+        return self._iop(other, operator.sub)
 
     def __sub__(self, other: Any) -> _ArithmeticMixin:
         result = self.copy()
@@ -86,7 +88,7 @@ class _ArithmeticMixin:
         return result
 
     def __imul__(self, other: Any) -> _ArithmeticMixin:
-        return self._iop(other, operator.imul)
+        return self._iop(other, operator.mul)
 
     def __mul__(self, other: Any) -> _ArithmeticMixin:
         result = self.copy()
@@ -97,12 +99,24 @@ class _ArithmeticMixin:
         return self.__mul__(other)
 
     def __itruediv__(self, other: Any) -> _ArithmeticMixin:
-        return self._iop(other, operator.itruediv)
+        return self._iop(other, operator.truediv)
 
     def __truediv__(self, other: Any) -> _ArithmeticMixin:
         result = self.copy()
         result /= other
         return result
+
+
+def _require_source_for_json(obj: Any, fname: str = ".json") -> None:
+    """Raise ValueError before a JSON target is touched if `obj` (a DataObject, or every
+    element of a stack) has no `source`: JSON stores only the source, so the file would be
+    unloadable."""
+    objs = obj.elements if isinstance(obj, DataObjectStack) else [obj]
+    if fname.endswith(".json") and any(o.source is None for o in objs):
+        raise ValueError(
+            f"Can't save a {type(obj).__name__} without a source to JSON (it stores only the "
+            "source, so the file could not be loaded). Save to .h5 or .pickle instead."
+        )
 
 
 class DataObject(Loadable):
@@ -354,6 +368,11 @@ class DataObject(Loadable):
             return materialize(self._data[attr])
         if attr in self._meta:
             return self._meta[attr]
+        if attr in type(self)._meta_defaults:
+            # Field added to `_meta_defaults` after this object was built (e.g. unpickled from
+            # an older version): defaults are only copied in at construction. Deepcopy, like
+            # `__new__`, so a mutable default is never shared; not written back on read.
+            return copy.deepcopy(type(self)._meta_defaults[attr])
         raise AttributeError(f"No attribute named {attr}")
 
     def __setattr__(self, attr: str, value: Any) -> None:
@@ -441,8 +460,13 @@ class DataObject(Loadable):
             return f"{type(other).__name__} is not a {type(self).__name__}"
         return "not compatible"
 
+    def save(self, fname: str, **kwargs) -> DataObject:
+        _require_source_for_json(self, fname)
+        return super().save(fname, **kwargs)
+
     def __json_encode__(self) -> dict:
         """Returns dict with all information to reconstruct object from a .json file"""
+        _require_source_for_json(self)
         return {"source": self._source}
 
     def __json_decode__(self, **attrs) -> None:
@@ -519,9 +543,15 @@ class DataObjectStack(Loadable):
                 source = [obj.materialized() for obj in source]
             # else: virtual requested and every object already virtual -- nothing to do.
 
-            # if stack is created from objects, all objects have to be the same
+            # if stack is created from objects, all objects have to be the same. For a virtual
+            # stack only the type is checked: `is_compatible` may compare pixel shapes, which
+            # re-parses every deferred element (see check_compatible for the full check).
             for obj in source[1:]:
-                if not source[0].is_compatible(obj):
+                if not (
+                    isinstance(obj, type(source[0]))
+                    if objects_are_virtual and virtual
+                    else source[0].is_compatible(obj)
+                ):
                     raise TypeError(
                         f"Not all initialization objects are of type {self._type}"
                     )
@@ -697,12 +727,32 @@ class DataObjectStack(Loadable):
         return copy.deepcopy(self)
 
     def __getitem__(
-        self, index: Union[int, slice]
+        self, index: Union[int, slice, Iterable]
     ) -> Union[DataObject, DataObjectStack]:
-        elements = self._elements[index]
-        if isinstance(index, int):
-            return elements
+        if isinstance(index, slice):
+            elements = self._elements[index]
+        else:
+            try:
+                return self._elements[operator.index(index)]  # also numpy integers
+            except TypeError:
+                pass
+            index = np.asarray(index)  # sequence of ints, or boolean mask
+            if index.dtype == bool:
+                index = np.flatnonzero(index)
+            elements = [self._elements[i] for i in index]
         return type(self)(elements, virtual=self.virtual)
+
+    @staticmethod
+    def _require_deferred(obj: DataObject) -> DataObject:
+        """`obj` itself if deferred; ValueError for a resident one, which a virtual stack can't
+        hold without silently dropping its in-memory edits (re-deriving it from `source`)."""
+        if not obj.is_virtual:
+            raise ValueError(
+                "Can't put a resident DataObject into a virtual stack: its in-memory edits "
+                "would be lost. Pass `obj.deferred()` (explicitly discards in-memory edits and "
+                "re-reads from source) or save it first and load the saved file."
+            )
+        return obj
 
     def __setitem__(
         self, index: Union[int, slice], other: Union[DataObject, Iterable]
@@ -714,19 +764,10 @@ class DataObjectStack(Loadable):
             raise ValueError(f"Cant set single Elements to {type(self)}")
 
         if self.virtual:
-            # A virtual stack's elements must stay deferred: build a fresh deferred copy from
-            # `source` for anything resident, rather than mutating the caller's own object.
-            def as_virtual(obj: DataObject) -> DataObject:
-                if obj.source is None:
-                    raise ValueError(
-                        "Can't put DataObjects without source into virtual stack"
-                    )
-                return obj if obj.is_virtual else type(obj)(obj.source, defer=True)
-
             if isinstance(other, self._type):
-                insert = as_virtual(other)
+                insert = self._require_deferred(other)
             else:
-                insert = [as_virtual(element) for element in other]
+                insert = [self._require_deferred(element) for element in other]
 
         else:
             insert = other
@@ -748,16 +789,7 @@ class DataObjectStack(Loadable):
             elements = list(other)
 
         if self.virtual:
-            prepared = []
-            for element in elements:
-                if element.source is None:
-                    raise ValueError(
-                        "Can't put DataObjects without source into virtual stack"
-                    )
-                prepared.append(
-                    element if element.is_virtual else type(element)(element.source, defer=True)
-                )
-            elements = prepared
+            elements = [self._require_deferred(element) for element in elements]
         else:
             for element in elements:
                 if not self._elements[0].is_compatible(element):
@@ -791,7 +823,17 @@ class DataObjectStack(Loadable):
         # other length attaches to the stack itself, unless `attr` names a real per-element
         # field -- that would silently shadow this class's own __getattr__ gather, so it's
         # refused instead.
-        if isinstance(value, Iterable) and not isinstance(value, (str, bytes)):
+        # An ndarray with ndim >= 2 (e.g. a 3x3 matrix) is one value, never a sequence of rows.
+        is_array = isinstance(value, np.ndarray) and value.ndim >= 2
+        if is_array and len(self) and value.shape[0] == len(self):
+            warnings.warn(
+                UserWarning(
+                    f"'{attr}': array of shape {value.shape} was broadcast as one value to "
+                    f"every element, not split into rows. Pass list(array) to assign one row "
+                    "per element."
+                )
+            )
+        if not is_array and isinstance(value, Iterable) and not isinstance(value, (str, bytes)):
             value = list(value)
             is_sequence = True
         else:
@@ -829,7 +871,7 @@ class DataObjectStack(Loadable):
                     "elements to set it on."
                 )
             for obj in self:
-                setattr(obj, attr, value)
+                setattr(obj, attr, value.copy() if is_array else value)
 
     def __delitem__(self, index: Union[int, slice]) -> None:
         self._elements.__delitem__(index)
@@ -896,7 +938,12 @@ class DataObjectStack(Loadable):
         result /= other
         return result
 
+    def save(self, fname: str, **kwargs) -> DataObjectStack:
+        _require_source_for_json(self, fname)
+        return super().save(fname, **kwargs)
+
     def __json_encode__(self) -> dict:
+        _require_source_for_json(self)
         return {"source": self.elements, "virtual": self.virtual}
 
     def __json_decode__(self, **attrs) -> None:

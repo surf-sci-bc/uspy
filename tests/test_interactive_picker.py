@@ -853,3 +853,132 @@ def test_picker_does_not_mutate_the_stack(stack):
         assert_array_equal(img.image, before)
     p.canvas.close()
     plt.close(p.fig)
+
+
+### close() ################################################################
+
+
+def test_close_releases_stack_and_cache():
+    import gc
+    import weakref
+
+    stack = _stack()
+    p = ROIPicker(stack, xaxis="energy", rois=[ROI.circle(30, 30, radius=8, color="r")])
+    assert p._cache  # the preview populated it with IntensityLines holding the stack
+    ref = weakref.ref(stack)
+    p.close()
+    del stack
+    gc.collect()
+    assert ref() is None
+    assert not plt.fignum_exists(p.fig.number)
+    p.close()  # idempotent
+
+
+def test_close_disconnects_canvas_and_closes_widgets(stack):
+    p = ROIPicker(stack, xaxis="energy")
+    n_cids = len(p.canvas._cids)
+    assert n_cids
+    p.close()
+    assert not p.w_list.comm and not p.widget.comm
+
+
+def test_close_after_close_ignores_further_events(stack):
+    p = ROIPicker(stack, xaxis="energy")
+    ax = p.ax_img
+    p.close()
+    _drag(ax, (30, 30), (40, 40))  # nobody is listening any more; must not raise
+
+
+### Copy code ##############################################################
+
+
+def test_copy_code_embeds_text_verbatim_not_as_template_literal(picker, monkeypatch):
+    import json
+    import uspy.interactive.shell as shell
+
+    sent = []
+    monkeypatch.setattr(shell, "display", lambda obj, *a, **k: sent.append(obj))
+    text = "label ${2+2} `x` \\ \"q\" </script>   ${alert(1)}"
+    picker.w_code.value = text
+    picker.w_copy.click()
+    js = sent[0].data
+    prefix = "navigator.clipboard.writeText("
+    assert js.startswith(prefix) and js.endswith(")")
+    assert json.loads(js[len(prefix):-1]) == text  # a plain JS string literal
+    assert js[len(prefix)] == '"'  # a double-quoted literal, not a backtick template
+
+
+### region list rebuild ####################################################
+
+
+def test_commit_keeps_selected_vertex_and_never_bounces_selection(stack):
+    poly = ROI.polygon([(10, 10), (50, 10), (50, 40), (10, 40)], color="r")
+    p = ROIPicker(stack, xaxis="energy", rois=[ROI.circle(65, 15, radius=5, color="b"), poly])
+    try:
+        selections = []
+        orig = p.canvas.select
+        p.canvas.select = lambda i: (selections.append(i), orig(i))[1]
+        p.canvas.select(1)
+        _press(p.ax_img, (50, 10))  # vertex 1 of the selected polygon
+        _release(p.ax_img, (50, 10))
+        assert p.canvas._selected_vertex == 1
+        selections.clear()
+
+        _key(p.ax_img, "shift+right")  # nudge the vertex -> commit -> list rebuild
+        p.w_label.value = "edge"  # relabel -> list entry text changes -> options differ
+        assert p.canvas._selected_vertex == 1
+        assert p.canvas.selected == 1 and p.w_list.value == 1
+        assert 0 not in selections  # never bounced through region 0
+
+        _key(p.ax_img, "d")  # deletes the vertex, not the whole polygon
+        assert len(p.canvas.specs) == 2
+        assert len(dict(p.canvas.specs[1].params)["corners"]) == 3
+    finally:
+        p.close()
+
+
+def test_list_rebuild_with_no_selection_stays_unselected(stack):
+    p = ROIPicker(stack, xaxis="energy", rois=[ROI.circle(30, 30, radius=5, color="r")])
+    try:
+        assert p.canvas.selected is None
+        p._refresh_list()
+        assert p.w_list.value is None and p.canvas.selected is None
+    finally:
+        p.close()
+
+
+### initial contrast #######################################################
+
+
+def test_fixed_contrast_in_constructor_works(stack):
+    p = ROIPicker(stack, xaxis="energy", contrast="fixed", frame=1)
+    try:
+        data = stack[1].image
+        assert p._contrast == (float(data.min()), float(data.max()))
+        assert p.w_contrast.value == "fixed"
+    finally:
+        p.close()
+
+
+def test_pick_rois_dropdown_reflects_initial_contrast(stack):
+    p = pick_rois(stack, contrast="inner")
+    try:
+        assert p.w_contrast.value == "inner"
+    finally:
+        p.close()
+
+
+### Update button ##########################################################
+
+
+def test_update_button_invalidates_intensity_cache(stack):
+    p = ROIPicker(stack, xaxis="energy", rois=[ROI.circle(30, 30, radius=8, color="r")])
+    try:
+        before = np.asarray(p.ax_iv.lines[0].get_ydata()).copy()
+        for img in stack:  # in-place edit after the preview was cached
+            img.image[...] = img.image * 2
+        p.w_update.click()
+        after = np.asarray(p.ax_iv.lines[0].get_ydata())
+        np.testing.assert_allclose(after, before * 2, rtol=1e-5)
+    finally:
+        p.close()

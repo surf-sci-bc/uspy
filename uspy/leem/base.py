@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from functools import partial
 from numbers import Number
 from datetime import datetime
+import copy
+import hashlib
 import os
 import warnings
 from tqdm.auto import tqdm
@@ -70,6 +72,32 @@ def _warp_perspective(warp_matrix: np.ndarray, arr: np.ndarray) -> np.ndarray:
     )
 
 
+_IN_MEMORY = "<in-memory:"
+
+
+def _identify(img: Image) -> Any:
+    """Identifier of an mcp/dark-counts image: its `source`, or -- for a source-less
+    (in-memory) image -- a content digest, so two different in-memory images never compare
+    equal and the same one always does."""
+    if img.source is not None:
+        return img.source
+    digest = hashlib.sha1(np.ascontiguousarray(img.image).tobytes()).hexdigest()
+    return f"{_IN_MEMORY}{digest[:16]}>"
+
+
+def _dark_id(dark_counts: Union[Number, Image]) -> Any:
+    """Comparable identifier of a `dark_counts` value (number, filename or image)."""
+    if isinstance(dark_counts, Number):
+        return float(dark_counts)
+    if isinstance(dark_counts, (str, os.PathLike)):
+        return dark_counts  # a filename identifies itself
+    return _identify(dark_counts)
+
+
+def _is_in_memory_id(value: Any) -> bool:
+    return isinstance(value, str) and value.startswith(_IN_MEMORY)
+
+
 @dataclass(frozen=True)
 class _LEEMMetaLoader:
     """Metadata loader for a deferred `LEEMImg`: `reader.parse_metadata(source)`, plus the
@@ -111,6 +139,9 @@ class LEEMImg(Image):
         "timestamp": np.nan,
         "mcp": None,
         "dark_counts": 0,
+        # True once `normalize` ran; `mcp`/`dark_counts` then record what it used. Before that,
+        # `mcp` is merely the filename `normalize(mcp=None)` would use.
+        "normalized": False,
         "warp_matrix": np.eye(3),
         # Photon energy and a manual energy offset, used to compute binding_energy below.
         # Only meaningful for readers that populate photon_energy (e.g. a synchrotron
@@ -276,14 +307,17 @@ class LEEMImg(Image):
         else:
             image = fn(current)
 
+        # The pixels are warped again on top of any earlier warp, so the recorded matrix must
+        # compose (dst(x) = src(M x): total = earlier @ new) for `unwarped` to stay correct.
+        total = self.warp_matrix @ warp_matrix
         if inplace:
             self._data["image"] = image  # pylint: disable=protected-access
-            self.warp_matrix = warp_matrix
+            self.warp_matrix = total
             return self
 
         result = self.copy()
         result._data["image"] = image  # pylint: disable=protected-access
-        result.warp_matrix = warp_matrix
+        result.warp_matrix = total
         return result
 
     def normalize(
@@ -292,24 +326,35 @@ class LEEMImg(Image):
         dark_counts: Union[int, float, Image] = 0,
         inplace: bool = False,
     ) -> LEEMImg:
-        """Normalization of LEEM Images
+        """Normalization of LEEM Images: ``(mcp - dark) / ...`` -> ``(img - dark) / (mcp - dark)``.
 
         Parameters
         ----------
-        mcp : Image, optional
-            [description], by default None
-        dark_counts : Union[int, float, Image], optional
-            [description], by default 100
-        inplace : bool, optional
-            [description], by default False
+        mcp : Image or str, optional
+            MCP (channelplate) image or filename. If None, the image's own ``mcp`` attribute
+            (a filename) is used.
+        dark_counts : int, float or Image, default 0
+            Dark counts, a constant or an image.
+        inplace : bool, default False
+            Normalize this image itself instead of returning a normalized copy.
 
         Returns
         -------
         LEEMImg
-            [description]
+            Normalized image; ``mcp`` and ``dark_counts`` record what it was normalized with
+            (a source-less MCP is recorded as a content digest).
+
+        Raises
+        ------
+        ValueError
+            If ``mcp`` is None and the image has no usable ``mcp`` attribute.
         """
         if mcp is None:
             mcp = self.mcp  # pylint: disable=access-member-before-definition
+            if mcp is None or _is_in_memory_id(mcp):
+                raise ValueError(
+                    "normalize(): no mcp given and the image has no 'mcp' filename to use"
+                )
         mcp = imgify(mcp)
         if not isinstance(dark_counts, (int, float, complex)):
             dark_counts = imgify(dark_counts)
@@ -332,12 +377,14 @@ class LEEMImg(Image):
             # `result` and then pin the resident copy onto `self`) so a deferred `self` stays
             # deferred, holding `result`'s composed DeferredArray instead.
             self._data["image"] = result._data["image"]  # pylint: disable=protected-access
-            self.mcp = mcp.source
+            self.mcp = _identify(mcp)
             self.dark_counts = dark_counts
+            self.normalized = True
             return self
 
-        result.mcp = mcp.source
+        result.mcp = _identify(mcp)
         result.dark_counts = dark_counts
+        result.normalized = True
         return result
 
     def find_warp_matrix(self, template: Image, algorithm="ecc", **kwargs) -> np.ndarray:
@@ -389,7 +436,7 @@ class LEEMImg(Image):
     def parse(self, source: str) -> dict[str, Any]:
         if isinstance(source, Image):
             self._source = None
-            return dict(source.meta, **source.data)
+            return copy.deepcopy(dict(source.meta, **source.data))
         try:
             if self._reader.handles(source):
                 self._source = source
@@ -408,20 +455,36 @@ class LEEMImg(Image):
         return idict
 
     def __json_encode__(self) -> dict:
+        dark = self.dark_counts
+        if self.normalized and (
+            _is_in_memory_id(self.mcp) or (isinstance(dark, Image) and dark.source is None)
+        ):
+            raise ValueError(
+                "Can't JSON-serialize an image normalized with an in-memory (source-less) "
+                "mcp/dark_counts image: the normalization can't be reproduced from a source."
+            )
         return {
             "source": self.source,
             "mcp": self.mcp,
             "warp_matrix": self.warp_matrix,
             "dark_counts": self.dark_counts,
+            "normalized": self.normalized,
             "reader": self._reader.name,
         }
 
     def __json_decode__(self, **attrs) -> None:
         self.__init__(source=attrs["source"], reader=attrs.get("reader"))
-        if attrs["mcp"]:
+        # JSON written before the `normalized` flag existed: a set `mcp` meant normalized.
+        if attrs.get("normalized", bool(attrs["mcp"])):
             self.normalize(
                 mcp=attrs["mcp"], dark_counts=attrs["dark_counts"], inplace=True
             )
+        else:
+            self.mcp = attrs["mcp"]
+            self.dark_counts = attrs["dark_counts"]
+        # Normalization first, then warp: the order `align` is meant to be used in.
+        if not np.array_equal(attrs["warp_matrix"], np.eye(3)):
+            self.warp(attrs["warp_matrix"], inplace=True)
 
     @property
     def pressure(self) -> Number:
@@ -517,9 +580,28 @@ class LEEMStack(ImageStack):
         super().__init__(*args, **kwargs)
         if not built_from_objects:
             self._reader.post_process_stack(self)
-        # now we can access the 0th element and set the value
+            if time_origin is None:
+                # now we can access the 0th element and set the value
+                self._time_origin.value = self[0].timestamp
+            return
         if time_origin is None:
-            self._time_origin.value = self[0].timestamp
+            # Elements already sharing one origin (a slice, a re-spun stack) keep it;
+            # otherwise the stack starts at its first frame.
+            shared = {id(e._time_origin): e._time_origin for e in self._elements}
+            if len(shared) == 1:
+                self._time_origin = next(iter(shared.values()))
+            else:
+                self._time_origin.value = self[0].timestamp
+        self._elements = [self._with_origin(e) for e in self._elements]
+
+    def _with_origin(self, element: LEEMImg) -> LEEMImg:
+        """`element` itself if it already uses this stack's `TimeOrigin`, else a copy that does
+        (the caller's / another stack's element is never rebound in place)."""
+        if element._time_origin is self._time_origin:
+            return element
+        rebound = element._with_data()
+        rebound._time_origin = self._time_origin
+        return rebound
 
     def _split_source(self, source: Union[str, Iterable]) -> list:
         fnames = self._reader.list_files(source)
@@ -543,29 +625,12 @@ class LEEMStack(ImageStack):
     def time_origin(self, value: Number) -> None:
         self._time_origin.value = value
 
-    def __getitem__(self, index: Union[int, slice]) -> Union[LEEMImg, LEEMStack]:
-        if isinstance(index, np.ndarray):
-            elements = [self._elements[i] for i in np.where(index == True)[0]]
-        else:
-            elements = self._elements[index]
-
-        if isinstance(index, int):
-            # _elements always holds real LEEMImgs now (virtual or not) -- no re-parsing.
-            return elements
-        return type(self)(
-            elements,
-            virtual=self.virtual,
-            time_origin=self._time_origin,
-            reader=self._reader,
-        )
-
     def extend(self, other: Union[LEEMImg, LEEMStack]) -> None:
         """Add new LEEMImg(s) to the end of the stack, reconciling `time_origin`: if `other`
         has a different one (e.g. two halves of a split/resumed measurement), a warning
-        names the mismatch and the appended elements are rebound to this stack's
-        `_time_origin` (whether this stack is virtual or not -- elements are real, stable
-        DataObjects either way now) so `rel_time` shares one origin. `timestamp` itself is
-        never touched."""
+        names the mismatch and the appended elements are replaced by copies bound to this
+        stack's `_time_origin` (`other` itself is left untouched) so `rel_time` shares one
+        origin. `timestamp` itself is never touched."""
         if isinstance(other, (LEEMImg, LEEMStack)):
             self_origin, other_origin = self.time_origin, other.time_origin
             if not (np.isnan(self_origin) or np.isnan(other_origin)) and (
@@ -580,8 +645,10 @@ class LEEMStack(ImageStack):
                 )
         n_before = len(self._elements)
         super().extend(other)
-        for element in self._elements[n_before:]:
-            element._time_origin = self._time_origin
+        # Copies, so `other`'s own elements keep their origin.
+        self._elements[n_before:] = [
+            self._with_origin(element) for element in self._elements[n_before:]
+        ]
 
     def align(
         self,
@@ -767,13 +834,15 @@ class LEEMStack(ImageStack):
         """
         Normalization of images in stack
 
-        The images in the stack are normalized by appling Image.normalize(mcp) to each image
+        The images in the stack are normalized by appling Image.normalize(mcp) to each image.
+        Each frame records the ``mcp`` and ``dark_counts`` it was normalized with.
 
         Parameters
         ----------
         mcp : Image, str or None
-            Image or filename of image if str. If 'None' the mcp attribute of the images will be
-            used
+            Image or filename of image if str. If 'None' each image's own ``mcp`` attribute
+            (a filename, e.g. set via ``stack.mcp = ...``) is used; no repeat check is made
+            then, so calling it twice divides twice.
         inplace : bool, default False
             If 'True' the stack itself will be normalized
             If 'False' a copy of the stack will be normalized
@@ -789,23 +858,52 @@ class LEEMStack(ImageStack):
         LEEMStack
             LEEMStack with registered images. The stack itself is returned when 'inplace'=True
 
+        Raises
+        ------
+        ValueError
+            If a frame was already normalized with a different ``mcp`` or ``dark_counts``
+            (checked before any frame is touched), or ``mcp`` is None and a frame has no
+            ``mcp`` attribute.
+
+        Warns
+        -----
+        UserWarning
+            Frames already normalized with identical ``mcp`` and ``dark_counts`` are skipped.
+
         See Also
         --------
         LEEMImg.normalize
 
         """
-        # if not a copy funny things might happen when mcp is part of stack
-        mcp = imgify(mcp).copy()
-        if inplace:
-            stack = self
+        done = [False] * len(self)
+        if mcp is None:
+            if any(img.mcp is None or _is_in_memory_id(img.mcp) for img in self):
+                raise ValueError(
+                    "normalize(): no mcp given and not every image has an 'mcp' filename"
+                )
         else:
-            stack = self.copy()
+            # if not a copy funny things might happen when mcp is part of stack
+            mcp = imgify(mcp).copy()
+            key = (_identify(mcp), _dark_id(kwargs.get("dark_counts", 0)))
+            done = [img.normalized for img in self]
+            for img, normalized in zip(self, done):
+                if normalized and (img.mcp, _dark_id(img.dark_counts)) != key:
+                    raise ValueError(
+                        f"Image already normalized with mcp={img.mcp!r}, "
+                        f"dark_counts={img.dark_counts!r}; refusing to normalize again with "
+                        f"mcp={key[0]!r}, dark_counts={key[1]!r}."
+                    )
+            if any(done):
+                warnings.warn(
+                    UserWarning(
+                        f"{sum(done)} image(s) already normalized with the same mcp and "
+                        "dark_counts -- skipped."
+                    )
+                )
+        stack = self if inplace else self.copy()
 
         for index, img in enumerate(tqdm(stack)):
-            # Skip an image already normalized against this mcp (relevant if inplace=True
-            # and the same image appears twice in the stack). img.mcp holds the *source* of
-            # the mcp it was last normalized against, hence comparing to mcp.source.
-            if img.mcp is None or img.mcp != mcp.source:
+            if not done[index]:
                 stack[index] = img.normalize(mcp=mcp, **kwargs)
 
         return stack

@@ -607,7 +607,8 @@ class Canvas:
                     self._draw_outlines()  # just selecting -- reveal handles
                 return
             self._drag = {"kind": kind, "index": index, "vertex": extra,
-                          "last": xy, "draft": self.specs[index]}
+                          "start": xy, "origin": self.specs[index],
+                          "draft": self.specs[index]}
             self._draw_outlines()
             return
 
@@ -622,7 +623,7 @@ class Canvas:
             self._pending_points = [xy]
             self._draw_outlines()
         else:
-            self._drag = {"kind": "new-bbox", "start": xy, "last": xy, "draft": None}
+            self._drag = {"kind": "new-bbox", "start": xy, "draft": None}
             self._draw_outlines()
 
     def _on_move(self, event) -> None:
@@ -635,8 +636,10 @@ class Canvas:
         if kind == "new-bbox":
             drag["draft"] = self._draft(drag["start"], xy, _modifiers(event))
         elif kind == "move":
-            dx, dy = xy[0] - drag["last"][0], xy[1] - drag["last"][1]
-            drag["draft"] = translate(drag["draft"], dx, dy)
+            # from the drag-start spec by the *total* displacement: rounding each
+            # event's delta would drop slow (sub-pixel-per-event) motion entirely.
+            drag["draft"] = translate(drag["origin"], xy[0] - drag["start"][0],
+                                      xy[1] - drag["start"][1])
         elif kind == "resize":
             drag["draft"] = resize_from_handle(drag["draft"], xy,
                                                square="shift" in _modifiers(event))
@@ -644,7 +647,6 @@ class Canvas:
             drag["draft"] = rotation_from_handle(drag["draft"], xy)
         elif kind == "vertex":
             drag["draft"] = move_vertex(drag["draft"], drag["vertex"], xy)
-        drag["last"] = xy
 
         # Redraw only at a bounded rate (see _REDRAW_MIN_INTERVAL) -- the draft above
         # is always recomputed on every event regardless, so the final, on-release
@@ -678,11 +680,15 @@ class Canvas:
 
     def _on_key(self, event) -> None:
         if event.key == "escape":
-            if self._pending_points:
-                self._pending_points = []
+            editing = self._drag is not None and self._drag["kind"] != "new-bbox"
+            self._pending_points = []
             self._drag = None
             self._draw_outlines()
+            if editing:  # on_drag may have shown the draft: resync to the restored spec
+                self._fire_commit()
             return
+        if self._drag is not None:
+            return  # edit keys mid-drag would act on specs the release then overwrites
         if event.key in _NUDGE:
             if self._selected is not None:
                 self.nudge_selected(*_NUDGE[event.key])

@@ -23,7 +23,7 @@ from numpy.testing import assert_array_equal
 
 from uspy.interactive.canvas import Canvas, HANDLE_DISTANCE
 from uspy.interactive.spec import ROI_SHAPES, Spec, vertex_positions
-from uspy.roi import palette_color
+from uspy.roi import ROI, palette_color
 
 H, W = 200, 200
 
@@ -1052,3 +1052,111 @@ def test_on_select_fires_on_append_and_on_delete(ax):
     c.delete_selected()
     assert calls == [0, None]
     c.close()
+
+
+### regression: edit keys / escape / rounding during a drag ################
+
+
+def _three_circles(ax, **kw):
+    c = Canvas(ax, H, W, **kw)
+    c.specs = [Spec("circle", (("x0", x), ("y0", 50), ("radius", 10)), "red")
+               for x in (30, 90, 150)]
+    c.redraw_overlays()
+    return c
+
+
+@pytest.mark.parametrize("key", ["d", "delete", "shift+right"])
+def test_edit_keys_during_drag_are_ignored(ax, key):
+    # Edit keys are ignored while a drag is active; the drag then commits normally
+    # to its dragged position and no other region is touched.
+    c = _three_circles(ax)
+    _press(ax, (30, 50))
+    _move(ax, (40, 60))
+    _key(ax, key)
+    _release(ax, (40, 60))
+    assert [dict(s.params)["x0"] for s in c.specs] == [40, 90, 150]
+    assert dict(c.specs[0].params)["y0"] == 60
+    c.close()
+
+
+def test_delete_last_region_key_during_drag_does_not_raise(ax):
+    c = _three_circles(ax)
+    _press(ax, (150, 50))
+    _move(ax, (160, 50))
+    _key(ax, "d")
+    _release(ax, (160, 50))
+    assert [dict(s.params)["x0"] for s in c.specs] == [30, 90, 160]
+    c.close()
+
+
+def test_vertex_delete_key_during_vertex_drag_is_ignored(ax):
+    c = Canvas(ax, H, W)
+    c.specs = [Spec("polygon", (("corners", ((20, 20), (80, 20), (80, 80), (20, 80))),), "red")]
+    c.redraw_overlays()
+    c.select(0)
+    _press(ax, (80, 20))  # vertex 1 of the selected polygon
+    _move(ax, (90, 25))
+    _key(ax, "d")
+    _release(ax, (90, 25))
+    assert len(dict(c.specs[0].params)["corners"]) == 4
+    assert dict(c.specs[0].params)["corners"][1] == (90, 25)
+    c.close()
+
+
+def test_escape_during_drag_refires_commit_for_restored_spec(ax):
+    drags, commits = [], []
+    c = _three_circles(ax, on_drag=lambda i, s: drags.append(i),
+                       on_commit=lambda: commits.append(1))
+    _press(ax, (30, 50))
+    _move(ax, (60, 50))
+    assert drags and not commits
+    _key(ax, "escape")
+    assert commits == [1]  # preview/code resync to the restored spec
+    assert dict(c.specs[0].params)["x0"] == 30
+    c.close()
+
+
+def test_escape_without_drag_does_not_fire_commit(ax):
+    commits = []
+    c = _three_circles(ax, on_commit=lambda: commits.append(1))
+    _key(ax, "escape")
+    assert commits == []
+    c.close()
+
+
+def test_escape_cancelling_new_region_drag_does_not_fire_commit(ax):
+    commits = []
+    c = Canvas(ax, H, W, on_commit=lambda: commits.append(1))
+    c.new_shape = "circle"
+    _press(ax, (50, 50))
+    _move(ax, (70, 50))
+    _key(ax, "escape")
+    assert commits == [] and c.specs == []
+    c.close()
+
+
+def test_slow_move_drag_accumulates_subpixel_motion(ax):
+    c = _three_circles(ax)
+    _press(ax, (30, 50))
+    for k in range(1, 21):
+        _move(ax, (30 + 0.3 * k, 50))
+    _release(ax, (36, 50))
+    assert dict(c.specs[0].params)["x0"] == 36  # 20 x 0.3 px = 6 px, not 0
+    c.close()
+
+
+@pytest.mark.parametrize("region", [
+    ROI(60, 60, source="square", width=20, color="r"),
+    ROI(60, 60, source="ellipse", radius=7, color="r"),
+    ROI(60, 60, source="circle", width=20, color="r"),
+    ROI.circle(50.7, 40.2, radius=7.5, color="r"),
+    ROI.polygon([(10.5, 14.5), (68.5, 15.5), (50.5, 60.5)], color="r"),
+], ids=["square-w", "ellipse-radius", "circle-width", "circle-float", "polygon-float"])
+def test_seeded_roi_draws_selected_outline_and_is_hittable(ax, canvas, region):
+    canvas.specs = [Spec.from_roi(region)]
+    canvas.redraw_overlays()
+    canvas.select(0)  # draws handles: used to KeyError on a missing `height`
+    cx, cy = region.position[0] + 3, region.position[1] + 3
+    _press(ax, (cx, cy))
+    _release(ax, (cx, cy))
+    assert len(canvas.specs) == 1

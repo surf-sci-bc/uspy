@@ -512,6 +512,49 @@ def test_from_roi_round_trips(roi):
     assert rebuilt.label == roi.label
 
 
+@pytest.mark.parametrize(
+    "roi",
+    [
+        ROI(60, 60, source="square", width=20, color="r"),
+        ROI(60, 60, source="square", width=20, rotation=30, color="r"),
+        ROI(60, 60, source="ellipse", radius=7, color="r"),
+        ROI(60, 60, source="circle", width=20, color="r"),
+        ROI(60, 60, source="circle", width=20, height=10, color="r"),
+        ROI(60, 60, source="rectangle", width=20, color="r"),
+        ROI.circle(60, 60, radius=7.5, color="r"),
+        ROI.circle(60, 60, width=15.5, color="r"),
+        ROI(60, 60, source="ellipse", width=20.5, height=10.5, color="r"),
+        ROI(60, 60, source="square", width=20.5, color="r"),
+        ROI.polygon([(10.5, 14.5), (68.5, 15.5), (50.5, 60.5)], color="r"),
+    ],
+    ids=["square-w", "square-rot", "ellipse-radius", "circle-width", "circle-w-h",
+         "rect-w-only", "circle-float-radius", "circle-float-width", "ellipse-float",
+         "square-float", "polygon-float"],
+)
+def test_from_roi_accepts_every_parameterisation_and_keeps_floats(roi):
+    spec = Spec.from_roi(roi)
+    rebuilt = spec.to_object()  # must not raise (_build_outline-style KeyError)
+    assert_array_equal(rebuilt.array, roi.array)
+    # the code emitted for the untouched seed evaluates to the same region
+    again = eval(spec.to_code(), {"ROI": ROI})  # pylint: disable=eval-used
+    assert_array_equal(again.array, roi.array)
+
+
+def test_from_roi_keeps_float_geometry_in_spec():
+    spec = Spec.from_roi(ROI.circle(60, 61, radius=7.5, color="r"))
+    assert dict(spec.params)["radius"] == 7.5
+    spec = Spec.from_roi(ROI(60, 60, source="square", width=20.5, color="r"))
+    assert dict(spec.params)["width"] == dict(spec.params)["height"] == 20.5
+    spec = Spec.from_roi(ROI.polygon([(10.5, 14.5), (68.5, 15.5), (50.5, 60.5)], color="r"))
+    assert dict(spec.params)["corners"][0] == (10.5, 14.5)
+    assert all(type(v) in (int, float) for xy in dict(spec.params)["corners"] for v in xy)
+
+
+def test_from_roi_float_position_is_not_truncated():
+    spec = Spec.from_roi(ROI.circle(50.7, 40.2, radius=7, color="r"))
+    assert dict(spec.params)["x0"] == 50.7 and dict(spec.params)["y0"] == 40.2
+
+
 def test_from_roi_maps_square_to_rectangle_shape_name():
     roi = ROI(300, 300, source="square", width=20, color="purple")
     spec = Spec.from_roi(roi)

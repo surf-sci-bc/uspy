@@ -67,9 +67,9 @@ class Spec:
         return {"shape": self.shape, **dict(self.params)}
 
     def to_object(self) -> Union[ROI, Profile]:
-        """Build a *fresh* ROI/Profile every call -- never cache-and-mutate one:
-        `ROI.pad_to` keys its `_mask_buffer` on the requested extent alone, so a
-        mutated-then-reused ROI can silently return a stale mask.
+        """Build a *fresh* ROI/Profile every call, so the result never aliases
+        state (e.g. the array `ROI.pad_to` caches and returns by reference) shared
+        with an earlier caller.
         """
         if self.shape == "profile":
             geom = dict(self.params)
@@ -95,8 +95,8 @@ class Spec:
             which has no parametric shape to seed a draggable region from.
         """
         if isinstance(region, Profile):
-            points = tuple((int(p[0]), int(p[1])) for p in region.points)
-            return cls("profile", (("points", points), ("width", int(region.width))),
+            points = tuple((_py(p[0]), _py(p[1])) for p in region.points)
+            return cls("profile", (("points", points), ("width", _py(region.width))),
                        region.color, region.label if label is None else label)
 
         if region.shape_name == "array":
@@ -104,20 +104,35 @@ class Spec:
                 "cannot seed the picker from an array-sourced ROI (from_array, or the "
                 "result of __add__) -- it has no parametric shape to edit"
             )
-        x0, y0 = int(region.position[0]), int(region.position[1])
+        x0, y0 = (_py(v) for v in region.position)
         roi_label = region.label if label is None else label
         if region.shape_name == "polygon":
-            corners = np.asarray(region.params["corners"]) + region.position
-            params = (("corners", tuple((int(x), int(y)) for x, y in corners)),)
-            return cls("polygon", params, region.color, roi_label)
+            corners = (np.asarray(region.params["corners"]) + region.position).tolist()
+            return cls("polygon", (("corners", tuple(tuple(c) for c in corners)),),
+                       region.color, roi_label)
         if region.shape_name == "point":
             return cls("point", (("x0", x0), ("y0", y0)), region.color, roi_label)
 
-        shape = "rectangle" if region.shape_name == "square" else region.shape_name
-        params = (("x0", x0), ("y0", y0)) + tuple(
-            (k, v if isinstance(v, str) else int(v)) for k, v in region.params.items()
-        )
-        return cls(shape, params, region.color, roi_label)
+        # square/rectangle/ellipse take width[/height]; circle (and `radius=`) a diameter
+        # -- normalized to the picker's canonical forms, floats kept as given.
+        kw = region.params
+        width = 2 * kw["radius"] if "radius" in kw else kw["width"]
+        height = kw.get("height", width)
+        if region.shape_name == "circle" and width == height:
+            radius = kw["radius"] if "radius" in kw else (
+                width // 2 if width % 2 == 0 else width / 2)
+            return cls("circle", (("x0", x0), ("y0", y0), ("radius", _py(radius))),
+                       region.color, roi_label)
+        shape = "ellipse" if region.shape_name in ("circle", "ellipse") else "rectangle"
+        params = [("x0", x0), ("y0", y0), ("width", _py(width)), ("height", _py(height))]
+        if "rotation" in kw:
+            params.append(("rotation", _py(kw["rotation"])))
+        return cls(shape, tuple(params), region.color, roi_label)
+
+
+def _py(value):
+    """Numpy scalar -> plain Python scalar (keeps `repr`/emitted code free of `np.int64(...)`)."""
+    return value.item() if isinstance(value, np.generic) else value
 
 
 def specs_to_code(specs: Sequence[Spec], imports: bool = True) -> str:

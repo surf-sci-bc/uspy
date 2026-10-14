@@ -20,7 +20,9 @@ warning. The file itself is deliberately uspy-agnostic: two content groups (`/en
 the whole file -- no per-field type tag; a value's Python type is inferred from its HDF5 dtype
 on read, and a missing/unrecognized `uspy_class` falls back to structural inference (2-D
 signal -> `Image`, 3-D -> `ImageStack`, `y`-over-`x` -> `Line`) with a warning. `write()`/
-`save()` only ever creates a new file; the exported object and its source are never touched.
+`save()` refuse to replace an existing file unless ``overwrite=True`` and write via a temporary
+file in the target directory, so a failed write never destroys an existing file; the exported
+object and its source are never touched.
 
 File layout
 -----------
@@ -45,6 +47,7 @@ File layout
         temperature (N,) f8          @units="°C"
         fov         (N,) vlen-utf8
         source      (N,) vlen-utf8   # original per-frame acquisition path, ordinary metadata
+        rel_time    (N,) f8          # LEEMStack only; with `timestamp` restores `time_origin`
         warp_matrix (N,3,3) f8
         ...
         <key>_missing (N,) bool      # only written if `key` is absent on SOME (not all) frames
@@ -71,6 +74,7 @@ from __future__ import annotations
 import importlib
 import os
 import urllib.parse
+import uuid
 import warnings
 from datetime import datetime
 from typing import Any, Optional
@@ -408,10 +412,20 @@ def write(
     chunks: Optional[tuple] = None,
     frame_axis: Optional[str] = "auto",
     title: Optional[str] = None,
+    overwrite: bool = False,
 ) -> None:
-    """Write any `DataObject`/`DataObjectStack` to a new NeXus-flavoured HDF5 file at `fname`.
+    """Write any `DataObject`/`DataObjectStack` to a NeXus-flavoured HDF5 file at `fname`.
     See the module docstring for the file layout and what is/isn't preserved. Never touches
-    `obj` or any file it was read from -- `fname` is always a brand-new file."""
+    `obj` or any file it was read from.
+
+    The file is written to a temporary sibling and moved into place, so a failed write leaves
+    an existing `fname` intact.
+
+    Raises
+    ------
+    FileExistsError
+        If `fname` exists and `overwrite` is False.
+    """
     import uspy
 
     opts = {
@@ -427,19 +441,30 @@ def write(
     if kind == "stack" and len(obj) == 0:
         raise ValueError("Cannot export an empty stack to HDF5 (wrong slice/filter?).")
 
-    with h5py.File(fname, "w") as f:
-        f.attrs["NX_class"] = "NXroot"
-        f.attrs["default"] = "entry"
-        f.attrs["creator"] = "uspy"
-        f.attrs["file_time"] = datetime.utcnow().isoformat() + "Z"
-        f.attrs["HDF5_Version"] = h5py.version.hdf5_version
-        f.attrs["uspy_version"] = uspy.__version__
-        f.attrs["uspy_format_version"] = FORMAT_VERSION
+    if os.path.exists(fname) and not overwrite:
+        raise FileExistsError(f"{fname!r} already exists; pass overwrite=True to replace it.")
 
-        if kind == "object":
-            _write_object(f, obj, target_cls, opts)
-        else:
-            _write_stack(f, obj, target_cls, opts)
+    # Not mkstemp: h5py creating the file itself keeps the usual umask-derived permissions.
+    tmp_name = f"{fname}.{uuid.uuid4().hex[:8]}.tmp"
+    try:
+        with h5py.File(tmp_name, "w") as f:
+            f.attrs["NX_class"] = "NXroot"
+            f.attrs["default"] = "entry"
+            f.attrs["creator"] = "uspy"
+            f.attrs["file_time"] = datetime.utcnow().isoformat() + "Z"
+            f.attrs["HDF5_Version"] = h5py.version.hdf5_version
+            f.attrs["uspy_version"] = uspy.__version__
+            f.attrs["uspy_format_version"] = FORMAT_VERSION
+
+            if kind == "object":
+                _write_object(f, obj, target_cls, opts)
+            else:
+                _write_stack(f, obj, target_cls, opts)
+        os.replace(tmp_name, fname)
+    except BaseException:
+        if os.path.exists(tmp_name):
+            os.remove(tmp_name)
+        raise
 
 
 def _write_program_name(entry: h5py.Group) -> None:
@@ -606,7 +631,17 @@ def _iter_frame_meta(stack: Any):
     since a virtual stack's elements are real DataObjects with their own `_meta`/`_units`
     (resolving metadata, not pixels, on first touch if not already cached)."""
     for element in stack:
-        yield dict(element._meta), dict(element._units)
+        meta, units = dict(element._meta), dict(element._units)
+        source = getattr(element, "_source", None)
+        if "source" not in meta and isinstance(source, str):
+            meta["source"] = source  # same as `_write_source_object` for a single object
+        # LEEM time origin is not stored per frame; keep it as an ordinary `rel_time` column
+        # (read back together with `timestamp`) instead of a uspy-specific attribute.
+        rel_time = element.rel_time if hasattr(element, "_time_origin") else np.nan
+        if "rel_time" not in meta and np.isfinite(rel_time):
+            meta["rel_time"] = float(rel_time)
+            units.setdefault("rel_time", "s")
+        yield meta, units
 
 
 def _write_stack(f: h5py.File, stack: Any, target_cls: type, opts: dict) -> None:
@@ -637,7 +672,7 @@ def _write_stack(f: h5py.File, stack: Any, target_cls: type, opts: dict) -> None
     axis0 = "."
     if frame_axis_key is not None:
         safe_key, _ = _sanitize_key(frame_axis_key)
-        if safe_key in meta_grp:
+        if safe_key in meta_grp and safe_key not in data_grp:
             data_grp[safe_key] = meta_grp[safe_key]
             axis0 = frame_axis_key
     data_grp.attrs["signal"] = "image"
@@ -932,14 +967,16 @@ def _read_stack(entry: h5py.Group, target_cls: type) -> Any:
     columns, units_map = {}, {}
     if meta_grp is not None:
         for safe_key in meta_grp:
-            if safe_key == "frame":
-                continue
             true_key = _unsanitize_key(safe_key)
             dataset = meta_grp[safe_key]
             columns[true_key] = _decode_column(dataset)
             unit = dataset.attrs.get("units")
             if unit:
                 units_map[true_key] = unit
+
+    # LEEM stacks: `rel_time` is derived (timestamp - time_origin), not metadata -- use it to
+    # restore the origin instead of storing it per frame.
+    rel_time = columns.pop("rel_time", None) if _has_time_origin(elem_cls) else None
 
     elements = []
     for i in range(n):
@@ -952,14 +989,17 @@ def _read_stack(entry: h5py.Group, target_cls: type) -> Any:
 
     stack = target_cls(elements)
 
-    # Each element got its own private TimeOrigin from __init__; re-point them at the stack's
-    # shared instance (no-op for ImageStack, which has none) so rel_time behaves normally.
-    shared_origin = getattr(stack, "_time_origin", None)
-    if shared_origin is not None:
-        for element in stack:
-            element._time_origin = shared_origin
+    if rel_time is not None and "timestamp" in columns:
+        origins = np.asarray(columns["timestamp"], dtype=float) - np.asarray(rel_time, dtype=float)
+        finite = origins[np.isfinite(origins)]
+        if finite.size:
+            stack.time_origin = float(finite[0])
 
     return stack
+
+
+def _has_time_origin(elem_cls: type) -> bool:
+    return isinstance(getattr(elem_cls, "rel_time", None), property)
 
 
 def _element_class_for(target_cls: type):
