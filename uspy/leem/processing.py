@@ -50,8 +50,12 @@ def calculate_dose(stack, pressurefield="pressure1", approx=1):
 
 
 def center_of_mass(img, roi):
+    """Center of mass `(x, y)` of the pixels inside `roi`; masked pixels count as 0.
+
+    `scipy.ndimage.center_of_mass` ignores the mask of a masked array, hence the explicit fill.
+    """
     img = roi.apply(img)
-    return scipy.ndimage.center_of_mass(img.image.T)
+    return scipy.ndimage.center_of_mass(np.ma.filled(img.image, 0).T)
 
 
 def maximum(img, roi):

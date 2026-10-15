@@ -741,6 +741,16 @@ def test_center_of_mass_ignores_bright_pixel_outside_roi():
     assert com == pytest.approx((3.0, 2.0))
 
 
+def test_maximum_ignores_bright_pixel_outside_roi():
+    """Masked-array reductions must also skip pixels outside the ROI."""
+    arr = np.zeros((20, 24))
+    arr[8, 15] = 100.0  # bright, outside the ROI
+    arr[2, 3] = 10.0  # the brightest pixel inside the ROI
+    img = base.LEEMImg(arr)
+
+    assert processing.maximum(img, rois.ROI.circle(2, 2, radius=3)) == (2, 3)
+
+
 ### Pure math: fermi_edge / fit_fermi_edge / _fit_plane / _1gaussian / _2gaussian ####
 
 

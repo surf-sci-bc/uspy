@@ -8,6 +8,7 @@ import matplotlib.colors
 import matplotlib.pyplot as plt
 import pytest
 import numpy as np
+from scipy.integrate import trapezoid
 
 from uspy.leem import cluster
 from uspy.leem import base
@@ -309,7 +310,7 @@ def test_pendryfy_matches_pendry_y_applied_per_row():
 def test_normalize_divides_by_trapz_integral():
     X = np.array([[1.0, 2.0, 3.0], [4.0, 2.0, 0.0]])
     Xn, integrals = cluster.normalize(X)
-    expected_integrals = np.trapz(X, axis=1)
+    expected_integrals = trapezoid(X, axis=1)
     np.testing.assert_allclose(integrals, expected_integrals)
     np.testing.assert_allclose(Xn, X / expected_integrals[:, None])
 

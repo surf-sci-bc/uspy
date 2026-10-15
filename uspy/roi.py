@@ -27,7 +27,10 @@ def _apply_mask(full_mask: np.ndarray, arr: np.ndarray) -> np.ndarray:
 
 
 def palette_color(index: int) -> str:
-    """The `index`-th color of matplotlib's `axes.prop_cycle`, wrapping around.
+    """The `index`-th color of matplotlib's `axes.prop_cycle` as `#rrggbb`, wrapping around.
+
+    Normalized with `matplotlib.colors.to_hex` because newer matplotlib (3.11) stores the
+    default cycle as RGB tuples; the drawn color is unchanged.
 
     The single source of truth for "what color comes next" -- used both by
     `StyledObject`'s implicit-color counter below and by `uspy.interactive.canvas.Canvas`'s
@@ -35,7 +38,7 @@ def palette_color(index: int) -> str:
     shared counter).
     """
     colors = mpl.rc_params()["axes.prop_cycle"].by_key()["color"]
-    return colors[index % len(colors)]
+    return mpl.colors.to_hex(colors[index % len(colors)])
 
 
 def _num(value: Any) -> str:

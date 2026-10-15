@@ -37,6 +37,14 @@ def test_palette_color_wraps():
     assert palette_color(1) == palette_color(n + 1)
 
 
+@pytest.mark.parametrize("i", range(12))
+def test_palette_color_is_hex_string(i):
+    """matplotlib >= 3.11 stores the default cycle as RGB tuples; palette_color must still
+    return `#rrggbb` (as annotated)."""
+    c = palette_color(i)
+    assert isinstance(c, str) and matplotlib.colors.is_color_like(c) and c.startswith("#")
+
+
 def test_styled_object_default_colors_unchanged_regression():
     """Pins the exact first-12-implicit-colors sequence across the palette_color
     refactor (StyledObject._idx bookkeeping used to be inlined; see uspy.roi.palette_color)
@@ -44,7 +52,7 @@ def test_styled_object_default_colors_unchanged_regression():
     StyledObject._idx = 0
     colors = [StyledObject().color for _ in range(12)]
     cycle = matplotlib.rcParams["axes.prop_cycle"].by_key()["color"]
-    expected = [cycle[i % len(cycle)] for i in range(12)]
+    expected = [matplotlib.colors.to_hex(cycle[i % len(cycle)]) for i in range(12)]
     assert colors == expected
 
 

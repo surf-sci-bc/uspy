@@ -20,6 +20,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.backend_bases import MouseEvent, KeyEvent
 
+from .conftest import GCU_STACK_DIR
 import uspy.dataobject as do
 import uspy.derived as derived
 from uspy.roi import ROI, Profile
@@ -227,7 +228,7 @@ def test_live_defaults_off_for_virtual_stack():
     from uspy.leem.base import LEEMStack
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        vstack = LEEMStack("testdata/003_IV", virtual=True)
+        vstack = LEEMStack(GCU_STACK_DIR, virtual=True)
         p = ProfilePicker(vstack, yaxis="energy")
     assert p.live is False
     p.canvas.close()
@@ -238,7 +239,7 @@ def test_live_on_virtual_stack_warns():
     from uspy.leem.base import LEEMStack
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        vstack = LEEMStack("testdata/003_IV", virtual=True)
+        vstack = LEEMStack(GCU_STACK_DIR, virtual=True)
     with pytest.warns(UserWarning, match="materialize"):
         p = ProfilePicker(vstack, yaxis="energy", live=True)
     p.canvas.close()

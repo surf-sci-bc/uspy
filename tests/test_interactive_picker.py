@@ -24,6 +24,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backend_bases import MouseEvent, KeyEvent
 from matplotlib.colors import to_hex, to_rgba
 
+from .conftest import GCU_STACK_DIR
 import uspy.dataobject as do
 import uspy.derived as derived
 import uspy.roi as roi_mod
@@ -333,7 +334,7 @@ def test_live_defaults_off_for_virtual_stack():
     from uspy.leem.base import LEEMStack
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        vstack = LEEMStack("testdata/003_IV", virtual=True)
+        vstack = LEEMStack(GCU_STACK_DIR, virtual=True)
         p = ROIPicker(vstack, xaxis="energy")
     assert p.live is False
     p.canvas.close()
@@ -344,7 +345,7 @@ def test_live_on_virtual_stack_warns():
     from uspy.leem.base import LEEMStack
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        vstack = LEEMStack("testdata/003_IV", virtual=True)
+        vstack = LEEMStack(GCU_STACK_DIR, virtual=True)
     with pytest.warns(UserWarning, match="materialize"):
         p = ROIPicker(vstack, xaxis="energy", live=True)
     p.canvas.close()
@@ -355,7 +356,7 @@ def test_preview_never_materializes_a_virtual_stack():
     from uspy.leem.base import LEEMStack
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        vstack = LEEMStack("testdata/003_IV", virtual=True)
+        vstack = LEEMStack(GCU_STACK_DIR, virtual=True)
         p = ROIPicker(vstack, xaxis="energy", live=False)
     p.canvas.specs = [Spec("circle", (("x0", 300), ("y0", 300), ("radius", 20)), "red")]
     p.canvas.redraw_overlays()

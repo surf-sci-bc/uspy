@@ -12,6 +12,7 @@ import numpy as np
 import matplotlib.colors
 import matplotlib.pyplot as plt
 
+from scipy.integrate import trapezoid
 from scipy.signal import savgol_filter
 
 # clustering via scikit
@@ -365,7 +366,7 @@ def normalize(X):
     Xn = np.zeros_like(X)
     integrals = np.zeros_like(X[:, 0])
     for i, spectrum in enumerate(X):
-        integrals[i] = np.trapz(X[i, :])
+        integrals[i] = trapezoid(X[i, :])
         Xn[i, :] = spectrum / integrals[i]
     return Xn, integrals
 
